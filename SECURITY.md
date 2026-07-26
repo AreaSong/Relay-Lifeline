@@ -1,15 +1,21 @@
-# 安全策略
+# Security Policy
 
-## 报告漏洞
+[简体中文](SECURITY.zh-CN.md)
 
-请不要在公开 Issue 中披露可利用的安全问题。通过仓库维护者公开的安全联系方式提交复现步骤、影响范围和建议修复方式。
+## Reporting a vulnerability
 
-## 安全边界
+Do not disclose exploitable security issues in a public issue. Contact the repository maintainer through the security channel published by the repository and include reproduction steps, affected versions, impact, and a proposed mitigation when available.
 
-- Relay Lifeline 只在内存中处理下游 Authorization，并原样转发给配置的上游。
-- 默认配置不会记录请求体、响应体或 Authorization。
-- 管理 API 必须配置独立的 `RELAY_LIFELINE_ADMIN_KEY`。
-- Docker 示例只将服务绑定到主机 `127.0.0.1`。
-- 管理页面和管理 API 不应直接暴露到公网。
+Never include a live API key, admin key, prompt, model response, raw upstream error, or credential-bearing URL in a report. Replace secrets with deterministic placeholders.
 
-中转站凭据、客户端 API Key、请求正文和响应正文都属于敏感数据。提交问题时请先完成脱敏。
+## Security boundary
+
+- Relay-Lifeline forwards downstream Authorization to one configured upstream in memory.
+- Request bodies, response bodies, and Authorization are not logged by the supported configuration.
+- The management API requires a separate `RELAY_LIFELINE_ADMIN_KEY` of at least 24 characters.
+- Docker publishes the service on host loopback by default.
+- The admin UI and API are not designed for direct public internet exposure.
+- Response cache files use mode `0600` and are removed after use.
+- Diagnostics and exported bundles redact configured endpoints and omit safe error details.
+
+Relay credentials, client API keys, request bodies, response bodies, and model data are sensitive. Operators are responsible for TLS and access control when traffic leaves a trusted host or network.

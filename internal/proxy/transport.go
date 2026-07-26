@@ -51,8 +51,7 @@ func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, sou
 	defer response.Body.Close()
 	buffer := NewReplayBuffer(int64(cfg.Stream.MemoryLimit), cfg.Stream.TempDir)
 	if _, err := io.Copy(buffer, response.Body); err != nil {
-		buffer.Close()
-		return attemptResult{response: response, err: err, validation: Validation{Message: l10n.M("proxy.response_interrupted")}}
+		return attemptResult{response: response, buffer: buffer, err: err, validation: Validation{Message: l10n.M("proxy.response_interrupted")}}
 	}
 	return attemptResult{response: response, buffer: buffer, validation: validateResponse(response, buffer, streaming)}
 }

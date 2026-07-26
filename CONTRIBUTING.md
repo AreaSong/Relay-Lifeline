@@ -1,15 +1,32 @@
-# 贡献指南
+# Contributing
 
-## 开发环境
+[简体中文](CONTRIBUTING.zh-CN.md)
 
-- Go 1.22+
-- Node.js 22+
-- Docker（集成验证）
+## Development environment
+
+- Go 1.22 or newer
+- Node.js 22 or newer
+- Docker for image and integration checks
+
+Run the complete local gate before submitting a change:
 
 ```bash
 make check
 ```
 
-提交变更时应同时补充与风险匹配的 Go 测试或前端类型检查。协议层修改必须覆盖成功终止、错误事件、流中断、取消和敏感 Header 透传场景。
+On a recent macOS/Xcode combination, use external linking if Go 1.22 reports a missing `LC_UUID` load command:
 
-代码和日志默认使用中文说明，标识符保持英文。不要在测试、Issue、截图或提交中加入真实 API Key、提示词或模型响应。
+```bash
+go test -ldflags=-linkmode=external ./...
+```
+
+## Change requirements
+
+- Add tests proportional to the changed behavior.
+- Protocol changes must cover success markers, error events, interrupted streams, cancellation, and sensitive-header forwarding.
+- User-visible text must be added to both `zh-CN` and `en-US` catalogs.
+- Stable JSON keys, event codes, message codes, and status values must remain English.
+- Do not add real API keys, prompts, responses, or unredacted upstream errors to code, tests, issues, screenshots, or commits.
+- Keep the `relay-lifeline` technical identifiers compatible unless a migration is explicitly designed.
+
+The localization gate runs through `npm run l10n:check` and is included in `make check`. See [Localization](docs/localization.md).

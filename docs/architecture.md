@@ -1,48 +1,60 @@
-# 架构说明
+# Architecture
 
-Relay Lifeline 分为数据面和控制面。
+[简体中文](architecture.zh-CN.md)
+
+Relay-Lifeline separates the request data plane from the management control plane.
 
 ```text
-AI 客户端 -> Relay Lifeline 数据面 -> OpenAI-compatible 中转站 -> 上游模型
-                    |
-                    +-> 状态注册表 -> 时间线/内存历史
-                    |                    |
-                    +-> 风险引擎 --------+-> 管理 API <- Web 控制台
-                    |
-                    +-> 有限通知队列 -> Webhook
+AI client -> data plane -> OpenAI-compatible relay -> model provider
+                |
+                +-> state registry -> timeline and in-memory history
+                |                         |
+                +-> risk engine ----------+-> management API <- Web UI
+                |
+                +-> bounded notification queue -> Webhook
 ```
 
-## 数据面
+## Data plane
 
-数据面缓存下游请求，并为每次上游尝试重新构造 HTTP 请求。Authorization 和协议 Header 原样透传，但不写入日志。流式响应在确认存在合法完成事件之前不会交付给客户端。
+The gateway reads and bounds the downstream request body, then rebuilds an upstream HTTP request for every attempt. Authorization and protocol headers are forwarded but not recorded. Client cancellation propagates to the active upstream call, queue wait, pause wait, and retry timer.
 
-失败后，请求进入带随机抖动的等待阶段。全局恢复间隔限制多个重试请求的启动速度。客户端取消会传播到当前上游请求、等待计时器和队列。
+Every upstream response is buffered in memory and spills to a mode-`0600` temporary file above the configured limit. A response is delivered only after protocol validation succeeds. This prevents partial model output from reaching the client before the gateway knows whether retry is required.
 
-## 控制面
+In `all-errors` mode, transport failures, every non-2xx status, invalid or failed JSON, failed or incomplete SSE, and missing completion markers are retryable. The delay is selected between the configured minimum and maximum and can be extended by `Retry-After`. A global recovery gate spaces resumed attempts.
 
-管理 API 使用独立 Bearer 密钥。控制台可以查看脱敏状态和请求时间线、暂停或恢复重试、立即重试、取消请求和原子保存配置。监听地址、上游连接参数等设置需要重启；重试策略对下一次尝试立即生效。
+The downstream HTTP status is committed as `200` before waiting so keepalives can preserve the connection. Final failures are therefore represented as OpenAI-style error envelopes in the body. Streaming requests receive SSE comment keepalives; non-streaming JSON receives whitespace, which remains valid JSON framing.
 
-时间线只接收固定分类、HTTP 状态码、时间和等待时长，不接收请求体、响应体或 Authorization。完成记录进入有容量和时间上限的内存环形历史，进程退出即清空。
+## Control plane
 
-安全错误详情在响应缓存与时间线之间单向生成。提取器只读取已知 JSON/SSE 错误字段和少量允许的响应头，随后执行凭据脱敏和总长度限制；原始正文不进入状态、日志、通知或历史。诊断导出会再次显式剥离错误详情。
+The management API uses a separate Bearer key. It exposes redacted status, history, timelines, alerts, diagnostics, pause/resume, immediate retry, cancellation, and validated configuration writes.
 
-风险引擎只产生去重提醒，不参与重试决策。通知使用独立有限队列和退避重投，投递失败不会反向阻塞数据面。
+Runtime records store stable message codes and interpolation details. Human-readable messages are localized at API response time, allowing the same completed history record to be viewed in either language. History is bounded by capacity and retention and is not persisted.
 
-## 诊断
+Configuration writes validate the complete document and use an atomic rename where supported. Docker single-file bind mounts fall back to a bounded in-place write. Fields tied to server construction or HTTP transport report `restartRequired`; policy and locale fields are read from the current store during operation.
 
-诊断服务只检查本地配置与文件权限、管理密钥长度、缓存读写、磁盘空间，以及唯一上游的 DNS/TCP 连接。它不发送 HTTP 模型请求。导出的诊断包会移除 URL 用户信息、Query、Fragment 和完整 Webhook 地址，并且从不采集业务正文。
+## Safe observability
 
-## 职责边界
+The error-detail extractor accepts only known JSON/SSE fields and allowlisted response headers. It redacts Bearer tokens, key-shaped values, and URL credentials, then applies a total size limit. Raw unparseable bodies are never stored. Diagnostic exports explicitly remove error details again.
 
-Relay Lifeline 只维护一个上游连接目标，不实现账号池、多供应商路由、模型映射或渠道权重。这些能力由 CPA 或用户现有中转站负责；Lifeline 只负责请求保活、延迟重试、完整交付和故障解释。
+The risk engine emits deduplicated alerts and never changes retry policy. Notifications use an independent bounded queue and delivery retry, so a failing Webhook cannot block model traffic.
 
-## 响应交付
+Logs and Webhooks contain stable English event identifiers and localized human text. Their locales are independent from the UI/API locale.
 
-- Responses API：`response.completed` 才视为成功。
-- Chat Completions 流：`[DONE]` 视为成功。
-- `response.failed`、`response.incomplete`、错误 JSON、非 2xx、传输错误和截断流均视为失败。
-- 非流式 JSON 必须可解析且不包含顶层错误状态。
+## Diagnostics
 
-## 已知限制
+Diagnostics validate local configuration, configuration-file access, admin-key length, cache permissions, disk capacity, and the one configured upstream's DNS/TCP reachability. They never send an HTTP model request. Exported configuration removes URL user information, query, fragment, and the full Webhook target.
 
-上游已完成计费但连接在响应返回前中断时，透明重试可能产生重复费用。除非上游支持幂等键，否则中间网关无法完全消除这一风险。
+## Responsibility boundary
+
+Relay-Lifeline maintains one upstream target. Account pools, multi-provider routing, model mapping, channel weights, and failover between relay vendors belong to CPA or another upstream relay.
+
+## Completion rules
+
+- Responses API: `response.completed` is required.
+- Chat Completions stream: `[DONE]` is required.
+- `response.failed`, `response.incomplete`, an error envelope, non-2xx status, transport failure, or truncated stream is a failure.
+- Non-streaming JSON must parse and must not contain a top-level failed, incomplete, or error state.
+
+## Known limitation
+
+When an upstream call is charged but its completion marker is lost in transit, retry may duplicate work or cost. Only upstream-supported idempotency can fully address this case.

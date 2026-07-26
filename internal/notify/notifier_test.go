@@ -101,3 +101,47 @@ func TestWebhookRetriesWithoutBlockingCaller(t *testing.T) {
 		t.Fatal("通知重试未成功")
 	}
 }
+
+func TestWebhookLocaleHotReloadAndStableFields(t *testing.T) {
+	received := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		received <- payload
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	cfg := config.Default()
+	cfg.Notifications.WebhookURL = server.URL
+	cfg.Notifications.Locale = "en-US"
+	store := config.NewStore("", cfg)
+	notifier := New(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer notifier.Close()
+
+	notifier.Send(Event{Type: "stalled", RequestID: "english", Attempts: 2, Elapsed: 90 * time.Second, MessageCode: "notify.stalled"})
+	english := waitForPayload(t, received)
+	if english["eventCode"] != "STALLED" || english["message"] != "The upstream request remains unavailable" || english["elapsedSeconds"] != float64(90) {
+		t.Fatalf("英文 Webhook 字段异常: %+v", english)
+	}
+
+	cfg.Notifications.Locale = "zh-CN"
+	if err := store.Update(cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	notifier.Send(Event{Type: "stalled", RequestID: "chinese", Attempts: 3, Elapsed: 2 * time.Minute, MessageCode: "notify.stalled"})
+	chinese := waitForPayload(t, received)
+	if chinese["eventCode"] != "STALLED" || chinese["message"] != "上游请求持续不可用" || chinese["elapsedSeconds"] != float64(120) {
+		t.Fatalf("中文 Webhook 字段异常: %+v", chinese)
+	}
+}
+
+func waitForPayload(t *testing.T, received <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case payload := <-received:
+		return payload
+	case <-time.After(time.Second):
+		t.Fatal("未收到 Webhook")
+		return nil
+	}
+}

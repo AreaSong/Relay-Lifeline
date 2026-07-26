@@ -23,11 +23,12 @@
     "logLevel": "Log level"
   },
   "events": { "stalled": "Ongoing outage", "recovered": "Recovery", "long_running": "Long-running request", "many_attempts": "Excessive attempts", "auth_errors": "Authentication errors", "queue_pressure": "Queue pressure", "disk_pressure": "Disk pressure" },
+  "logLevels": { "debug": "Debug", "info": "Info", "warn": "Warning", "error": "Error" },
   "saved": "Settings saved and applied",
   "savedRestart": "Settings saved; some changes require a restart",
   "reloaded": "Reloaded from the configuration file",
   "unsaved": "Unsaved changes",
   "leaveConfirm": "Discard unsaved settings?",
-  "restartHint": "Changes to this field require a restart"
-  ,"units": { "unit": "Unit", "milliseconds": "Milliseconds", "seconds": "Seconds", "minutes": "Minutes", "hours": "Hours" }
+  "restartHint": "Changes to this field require a restart",
+  "units": { "unit": "Unit", "milliseconds": "Milliseconds", "seconds": "Seconds", "minutes": "Minutes", "hours": "Hours" }
 }

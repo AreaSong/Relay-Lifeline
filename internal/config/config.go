@@ -87,6 +87,7 @@ type Config struct {
 	Queue         QueueConfig         `yaml:"queue" json:"queue"`
 	History       HistoryConfig       `yaml:"history" json:"history"`
 	Observability ObservabilityConfig `yaml:"observability" json:"observability"`
+	Capture       CaptureConfig       `yaml:"capture" json:"capture"`
 	Risk          RiskConfig          `yaml:"risk" json:"risk"`
 	Localization  LocalizationConfig  `yaml:"localization" json:"localization"`
 	Notifications NotificationConfig  `yaml:"notifications" json:"notifications"`
@@ -136,6 +137,20 @@ type HistoryConfig struct {
 type ObservabilityConfig struct {
 	ErrorDetails   string   `yaml:"error-details" json:"errorDetails"`
 	MaxErrorDetail ByteSize `yaml:"max-error-detail" json:"maxErrorDetail"`
+}
+
+type CaptureConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	StorageDir            string   `yaml:"storage-dir" json:"storageDir"`
+	Retention             Duration `yaml:"retention" json:"retention"`
+	DefaultRequestLimit   int      `yaml:"default-request-limit" json:"defaultRequestLimit"`
+	ActivationTimeout     Duration `yaml:"activation-timeout" json:"activationTimeout"`
+	MaxBodySize           ByteSize `yaml:"max-body-size" json:"maxBodySize"`
+	MaxTotalSize          ByteSize `yaml:"max-total-size" json:"maxTotalSize"`
+	MaxAttemptsPerRequest int      `yaml:"max-attempts-per-request" json:"maxAttemptsPerRequest"`
+	MinimumFreeDisk       ByteSize `yaml:"minimum-free-disk" json:"minimumFreeDisk"`
+	LogMaxItems           int      `yaml:"log-max-items" json:"logMaxItems"`
+	LogRetention          Duration `yaml:"log-retention" json:"logRetention"`
 }
 
 type RiskConfig struct {
@@ -195,6 +210,13 @@ func Default() Config {
 		},
 		History:       HistoryConfig{MaxItems: 500, Retention: duration(24 * time.Hour)},
 		Observability: ObservabilityConfig{ErrorDetails: "safe", MaxErrorDetail: ByteSize(2 << 10)},
+		Capture: CaptureConfig{
+			StorageDir: "/var/lib/relay-lifeline/captures", Retention: duration(72 * time.Hour),
+			DefaultRequestLimit: 3, ActivationTimeout: duration(10 * time.Minute),
+			MaxBodySize: ByteSize(64 << 20), MaxTotalSize: ByteSize(1 << 30),
+			MaxAttemptsPerRequest: 20, MinimumFreeDisk: ByteSize(1 << 30),
+			LogMaxItems: 2000, LogRetention: duration(time.Hour),
+		},
 		Risk: RiskConfig{
 			WarningAfter: duration(15 * time.Minute), WarningAttempts: 10,
 			AuthErrorAttempts: 3, QueueWarningPercent: 80, MinimumFreeDisk: ByteSize(512 << 20),
@@ -269,6 +291,21 @@ func (c Config) Validate() error {
 	}
 	if c.Observability.MaxErrorDetail < 256 || c.Observability.MaxErrorDetail > 64<<10 {
 		problems = append(problems, l10n.E("config.observability.limit_invalid", nil))
+	}
+	if strings.TrimSpace(c.Capture.StorageDir) == "" || !filepath.IsAbs(c.Capture.StorageDir) {
+		problems = append(problems, l10n.E("config.capture.storage_invalid", nil))
+	}
+	if c.Capture.Retention.Duration <= 0 || c.Capture.Retention.Duration > 30*24*time.Hour || c.Capture.ActivationTimeout.Duration <= 0 || c.Capture.ActivationTimeout.Duration > time.Hour {
+		problems = append(problems, l10n.E("config.capture.duration_invalid", nil))
+	}
+	if c.Capture.DefaultRequestLimit < 1 || c.Capture.DefaultRequestLimit > 100 || c.Capture.MaxAttemptsPerRequest < 1 || c.Capture.MaxAttemptsPerRequest > 1000 {
+		problems = append(problems, l10n.E("config.capture.count_invalid", nil))
+	}
+	if c.Capture.MaxBodySize < 1<<20 || c.Capture.MaxBodySize > 1<<30 || c.Capture.MaxTotalSize < c.Capture.MaxBodySize || c.Capture.MinimumFreeDisk < 64<<20 {
+		problems = append(problems, l10n.E("config.capture.capacity_invalid", nil))
+	}
+	if c.Capture.LogMaxItems < 100 || c.Capture.LogMaxItems > 100000 || c.Capture.LogRetention.Duration <= 0 || c.Capture.LogRetention.Duration > 7*24*time.Hour {
+		problems = append(problems, l10n.E("config.capture.log_invalid", nil))
 	}
 	if c.Risk.WarningAfter.Duration <= 0 || c.Risk.WarningAttempts < 1 || c.Risk.AuthErrorAttempts < 1 {
 		problems = append(problems, l10n.E("config.risk.threshold_invalid", nil))

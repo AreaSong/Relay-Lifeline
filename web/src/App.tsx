@@ -30,7 +30,7 @@ function Login({ onLogin }: { onLogin: (token: string) => Promise<void> }) {
     finally { setBusy(false); }
   }
   return <main className="login-shell"><div className="login-language"><LanguageSelector /></div><form className="login-panel" onSubmit={submit}>
-    <div className="brand-mark"><HeartPulse size={24} /></div><h1>Relay Lifeline</h1><p>{t("common:brandSubtitle")}</p>
+    <div className="brand-mark"><HeartPulse size={24} /></div><h1>Relay-Lifeline</h1><p>{t("common:brandSubtitle")}</p>
     <label className="field"><span>{t("auth:adminKey")}</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoFocus required /></label>
     {error && <div className="error-banner">{error}</div>}
     <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
@@ -74,7 +74,7 @@ export function App() {
     setToken(""); setStatus(null); setConfig(null); setSavedConfig(null); setTimeline(null);
   }
   useEffect(() => {
-    document.title = `${t(`common:title.${view}`)} · Relay Lifeline`;
+    document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`;
   }, [t, view, locale]);
   useEffect(() => {
     if (!token) return;
@@ -146,7 +146,7 @@ export function App() {
   ];
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
   return <div className="app-shell">
-    <aside><div className="brand"><span className="brand-mark"><HeartPulse size={21} /></span><div><strong>Relay Lifeline</strong><span>{t("common:brandSubtitle")}</span></div></div>
+    <aside><div className="brand"><span className="brand-mark"><HeartPulse size={21} /></span><div><strong>Relay-Lifeline</strong><span>{t("common:brandSubtitle")}</span></div></div>
       <nav>{navigation.map((item) => <button key={item.view} aria-label={t(`common:nav.${item.view}`)} data-tooltip={t(`common:nav.${item.view}`)} className={view === item.view ? "active" : ""} onClick={() => selectView(item.view)}>{item.icon}{t(`common:nav.${item.view}`)}</button>)}</nav>
       <div className="aside-footer"><LanguageSelector compact /><button className="logout" onClick={logout}><LogOut size={17} />{t("common:actions.logout")}</button></div>
     </aside>

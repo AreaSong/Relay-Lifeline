@@ -11,10 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/risk"
+	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
 	"github.com/areasong/relay-lifeline/internal/timeline"
 )
@@ -31,7 +33,12 @@ type Gateway struct {
 	retryGate  RetryGate
 	randomMu   sync.Mutex
 	random     *rand.Rand
+	captures   *capture.Manager
+	runLogs    *runlog.Store
 }
+
+func (g *Gateway) SetCaptureManager(manager *capture.Manager) { g.captures = manager }
+func (g *Gateway) SetRunLog(store *runlog.Store)              { g.runLogs = store }
 
 func NewGateway(store *config.Store, registry *state.Registry, controller *state.Controller, notifier *notify.Notifier, logger *slog.Logger, managers ...*risk.Manager) *Gateway {
 	riskManager := risk.New()
@@ -58,6 +65,14 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
 	started := time.Now()
 	outcome := "failed"
+	finalAttempt := 0
+	if g.captures != nil {
+		if _, captureErr := g.captures.BeginRequest(requestID, request.Method, request.URL.RequestURI(), request.Header, body); captureErr != nil {
+			g.addRunLog("warn", "capture.request_failed", "无法捕获请求正文", requestID, 0, 0, map[string]any{"reason": captureErr.Error()})
+		} else {
+			g.addRunLog("info", "request.received", "收到代理请求", requestID, 0, 0, map[string]any{"method": request.Method, "path": request.URL.Path})
+		}
+	}
 	defer func() {
 		if outcome != "successful" && ctx.Err() != nil {
 			outcome = "canceled"
@@ -66,6 +81,11 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		cancel()
 		g.risk.ResolveRequest(requestID)
 		g.registry.Remove(requestID, outcome)
+		if g.captures != nil {
+			if captureErr := g.captures.Finish(requestID, outcome, finalAttempt); captureErr != nil {
+				g.addRunLog("warn", "capture.finish_failed", "无法完成捕获记录", requestID, finalAttempt, 0, map[string]any{"reason": captureErr.Error()})
+			}
+		}
 	}()
 
 	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration)
@@ -95,7 +115,25 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 		g.registry.UpdateMessage(requestID, "requesting", attempt, l10n.Message{}, time.Time{})
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "attempt_started", Attempt: attempt, MessageCode: "timeline.attempt_started"})
+		g.addRunLog("info", "upstream.attempt_started", "开始上游请求", requestID, attempt, 0, nil)
+		attemptStarted := time.Now()
 		result := runAttempt(ctx, g.client, cfg, request, body, streaming)
+		if g.captures != nil {
+			var captureBody io.Reader
+			if result.buffer != nil {
+				captureBody, _ = result.buffer.Reader()
+			}
+			var headers http.Header
+			if result.response != nil {
+				headers = result.response.Header
+			}
+			if captureErr := g.captures.RecordAttempt(requestID, attempt, attemptStatus(result), headers, captureBody, result.err, attemptStarted); captureErr != nil {
+				g.addRunLog("warn", "capture.attempt_failed", "无法捕获上游响应", requestID, attempt, attemptStatus(result), map[string]any{"reason": captureErr.Error()})
+			}
+			if closer, ok := captureBody.(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}
 		if result.validation.Success {
 			g.registry.SetUpstreamMessage(true, l10n.Message{})
 			if err := downstream.deliver(result.buffer); err != nil {
@@ -105,12 +143,14 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			}
 			result.buffer.Close()
 			outcome = "successful"
+			finalAttempt = attempt
 			g.registry.UpdateMessage(requestID, "completed", attempt, l10n.Message{}, time.Time{})
 			g.registry.RecordEvent(requestID, timeline.Event{Type: "completed", Attempt: attempt, MessageCode: "timeline.completed"})
 			if (g.registry.WasNotified(requestID) || g.risk.HasOpenRequestAlerts(requestID)) && cfg.Notifications.NotifyOnRecovery {
 				g.notifier.Send(notify.Event{Type: "recovered", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), MessageCode: "notify.recovered"})
 			}
 			g.logger.Info(g.logText(cfg, "log.request_success"), "event", "request.succeeded", "request_id", requestID, "attempt", attempt, "elapsed_ms", time.Since(started).Milliseconds())
+			g.addRunLog("info", "request.succeeded", "完整响应已交付", requestID, attempt, attemptStatus(result), map[string]any{"elapsedMilliseconds": time.Since(started).Milliseconds()})
 			return
 		}
 		errorDetail := extractSafeErrorDetail(cfg.Observability, result, streaming)
@@ -128,12 +168,14 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		})
 		g.publishAlerts(g.risk.EvaluateAttempt(requestID, attempt, started, statusCode, cfg.Risk))
 		g.logger.Warn(g.logText(cfg, "log.upstream_failed"), "event", "upstream.request_failed", "request_id", requestID, "attempt", attempt, "reason_code", reason.ID, "status", statusCode)
+		g.addRunLog("warn", "upstream.request_failed", "上游请求失败", requestID, attempt, statusCode, map[string]any{"reasonCode": reason.ID})
 		if !shouldRetry(cfg, result) || cfg.Retry.MaxAttempts > 0 && attempt >= cfg.Retry.MaxAttempts {
 			downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, reason))
 			return
 		}
 
 		delay := g.retryDelay(cfg, result.response)
+		g.addRunLog("info", "retry.scheduled", "已安排再次请求", requestID, attempt, statusCode, map[string]any{"waitMilliseconds": delay.Milliseconds()})
 		nextRetry := time.Now().Add(delay)
 		g.registry.UpdateMessage(requestID, "waiting", attempt, reason, nextRetry)
 		g.registry.RecordEvent(requestID, timeline.Event{
@@ -150,6 +192,13 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "retry_resumed", Attempt: attempt + 1, MessageCode: resumeReason})
 	}
+}
+
+func (g *Gateway) addRunLog(level, event, message, requestID string, attempt, statusCode int, fields map[string]any) {
+	if g.runLogs == nil {
+		return
+	}
+	g.runLogs.Add(runlog.Entry{Level: level, Event: event, Message: message, RequestID: requestID, Attempt: attempt, StatusCode: statusCode, Fields: fields})
 }
 
 func readRequestBody(writer http.ResponseWriter, request *http.Request, limit int64, locale, fallback string) ([]byte, error) {
@@ -256,5 +305,5 @@ func (g *Gateway) logText(cfg config.Config, messageID string) string {
 }
 
 func (g *Gateway) String() string {
-	return fmt.Sprintf("Relay Lifeline -> %s", g.store.Get().Upstream.BaseURL)
+	return fmt.Sprintf("Relay-Lifeline -> %s", g.store.Get().Upstream.BaseURL)
 }

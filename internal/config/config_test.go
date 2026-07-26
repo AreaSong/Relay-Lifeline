@@ -26,6 +26,20 @@ func TestLoadMergesDefaultsAndValidates(t *testing.T) {
 	}
 }
 
+func TestExampleConfigurationsLoad(t *testing.T) {
+	for _, name := range []string{"config.example.yaml", "config.docker.example.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := Load(filepath.Join("..", "..", name))
+			if err != nil {
+				t.Fatalf("示例配置无法加载: %v", err)
+			}
+			if cfg.Localization.DefaultLocale != "zh-CN" || cfg.Localization.FallbackLocale != "en-US" || cfg.Logging.Locale != "zh-CN" || cfg.Notifications.Locale != "zh-CN" {
+				t.Fatalf("示例语言配置不完整: %+v", cfg)
+			}
+		})
+	}
+}
+
 func TestConfigValidatesSafeErrorDetailSettings(t *testing.T) {
 	cfg := Default()
 	cfg.Observability.ErrorDetails = "raw"
@@ -63,6 +77,27 @@ func TestConfigRejectsSensitiveLogging(t *testing.T) {
 			test.enable(&cfg.Logging)
 			if err := cfg.Validate(); err == nil {
 				t.Fatalf("应拒绝记录%s", test.name)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsUnsupportedLocales(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Config)
+	}{
+		{name: "默认语言", set: func(cfg *Config) { cfg.Localization.DefaultLocale = "fr-FR" }},
+		{name: "回退语言", set: func(cfg *Config) { cfg.Localization.FallbackLocale = "fr-FR" }},
+		{name: "日志语言", set: func(cfg *Config) { cfg.Logging.Locale = "fr-FR" }},
+		{name: "通知语言", set: func(cfg *Config) { cfg.Notifications.Locale = "fr-FR" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			test.set(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("应拒绝不支持的语言")
 			}
 		})
 	}

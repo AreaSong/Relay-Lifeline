@@ -3,6 +3,8 @@ package timeline
 import (
 	"testing"
 	"time"
+
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 func TestHistoryCapacityAndRetention(t *testing.T) {
@@ -21,6 +23,25 @@ func TestHistoryCapacityAndRetention(t *testing.T) {
 	now = now.Add(2 * time.Hour)
 	if history = store.History(); len(history) != 0 {
 		t.Fatalf("过期历史未清理: %+v", history)
+	}
+}
+
+func TestStoredMessageCanBeLocalizedAfterCompletion(t *testing.T) {
+	store := New(func() Limits { return Limits{MaxItems: 10, Retention: time.Hour} })
+	store.Start("request", "POST", "/v1/responses")
+	store.Add("request", Event{Type: "attempt_failed", Attempt: 1, MessageCode: "proxy.http_error", MessageDetails: map[string]any{"Status": 503}})
+	store.Finish("request", "failed")
+	record := store.History()[0]
+	english := LocalizeRecord(record, l10n.LocaleEnglish, l10n.LocaleChinese)
+	chinese := LocalizeRecord(record, l10n.LocaleChinese, l10n.LocaleEnglish)
+	if english.LastError != "HTTP 503" || chinese.LastError != "HTTP 503" {
+		t.Fatalf("错误消息插值异常: en=%q zh=%q", english.LastError, chinese.LastError)
+	}
+	if english.Events[0].Message != "Request received" || chinese.Events[0].Message != "收到请求" {
+		t.Fatalf("完成后切换语言异常: en=%q zh=%q", english.Events[0].Message, chinese.Events[0].Message)
+	}
+	if record.Events[0].Message != "" {
+		t.Fatal("本地化修改了存储记录")
 	}
 }
 

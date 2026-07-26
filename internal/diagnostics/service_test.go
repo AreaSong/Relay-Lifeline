@@ -69,3 +69,17 @@ func TestRedactedConfigRemovesURLSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnosticsCanRenderEnglish(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	cfg := config.Default()
+	cfg.Upstream.BaseURL = "http://127.0.0.1:1"
+	cfg.Stream.TempDir = t.TempDir()
+	report := New(config.NewStore("", cfg), "test", time.Now()).Run(context.Background(), "en-US", "zh-CN")
+	if len(report.Checks) == 0 || report.Checks[0].Name != "Lifeline service" || report.Checks[0].Message != "Service process is running" {
+		t.Fatalf("英文诊断异常: %+v", report.Checks)
+	}
+	if report.Checks[0].NameCode != "diagnostic.service.name" || report.Checks[0].MessageCode != "diagnostic.service.running" {
+		t.Fatalf("诊断缺少稳定消息代码: %+v", report.Checks[0])
+	}
+}

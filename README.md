@@ -1,87 +1,85 @@
-# Relay Lifeline
+# Relay-Lifeline
 
-**中转生命线**是面向 OpenAI-compatible AI API 中转站的请求保活、延迟重试与故障恢复网关。
+[GitHub](https://github.com/AreaSong/Relay-Lifeline) | [简体中文](README.zh-CN.md)
 
-它位于 Codex、IDE 或其他 AI 客户端与现有中转站之间。当中转站暂时没有可用通道、触发限流、连接中断或返回协议错误时，Relay Lifeline 保持客户端连接，等待后重新提交同一请求，直到成功、达到策略上限或客户端取消。
+Relay-Lifeline is a resilient local gateway for OpenAI-compatible API relays. It sits between Codex, an IDE, or another AI client and an existing relay, keeps the downstream connection alive, and retries the same request after the configured delay when the upstream returns any error.
 
-> 社区项目，与 CLIProxyAPI 及任何上游模型提供商均无官方关联。
-
-## 工作方式
+The project is independent from CLIProxyAPI (CPA) and all model providers.
 
 ```text
-AI 客户端
-    │  原 API Key，仅修改 base_url
-    ▼
-Relay Lifeline :8318
-    │  Authorization 原样透传
-    ▼
-任意 OpenAI-compatible 中转站
-    ▼
-上游模型提供商
+AI client
+   |  Existing API key; change only base_url
+   v
+Relay-Lifeline :8318
+   |  Authorization is forwarded unchanged
+   v
+CLIProxyAPI :8317 or another OpenAI-compatible relay
+   v
+Accounts, routes, and model providers managed by that relay
 ```
 
-核心能力：
+The public project name is **Relay-Lifeline**. Executables, images, environment variables, and compatibility headers use the matching `relay-lifeline` technical identifier.
 
-- 所有错误或仅临时错误两种策略
-- `60–120` 秒随机延迟、无限或有限次数重试
-- 遵循上游 `Retry-After`
-- Responses API 和 Chat Completions SSE 完整性校验
-- 等待期间 SSE 心跳，避免客户端空闲超时
-- 完整响应缓存，防止半截内容和重复工具调用
-- 客户端取消传播、动态并发限制、等待队列和恢复削峰
-- 请求故障时间线、24 小时内存历史和非阻断风险提醒
-- 失败响应的结构化安全提取、脱敏和长度限制
-- 无模型调用的一键诊断与脱敏诊断包
-- 独立通知队列、事件过滤和失败退避重投
-- 脱敏状态、暂停/恢复、立即重试、取消和配置热更新
-- 独立管理密钥、回环地址绑定和敏感日志保护
+## Capabilities
 
-Relay Lifeline 始终只连接一个上游。账号池、渠道权重、模型映射和供应商路由属于 CPA 或其他中转站的职责，本项目不会重复实现。
+- Retry all upstream errors, or only transient errors.
+- Random retry delay between 60 and 120 seconds by default.
+- Unlimited retries or a configurable attempt limit.
+- Optional support for upstream `Retry-After`.
+- Responses API and Chat Completions SSE completion validation.
+- SSE keepalive comments while a complete response is being buffered.
+- Full-response buffering to avoid partial output and duplicate tool delivery.
+- Client cancellation propagation, bounded concurrency, waiting queue, and recovery pacing.
+- Per-request timeline, bounded in-memory history, diagnostics, and risk alerts.
+- Safe extraction of structured upstream error details with redaction and size limits.
+- Asynchronous Webhook delivery with event filters and retry.
+- Chinese and English UI, API messages, CLI text, logs, diagnostics, and Webhooks.
+- Separate UI, log, and notification locales with hot-reloadable configuration.
+- Independent admin key and secure-by-default local binding.
 
-## 快速启动
+Relay-Lifeline always targets one relay. Account pools, provider selection, model mapping, weights, and failover between relay vendors remain the responsibility of CPA or the configured upstream.
+
+## Quick Start
 
 ```bash
 cp config.docker.example.yaml config.docker.yaml
 cp .env.example .env
 ```
 
-编辑 `.env`，设置一个长随机管理密钥；再按实际中转站地址修改 `config.docker.yaml` 的 `upstream.base-url`。
-Linux 用户应将 `RELAY_LIFELINE_UID` 和 `RELAY_LIFELINE_GID` 设置为 `id -u`、`id -g` 的结果，确保管理页可以保存绑定挂载的配置文件。
-
-```bash
-docker compose up -d --build
-curl http://127.0.0.1:8318/healthz
-```
-
-管理控制台：<http://127.0.0.1:8318/admin/>
-
-客户端只需将原来的中转地址改为 Relay Lifeline，API Key 不变：
-
-```toml
-[model_providers.relay]
-base_url = "http://127.0.0.1:8318/v1"
-wire_api = "responses"
-```
-
-## CLIProxyAPI 示例
-
-CLIProxyAPI 已在主机 `8317` 端口运行时，Docker 配置使用：
+Set a long random `RELAY_LIFELINE_ADMIN_KEY` in `.env`, then set the upstream address in `config.docker.yaml`. When CPA listens on host port `8317`, use:
 
 ```yaml
 upstream:
   base-url: "http://host.docker.internal:8317"
 ```
 
-如果两个服务位于同一 Docker 网络，使用 CLIProxyAPI 的服务名：
+Start the service:
+
+```bash
+docker compose up -d --build
+curl http://127.0.0.1:8318/healthz
+```
+
+Open the admin console at <http://127.0.0.1:8318/admin/>.
+
+Change the AI client's Base URL only. Keep the existing API key:
+
+```toml
+[model_providers.relay_lifeline]
+base_url = "http://127.0.0.1:8318/v1"
+wire_api = "responses"
+```
+
+If both services share a Docker network, the upstream can use the CPA service name instead:
 
 ```yaml
 upstream:
   base-url: "http://cli-proxy-api:8317"
 ```
 
-## 重试语义
+## Retry Semantics
 
-`all-errors` 会重试所有上游非成功结果，包括 `400`、`401`、`403`、`429`、`5xx`、连接错误、无法解析的响应、`response.failed`、`response.incomplete` 和截断流。
+`all-errors` retries every unsuccessful upstream result, including HTTP `4xx` and `5xx`, connection and timeout errors, malformed or empty JSON, `response.failed`, `response.incomplete`, and truncated SSE streams.
 
 ```yaml
 retry:
@@ -93,68 +91,80 @@ retry:
   honor-retry-after: true
 ```
 
-`max-attempts: 0` 表示无限重试。项目示例按“所有错误、无限重试”的目标配置；永久错误无限重试可能长期占用连接，可按实际需要切换为 `transient-errors` 或设置次数上限。
+`max-attempts: 0` means unlimited retries. A valid and complete `2xx` response ends the retry loop. A normal assistant refusal inside a valid response is not an API error. Client disconnect or cancellation stops the current upstream call and all pending waits.
 
-合法、完整的 2xx 响应才会停止重试。助手在正常响应中拒绝回答不属于 API 错误。客户端断开或主动取消会立即终止当前上游请求和等待循环。
+The gateway buffers an upstream response before delivering it. This allows it to retry an interrupted stream without exposing partial output. During a streaming request it emits SSE comments every 15 seconds by default. For non-streaming JSON, whitespace keepalives preserve the connection without changing the eventual JSON value.
 
-## 管理控制台
+## Administration
 
-控制台使用 `RELAY_LIFELINE_ADMIN_KEY` 登录，可执行：
+The console uses a separate `RELAY_LIFELINE_ADMIN_KEY`. It can:
 
-- 查看活动请求、失败原因、尝试次数和下次重试时间
-- 查看每次尝试、等待、恢复、完成和取消的脱敏时间线
-- 查看本次进程内最多 500 条、默认保留 24 小时的请求历史
-- 查看长时间运行、尝试过多、鉴权错误、队列和磁盘风险
-- 执行不调用模型的一键诊断，导出经过脱敏的 JSON 诊断包
-- 暂停或恢复全部重试
-- 立即重试或取消指定请求
-- 修改错误范围、间隔、次数、心跳、缓存、队列和通知
-- 原子保存或重新加载 YAML 配置
+- Inspect active requests, attempts, next retry time, and safe failure details.
+- Review request timelines and bounded in-memory history.
+- View non-blocking alerts for long-running requests, repeated attempts, authentication failures, queue pressure, and disk pressure.
+- Run diagnostics without calling the model API and export a redacted JSON bundle.
+- Pause or resume all requests, retry immediately, or cancel a request.
+- Change retry, stream, queue, history, risk, notification, logging, and locale settings.
+- Save configuration atomically or reload it from disk.
 
-历史仅保存在内存中，容器重启后清空，不会把提示词或响应写入数据库。监听地址、管理开关、上游连接参数和日志级别变更需要重启；重试、流式、队列、历史、风险及通知策略会应用于后续阶段或新请求。
+History is memory-only and is cleared on restart. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
 
-错误详情默认使用 `safe` 模式，只提取失败响应中的 `error.message`、`error.type`、`error.code`、`Retry-After` 和上游请求 ID。每条详情默认不超过 2 KiB，并在写入时间线前遮蔽常见密钥、Bearer Token 和 URL 凭据。无法安全解析的响应只记录大小，不保存原始正文；设置为 `off` 可停止后续采集。诊断包始终排除错误详情。
+## Localization
 
-## 诊断与风险提醒
+The Web UI switches language immediately and stores the choice in `localStorage`. Management API calls send `Accept-Language`; responses include `Content-Language`.
 
-诊断页检查配置、配置文件权限、管理密钥长度、CPA DNS/TCP 连通性、临时缓存权限和剩余磁盘空间。上游检查只建立 TCP 连接，不发送模型请求，不消耗 Token。
+```yaml
+localization:
+  default-locale: "zh-CN"
+  fallback-locale: "en-US"
 
-风险提醒不会改变或停止当前重试策略。默认在请求超过 15 分钟、尝试达到 10 次、连续 3 次出现 `401/403`、队列达到 80% 或缓存磁盘低于 512 MiB 时提醒。请求仍会按既定策略继续执行，直到成功或用户取消。
+logging:
+  locale: "zh-CN"
 
-## 安全
+notifications:
+  locale: "zh-CN"
+```
 
-- Docker 示例只发布到主机 `127.0.0.1:8318`。
-- 客户端 Authorization 只在内存中透传。
-- 默认不记录请求体、响应体或 Authorization。
-- 不提供原始错误正文记录模式；安全错误详情只保存在受限的内存历史中。
-- 管理密钥与客户端 API Key 完全分离。
-- 响应转存文件使用 `0600` 权限，并在交付或失败后删除。
-- 管理页面设置严格 CSP，不依赖第三方 CDN。
+Stable JSON fields, status values, event codes, and message codes remain in English. Human-readable messages are localized. See [Localization](docs/localization.md) for contributor rules.
 
-不要将管理页面直接暴露到公网。需要远程访问时，应在前面增加 TLS、访问控制和受信任网络边界。
+## Safety Model
 
-## 通知
+- Docker publishes only `127.0.0.1:8318` by default.
+- Client Authorization is forwarded in memory and is never intentionally logged.
+- Request bodies, response bodies, and Authorization logging are rejected by configuration validation.
+- Safe error details include only allowlisted structured fields and are redacted before entering history.
+- Temporary response files use `0600` permissions and are deleted after delivery or failure.
+- Diagnostic exports redact URL credentials, query strings, Webhook targets, and error details.
+- The admin console has strict security headers and no third-party CDN dependency.
 
-可配置一个 HTTP(S) Webhook，并选择持续故障、恢复、长时间运行、尝试过多、鉴权错误、队列压力和磁盘压力事件。通知通过容量为 100 的独立队列发送，默认最多尝试 3 次、间隔 5 秒；Webhook 故障不会阻塞模型请求。通知内容只包含请求 ID、尝试次数、耗时和脱敏原因。
+Do not expose the admin endpoint directly to the public internet. Put TLS, access control, and a trusted network boundary in front of it when remote access is required.
 
-## 开发
+## Diagnostics and Notifications
+
+Diagnostics verify configuration, file access, admin-key length, CPA DNS/TCP reachability, cache permissions, and disk capacity. The upstream check opens a TCP connection only; it does not send a model request or consume tokens.
+
+Webhooks can report stalled, recovered, long-running, many-attempt, authentication-error, queue-pressure, and disk-pressure events. Payloads contain stable `eventCode` and numeric `elapsedSeconds` fields alongside localized text. Delivery uses a bounded queue and never blocks the model request path.
+
+## Development
+
+Requirements: Go 1.22+, Node.js 22+, and Docker for integration verification.
 
 ```bash
 make check
 make docker-build
 ```
 
-本机 Go 1.22 在部分新版 macOS 上需要 `CGO_ENABLED=0`，Makefile 和 CI 已统一使用纯 Go 构建。
+On some recent macOS/Xcode combinations, Go 1.22 test binaries require external linking. Use `go test -ldflags=-linkmode=external ./...` if the internal linker reports a missing `LC_UUID` load command.
 
-更多实现细节见 [架构说明](docs/architecture.md)，安全问题见 [安全策略](SECURITY.md)。
+See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 
-## 回滚
+## Rollback
 
-Relay Lifeline 不修改中转站账号或 API Key。将客户端 `base_url` 改回原中转站地址即可立即绕过网关。
+Relay-Lifeline does not modify upstream accounts or API keys. Change the client's `base_url` back to CPA or the original relay to bypass the gateway immediately. Keep the previous image and configuration file before upgrading a deployed instance.
 
-## 风险
+## Known Risk
 
-如果上游已经完成并产生费用，但连接在结果返回前中断，透明重试可能产生重复调用或重复计费。除非上游提供并正确实现幂等键，否则无法从中间网关彻底消除此风险。
+If an upstream request completed and incurred a charge but the connection failed before the gateway received the completion marker, a transparent retry can duplicate a call or charge. A middle gateway cannot eliminate this risk unless the upstream implements a reliable idempotency key.
 
 ## License
 

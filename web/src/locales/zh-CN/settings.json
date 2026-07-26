@@ -23,11 +23,12 @@
     "logLevel": "日志级别"
   },
   "events": { "stalled": "持续故障", "recovered": "恢复成功", "long_running": "长时间运行", "many_attempts": "尝试次数过多", "auth_errors": "鉴权错误", "queue_pressure": "队列压力", "disk_pressure": "磁盘压力" },
+  "logLevels": { "debug": "调试", "info": "信息", "warn": "警告", "error": "错误" },
   "saved": "设置已保存并生效",
   "savedRestart": "设置已保存，部分配置重启后生效",
   "reloaded": "已从配置文件重新载入",
   "unsaved": "存在未保存的修改",
   "leaveConfirm": "要放弃未保存的设置吗？",
-  "restartHint": "修改此字段后需要重启"
-  ,"units": { "unit": "单位", "milliseconds": "毫秒", "seconds": "秒", "minutes": "分钟", "hours": "小时" }
+  "restartHint": "修改此字段后需要重启",
+  "units": { "unit": "单位", "milliseconds": "毫秒", "seconds": "秒", "minutes": "分钟", "hours": "小时" }
 }

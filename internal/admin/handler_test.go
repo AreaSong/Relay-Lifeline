@@ -14,6 +14,7 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/state"
 	"github.com/areasong/relay-lifeline/internal/timeline"
@@ -101,11 +102,52 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 }
 
 func authenticatedRequest(handler http.Handler, method, path string) *httptest.ResponseRecorder {
+	return localizedAuthenticatedRequest(handler, method, path, "")
+}
+
+func localizedAuthenticatedRequest(handler http.Handler, method, path, locale string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, nil)
 	request.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	if locale != "" {
+		request.Header.Set("Accept-Language", locale)
+	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func TestAdminLocalizesErrorsAndStoredHistoryPerRequest(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	cfg := config.Default()
+	store := config.NewStore("", cfg)
+	registry := state.NewRegistry()
+	id, _ := registry.Add("POST", "/v1/responses", func() {})
+	registry.RecordEvent(id, timeline.Event{Type: "attempt_failed", Attempt: 1, MessageCode: "proxy.connection_failed"})
+	registry.Remove(id, "failed")
+	handler := New(store, registry, state.NewController())
+
+	unauthorizedRequest := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
+	unauthorizedRequest.Header.Set("Accept-Language", "en-US")
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, unauthorizedRequest)
+	if unauthorized.Header().Get("Content-Language") != "en-US" || !strings.Contains(unauthorized.Body.String(), `"code":"INVALID_ADMIN_KEY"`) || !strings.Contains(unauthorized.Body.String(), "Invalid admin key") {
+		t.Fatalf("英文错误响应异常: header=%q body=%s", unauthorized.Header().Get("Content-Language"), unauthorized.Body.String())
+	}
+
+	english := localizedAuthenticatedRequest(handler, http.MethodGet, "/admin/api/history", "en-US")
+	chinese := localizedAuthenticatedRequest(handler, http.MethodGet, "/admin/api/history", "zh-CN")
+	if english.Header().Get("Content-Language") != "en-US" || !strings.Contains(english.Body.String(), "Upstream connection failed") {
+		t.Fatalf("英文历史异常: header=%q body=%s", english.Header().Get("Content-Language"), english.Body.String())
+	}
+	if chinese.Header().Get("Content-Language") != "zh-CN" || !strings.Contains(chinese.Body.String(), "上游连接失败") {
+		t.Fatalf("中文历史异常: header=%q body=%s", chinese.Header().Get("Content-Language"), chinese.Body.String())
+	}
+	if !strings.Contains(english.Body.String(), `"messageCode":"proxy.connection_failed"`) || !strings.Contains(chinese.Body.String(), `"messageCode":"proxy.connection_failed"`) {
+		t.Fatal("双语历史未保留稳定消息代码")
+	}
+	if got := l10n.FromAcceptLanguage("fr-FR", cfg.Localization.DefaultLocale); got != "zh-CN" {
+		t.Fatalf("不支持的请求语言未回退到默认语言: %s", got)
+	}
 }
 
 func TestAdminRejectsTrailingConfigJSON(t *testing.T) {

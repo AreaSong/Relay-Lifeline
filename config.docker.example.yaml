@@ -43,12 +43,17 @@ risk:
   queue-warning-percent: 80
   minimum-free-disk: "512MiB"
 
+localization:
+  default-locale: "zh-CN"
+  fallback-locale: "en-US"
+
 notifications:
   stalled-after: "10m"
   notify-on-recovery: true
   webhook-url: ""
   delivery-attempts: 3
   delivery-backoff: "5s"
+  locale: "zh-CN"
   event-types:
     - stalled
     - recovered
@@ -60,6 +65,7 @@ notifications:
 
 logging:
   level: "info"
+  locale: "zh-CN"
   log-request-body: false
   log-response-body: false
   log-authorization: false

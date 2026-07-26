@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/admin"
+	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/proxy"
 	"github.com/areasong/relay-lifeline/internal/risk"
+	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
 	"github.com/areasong/relay-lifeline/internal/timeline"
 	"github.com/areasong/relay-lifeline/internal/webui"
@@ -62,11 +64,18 @@ func main() {
 	registry := state.NewRegistry(timelineStore)
 	controller := state.NewController()
 	riskManager := risk.New()
+	runLogStore := runlog.New(func() runlog.Limits {
+		current := store.Get().Capture
+		return runlog.Limits{MaxItems: current.LogMaxItems, Retention: current.LogRetention.Duration}
+	})
+	captureManager := capture.New(func() config.CaptureConfig { return store.Get().Capture }, os.Getenv("RELAY_LIFELINE_CAPTURE_KEY"))
 	notifier := notify.New(store, logger)
 	defer notifier.Close()
 	gateway := proxy.NewGateway(store, registry, controller, notifier, logger, riskManager)
+	gateway.SetCaptureManager(captureManager)
+	gateway.SetRunLog(runLogStore)
 	diagnosticService := diagnostics.New(store, version, startedAt)
-	adminHandler := admin.NewWithServices(store, registry, controller, riskManager, diagnosticService, notifier)
+	adminHandler := admin.NewWithExtendedServices(store, registry, controller, riskManager, diagnosticService, notifier, captureManager, runLogStore)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
@@ -93,6 +102,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go captureManager.StartCleaner(ctx)
 	go reloadOnSignal(store, logger)
 	go func() {
 		<-ctx.Done()
