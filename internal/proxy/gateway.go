@@ -77,6 +77,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if outcome != "successful" && ctx.Err() != nil {
 			outcome = "canceled"
 			g.registry.RecordEvent(requestID, timeline.Event{Type: "canceled", MessageCode: "timeline.canceled"})
+			g.addRunLog("info", "request.canceled", "客户端已取消请求", requestID, 0, 0, nil)
 		}
 		cancel()
 		g.risk.ResolveRequest(requestID)
@@ -88,8 +89,11 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}()
 
-	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration)
+	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration, func() {
+		g.addRunLog("debug", "downstream.heartbeat", "已发送下游保活心跳", requestID, 0, 0, nil)
+	})
 	defer downstream.stopHeartbeat()
+	g.addRunLog("info", "queue.entered", "请求进入并发队列", requestID, 0, 0, nil)
 	if err := g.limiter.Acquire(ctx, func() (int, int) {
 		current := g.store.Get().Queue
 		return current.MaxActive, current.MaxWaiting
@@ -98,10 +102,12 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if !errors.Is(err, ErrQueueFull) {
 			return
 		}
+		g.addRunLog("warn", "queue.rejected", "等待队列已满", requestID, 0, 0, nil)
 		downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, message))
 		return
 	}
 	defer g.limiter.Release()
+	g.addRunLog("info", "queue.acquired", "请求获得上游并发名额", requestID, 0, 0, nil)
 
 	for attempt := 1; ; attempt++ {
 		cfg = g.store.Get()
@@ -191,6 +197,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "retry_resumed", Attempt: attempt + 1, MessageCode: resumeReason})
+		g.addRunLog("info", "retry.resumed", "重试等待结束", requestID, attempt+1, 0, map[string]any{"reasonCode": resumeReason})
 	}
 }
 

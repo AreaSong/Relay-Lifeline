@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,17 +26,20 @@ type Manager struct {
 	mu          sync.Mutex
 	config      func() config.CaptureConfig
 	masterKey   []byte
+	root        string
 	unavailable string
 	active      bool
 	remaining   int
 	deadline    time.Time
 	records     map[string]Record
 	byRequest   map[string]string
+	disabled    map[string]bool
 	now         func() time.Time
+	onEvent     func(event, message string, fields map[string]any)
 }
 
 func New(provider func() config.CaptureConfig, encodedMasterKey string) *Manager {
-	manager := &Manager{config: provider, records: make(map[string]Record), byRequest: make(map[string]string), now: time.Now}
+	manager := &Manager{config: provider, root: provider().StorageDir, records: make(map[string]Record), byRequest: make(map[string]string), disabled: make(map[string]bool), now: time.Now}
 	key, err := parseMasterKey(encodedMasterKey)
 	if err != nil {
 		manager.unavailable = err.Error()
@@ -46,6 +50,7 @@ func New(provider func() config.CaptureConfig, encodedMasterKey string) *Manager
 		manager.unavailable = err.Error()
 		return manager
 	}
+	_, _ = manager.DeleteExpired()
 	if provider().Enabled {
 		manager.active = true
 		manager.remaining = provider().DefaultRequestLimit
@@ -65,6 +70,12 @@ func (m *Manager) StartCleaner(ctx context.Context) {
 			_, _ = m.DeleteExpired()
 		}
 	}
+}
+
+func (m *Manager) SetEventSink(sink func(event, message string, fields map[string]any)) {
+	m.mu.Lock()
+	m.onEvent = sink
+	m.mu.Unlock()
 }
 
 func (m *Manager) Activate(requestLimit int, timeout time.Duration) error {
@@ -120,6 +131,9 @@ func (m *Manager) BeginRequest(requestID, method, path string, headers http.Head
 	}
 	if err := m.capacityAvailableLocked(min(int64(len(body)), int64(m.config().MaxBodySize))); err != nil {
 		m.active = false
+		m.remaining = 0
+		m.deadline = time.Time{}
+		m.emitLocked("capture.capacity_stopped", "捕获因容量或磁盘限制停止", map[string]any{"reason": err.Error()})
 		return "", err
 	}
 	m.remaining--
@@ -140,7 +154,7 @@ func (m *Manager) BeginRequest(requestID, method, path string, headers http.Head
 	}
 	now := m.now()
 	record := Record{
-		ID: id, RequestID: requestID, Method: method, Path: path, State: "active",
+		ID: id, RequestID: requestID, Method: method, Path: sanitizePath(path), State: "active",
 		StartedAt: now, ExpiresAt: now.Add(m.config().Retention.Duration), WrappedKey: wrapped,
 		Request: BodyPart{Headers: safeHeaders(headers), ContentType: headers.Get("Content-Type")},
 	}
@@ -149,6 +163,9 @@ func (m *Manager) BeginRequest(requestID, method, path string, headers http.Head
 	}
 	part, err := m.writeObjectLocked(id, dataKey, "request.body.enc", bytes.NewReader(body), &record.Request)
 	if err != nil {
+		m.active = false
+		m.remaining = 0
+		m.deadline = time.Time{}
 		_ = os.RemoveAll(m.recordDir(id))
 		return "", err
 	}
@@ -175,9 +192,9 @@ func (m *Manager) RecordAttempt(requestID string, number, statusCode int, header
 	record := m.records[id]
 	attempt := Attempt{Number: number, StartedAt: started, FinishedAt: m.now(), StatusCode: statusCode}
 	if attemptErr != nil {
-		attempt.Error = attemptErr.Error()
+		attempt.Error = string(redactText([]byte(attemptErr.Error())))
 	}
-	if body != nil && number <= m.config().MaxAttemptsPerRequest {
+	if body != nil && !m.disabled[requestID] && number <= m.config().MaxAttemptsPerRequest {
 		key, err := unwrapKey(m.masterKey, record.WrappedKey)
 		if err != nil {
 			return err
@@ -186,12 +203,14 @@ func (m *Manager) RecordAttempt(requestID string, number, statusCode int, header
 		part, err := m.writeObjectLocked(id, key, fmt.Sprintf("attempt-%03d.body.enc", number), body, base)
 		if err != nil {
 			record.Warnings = appendUnique(record.Warnings, err.Error())
+			m.disabled[requestID] = true
 		} else {
 			attempt.Response = &part
 			record.CapturedBytes += part.StoredBytes
 		}
-	} else if body != nil {
+	} else if body != nil && !m.disabled[requestID] {
 		record.Warnings = appendUnique(record.Warnings, "max attempts per request reached; later bodies were not captured")
+		m.disabled[requestID] = true
 	}
 	record.Attempts = append(record.Attempts, attempt)
 	m.records[id] = record
@@ -215,6 +234,7 @@ func (m *Manager) Finish(requestID, state string, finalAttempt int) error {
 		}
 	}
 	delete(m.byRequest, requestID)
+	delete(m.disabled, requestID)
 	m.records[id] = record
 	return m.persistLocked(record)
 }
@@ -245,6 +265,7 @@ func (m *Manager) Delete(id string) error {
 		return os.ErrNotExist
 	}
 	delete(m.byRequest, record.RequestID)
+	delete(m.disabled, record.RequestID)
 	delete(m.records, id)
 	return os.RemoveAll(m.recordDir(id))
 }
@@ -265,7 +286,11 @@ func (m *Manager) DeleteExpired() (int, error) {
 		}
 		delete(m.records, id)
 		delete(m.byRequest, record.RequestID)
+		delete(m.disabled, record.RequestID)
 		deleted++
+	}
+	if deleted > 0 {
+		m.emitLocked("capture.expired_deleted", "已删除到期捕获", map[string]any{"count": deleted})
 	}
 	return deleted, errors.Join(errs...)
 }
@@ -273,7 +298,7 @@ func (m *Manager) DeleteExpired() (int, error) {
 func (m *Manager) initialize() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	root := m.config().StorageDir
+	root := m.root
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
 	}
@@ -302,6 +327,7 @@ func (m *Manager) writeObjectLocked(id string, key []byte, name string, source i
 	if err := m.capacityAvailableLocked(0); err != nil {
 		return part, err
 	}
+	currentSize := m.storageBytesLocked()
 	directory := m.recordDir(id)
 	temporary, err := os.CreateTemp(directory, ".capture-*")
 	if err != nil {
@@ -320,7 +346,10 @@ func (m *Manager) writeObjectLocked(id string, key []byte, name string, source i
 	if err != nil {
 		return part, err
 	}
-	if err := m.capacityAvailableLocked(stored); err != nil {
+	if currentSize+stored > int64(m.config().MaxTotalSize) {
+		return part, errors.New("capture storage capacity reached")
+	}
+	if err := m.capacityAvailableLocked(0); err != nil {
 		return part, err
 	}
 	destination := filepath.Join(directory, name)
@@ -366,7 +395,7 @@ func (m *Manager) capacityAvailableLocked(additional int64) error {
 		return errors.New("capture storage capacity reached")
 	}
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(cfg.StorageDir, &stat); err != nil {
+	if err := syscall.Statfs(m.root, &stat); err != nil {
 		return err
 	}
 	available := int64(stat.Bavail) * int64(stat.Bsize)
@@ -378,7 +407,7 @@ func (m *Manager) capacityAvailableLocked(additional int64) error {
 
 func (m *Manager) storageBytesLocked() int64 {
 	var total int64
-	_ = filepath.WalkDir(m.config().StorageDir, func(path string, entry os.DirEntry, err error) error {
+	_ = filepath.WalkDir(m.root, func(path string, entry os.DirEntry, err error) error {
 		if err == nil && !entry.IsDir() {
 			if info, infoErr := entry.Info(); infoErr == nil {
 				total += info.Size()
@@ -394,10 +423,17 @@ func (m *Manager) expireActivationLocked() {
 		m.active = false
 		m.remaining = 0
 		m.deadline = time.Time{}
+		m.emitLocked("capture.activation_expired", "捕获等待窗口已到期", nil)
 	}
 }
 
-func (m *Manager) recordDir(id string) string { return filepath.Join(m.config().StorageDir, id) }
+func (m *Manager) emitLocked(event, message string, fields map[string]any) {
+	if m.onEvent != nil {
+		m.onEvent(event, message, fields)
+	}
+}
+
+func (m *Manager) recordDir(id string) string { return filepath.Join(m.root, id) }
 
 func randomID() (string, error) {
 	data := make([]byte, 16)
@@ -411,12 +447,29 @@ func safeHeaders(source http.Header) http.Header {
 	result := make(http.Header)
 	for key, values := range source {
 		lower := strings.ToLower(key)
-		if lower == "authorization" || lower == "proxy-authorization" || lower == "cookie" || lower == "set-cookie" || strings.Contains(lower, "api-key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+		if lower == "authorization" || lower == "proxy-authorization" || lower == "cookie" || lower == "set-cookie" || lower == "key" || strings.Contains(lower, "auth") || strings.Contains(lower, "api-key") || strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "_key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
 			continue
 		}
 		result[key] = append([]string(nil), values...)
 	}
 	return result
+}
+
+func sanitizePath(value string) string {
+	path, rawQuery, found := strings.Cut(value, "?")
+	if !found {
+		return path
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return path
+	}
+	for key := range values {
+		if sensitiveName(key) {
+			values.Set(key, "[REDACTED]")
+		}
+	}
+	return path + "?" + values.Encode()
 }
 
 func cloneRecord(record Record) Record {

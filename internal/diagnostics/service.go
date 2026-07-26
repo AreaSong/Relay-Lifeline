@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -54,7 +55,7 @@ func (s *Service) Run(ctx context.Context, locales ...string) Report {
 		fallback = locales[1]
 	}
 	checks := []Check{passed("service", "diagnostic.service.name", "diagnostic.service.running", nil)}
-	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkAdminKey())
+	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkAdminKey(), s.checkCapture(cfg))
 	checks = append(checks, s.checkUpstream(ctx, cfg), s.checkCache(cfg), s.checkDisk(cfg))
 	healthy := true
 	for _, check := range checks {
@@ -101,6 +102,33 @@ func (s *Service) checkAdminKey() Check {
 		return failed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.invalid", nil)
 	}
 	return passed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.valid", nil)
+}
+
+func (s *Service) checkCapture(cfg config.Config) Check {
+	value := os.Getenv("RELAY_LIFELINE_CAPTURE_KEY")
+	if value == "" {
+		return warning("capture", "diagnostic.capture.name", "diagnostic.capture.not_configured", nil)
+	}
+	key, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil || len(key) != 32 {
+		key, err = base64.StdEncoding.DecodeString(value)
+	}
+	if err != nil || len(key) != 32 {
+		return failed("capture", "diagnostic.capture.name", "diagnostic.capture.key_invalid", nil)
+	}
+	file, err := os.CreateTemp(cfg.Capture.StorageDir, ".capture-diagnostic-*")
+	if err != nil {
+		return failed("capture", "diagnostic.capture.name", "diagnostic.capture.storage_failed", nil)
+	}
+	name := file.Name()
+	if chmodErr := file.Chmod(0o600); chmodErr != nil {
+		file.Close()
+		os.Remove(name)
+		return failed("capture", "diagnostic.capture.name", "diagnostic.capture.storage_failed", nil)
+	}
+	file.Close()
+	os.Remove(name)
+	return passed("capture", "diagnostic.capture.name", "diagnostic.capture.ready", nil)
 }
 
 func (s *Service) checkUpstream(ctx context.Context, cfg config.Config) Check {

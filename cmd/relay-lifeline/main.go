@@ -69,6 +69,9 @@ func main() {
 		return runlog.Limits{MaxItems: current.LogMaxItems, Retention: current.LogRetention.Duration}
 	})
 	captureManager := capture.New(func() config.CaptureConfig { return store.Get().Capture }, os.Getenv("RELAY_LIFELINE_CAPTURE_KEY"))
+	captureManager.SetEventSink(func(event, message string, fields map[string]any) {
+		runLogStore.Add(runlog.Entry{Level: "info", Event: event, Message: message, Fields: fields})
+	})
 	notifier := notify.New(store, logger)
 	defer notifier.Close()
 	gateway := proxy.NewGateway(store, registry, controller, notifier, logger, riskManager)

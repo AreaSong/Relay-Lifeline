@@ -1,5 +1,5 @@
 {
-  "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "notifications": "通知", "logging": "日志" },
+  "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "capture": "捕获", "notifications": "通知", "logging": "日志" },
   "sections": {
     "service": { "title": "服务与上游", "description": "监听地址及唯一 CPA 上游" },
     "localization": { "title": "本地化", "description": "默认、回退、日志和通知语言" },
@@ -9,7 +9,8 @@
     "observability": { "title": "错误详情", "description": "仅提取脱敏后的结构化失败字段" },
     "risk": { "title": "风险提醒", "description": "只提醒，不会自动停止请求" },
     "notifications": { "title": "通知", "description": "独立队列投递，不阻塞模型请求" },
-    "logging": { "title": "日志", "description": "结构化运行日志设置" }
+    "logging": { "title": "日志", "description": "结构化运行日志设置" },
+    "capture": { "title": "诊断捕获与运行日志", "description": "加密正文的容量、保留和自动启动限制" }
   },
   "fields": {
     "listen": "监听地址", "requestBodyLimit": "请求体上限", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时",
@@ -20,7 +21,8 @@
     "collectionMode": "采集模式", "safeExtraction": "安全提取", "off": "关闭", "detailLimit": "单条详情上限",
     "warningAfter": "持续时间阈值", "warningAttempts": "尝试次数阈值", "authErrorAttempts": "鉴权错误次数", "queueWarningPercent": "队列使用率阈值", "minimumFreeDisk": "最小剩余磁盘",
     "stalledAfter": "故障通知阈值", "deliveryAttempts": "投递尝试次数", "deliveryBackoff": "投递退避时间", "webhook": "通知 Webhook", "notifyOnRecovery": "恢复后通知",
-    "logLevel": "日志级别"
+    "logLevel": "日志级别",
+    "captureOnStartup": "服务启动后自动捕获一批请求", "captureStorageDir": "加密存储目录", "captureRetention": "捕获保留时间", "captureRequestLimit": "默认请求数", "captureActivationTimeout": "默认等待窗口", "captureBodyLimit": "单正文上限", "captureTotalLimit": "捕获总容量", "captureAttemptLimit": "单请求正文尝试上限", "captureMinimumDisk": "捕获最低剩余磁盘", "runtimeLogLimit": "运行日志条数", "runtimeLogRetention": "运行日志保留时间"
   },
   "events": { "stalled": "持续故障", "recovered": "恢复成功", "long_running": "长时间运行", "many_attempts": "尝试次数过多", "auth_errors": "鉴权错误", "queue_pressure": "队列压力", "disk_pressure": "磁盘压力" },
   "logLevels": { "debug": "调试", "info": "信息", "warn": "警告", "error": "错误" },

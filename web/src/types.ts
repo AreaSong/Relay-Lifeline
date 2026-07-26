@@ -39,6 +39,19 @@ export interface Config {
     errorDetails: "off" | "safe";
     maxErrorDetail: string;
   };
+  capture: {
+    enabled: boolean;
+    storageDir: string;
+    retention: Duration;
+    defaultRequestLimit: number;
+    activationTimeout: Duration;
+    maxBodySize: string;
+    maxTotalSize: string;
+    maxAttemptsPerRequest: number;
+    minimumFreeDisk: string;
+    logMaxItems: number;
+    logRetention: Duration;
+  };
   localization: {
     defaultLocale: "zh-CN" | "en-US";
     fallbackLocale: "zh-CN" | "en-US";
@@ -166,4 +179,76 @@ export interface DiagnosticReport {
   uptimeSeconds: number;
   healthy: boolean;
   checks: DiagnosticCheck[];
+}
+
+export interface RuntimeLogEntry {
+  id: number;
+  time: string;
+  level: "debug" | "info" | "warn" | "error" | string;
+  event: string;
+  message: string;
+  requestId?: string;
+  attempt?: number;
+  statusCode?: number;
+  fields?: Record<string, unknown>;
+}
+
+export interface CaptureStatus {
+  available: boolean;
+  unavailableReason?: string;
+  active: boolean;
+  remainingRequests: number;
+  deadline?: string;
+  storageBytes: number;
+  maxTotalBytes: number;
+  captureCount: number;
+}
+
+export interface CaptureBodyPart {
+  headers?: Record<string, string[]>;
+  contentType?: string;
+  originalBytes: number;
+  storedBytes: number;
+  truncated: boolean;
+}
+
+export interface CaptureAttempt {
+  number: number;
+  startedAt: string;
+  finishedAt: string;
+  statusCode?: number;
+  error?: string;
+  response?: CaptureBodyPart;
+}
+
+export interface CaptureRecord {
+  id: string;
+  requestId: string;
+  method: string;
+  path: string;
+  state: string;
+  startedAt: string;
+  completedAt?: string;
+  expiresAt: string;
+  request: CaptureBodyPart;
+  attempts: CaptureAttempt[];
+  final?: CaptureBodyPart;
+  capturedBytes: number;
+  warnings?: string[];
+}
+
+export interface CapturePreviewPart {
+  name: "request" | "attempt" | "final";
+  attempt?: number;
+  statusCode?: number;
+  headers?: Record<string, string[]>;
+  contentType?: string;
+  body: string;
+  originalBytes: number;
+  truncated: boolean;
+}
+
+export interface CapturePreview {
+  record: CaptureRecord;
+  parts: CapturePreviewPart[];
 }

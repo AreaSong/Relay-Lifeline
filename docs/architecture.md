@@ -12,6 +12,8 @@ AI client -> data plane -> OpenAI-compatible relay -> model provider
                 +-> risk engine ----------+-> management API <- Web UI
                 |
                 +-> bounded notification queue -> Webhook
+                +-> structured runtime log -> management API
+                +-> temporary capture -> encrypted persistent storage
 ```
 
 ## Data plane
@@ -39,6 +41,10 @@ The error-detail extractor accepts only known JSON/SSE fields and allowlisted re
 The risk engine emits deduplicated alerts and never changes retry policy. Notifications use an independent bounded queue and delivery retry, so a failing Webhook cannot block model traffic.
 
 Logs and Webhooks contain stable English event identifiers and localized human text. Their locales are independent from the UI/API locale.
+
+Live runtime logs use a capacity- and time-bounded in-memory ring. They contain events, request IDs, attempts, status codes, and safe fields, never bodies. Temporary diagnostic capture is explicitly activated by an administrator, claims only a bounded number of subsequent requests, and automatically closes when its activation window expires.
+
+Capture bodies use authenticated AES-256-GCM encryption in 1MiB chunks. Each capture has a distinct data key wrapped by `RELAY_LIFELINE_CAPTURE_KEY`. Authentication headers are removed before persistence, filtered previews apply structured redaction after decryption, and full raw content is available only as an authenticated, explicitly confirmed streaming ZIP download. Capacity exhaustion disables body capture without changing proxy, retry, or response-delivery behavior.
 
 ## Diagnostics
 

@@ -9,14 +9,15 @@ import (
 )
 
 type downstreamWriter struct {
-	mu        sync.Mutex
-	writer    http.ResponseWriter
-	streaming bool
-	stop      chan struct{}
-	done      chan struct{}
+	mu          sync.Mutex
+	writer      http.ResponseWriter
+	streaming   bool
+	stop        chan struct{}
+	done        chan struct{}
+	onHeartbeat func()
 }
 
-func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.Duration) *downstreamWriter {
+func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.Duration, callbacks ...func()) *downstreamWriter {
 	if streaming {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.Header().Set("Cache-Control", "no-cache")
@@ -30,6 +31,9 @@ func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.
 		flusher.Flush()
 	}
 	downstream := &downstreamWriter{writer: writer, streaming: streaming, stop: make(chan struct{}), done: make(chan struct{})}
+	if len(callbacks) > 0 {
+		downstream.onHeartbeat = callbacks[0]
+	}
 	go downstream.heartbeat(heartbeat)
 	return downstream
 }
@@ -53,6 +57,9 @@ func (d *downstreamWriter) heartbeat(interval time.Duration) {
 				flusher.Flush()
 			}
 			d.mu.Unlock()
+			if d.onHeartbeat != nil {
+				d.onHeartbeat()
+			}
 		}
 	}
 }

@@ -36,6 +36,19 @@ observability:
   error-details: "safe"
   max-error-detail: "2KiB"
 
+capture:
+  enabled: false
+  storage-dir: "/var/lib/relay-lifeline/captures"
+  retention: "72h"
+  default-request-limit: 3
+  activation-timeout: "10m"
+  max-body-size: "64MiB"
+  max-total-size: "1GiB"
+  max-attempts-per-request: 20
+  minimum-free-disk: "1GiB"
+  log-max-items: 2000
+  log-retention: "1h"
+
 risk:
   warning-after: "15m"
   warning-attempts: 10

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Config } from "../types";
 
-type Tab = "general" | "retry" | "traffic" | "safety" | "notifications" | "logging";
+type Tab = "general" | "retry" | "traffic" | "safety" | "capture" | "notifications" | "logging";
 type Locale = "zh-CN" | "en-US";
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
@@ -93,7 +93,7 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty }
   const toggleEvent = (eventType: string, enabled: boolean) => patch("notifications", {
     eventTypes: enabled ? Array.from(new Set([...config.notifications.eventTypes, eventType])) : config.notifications.eventTypes.filter((value) => value !== eventType),
   });
-  const tabs: Tab[] = ["general", "retry", "traffic", "safety", "notifications", "logging"];
+	const tabs: Tab[] = ["general", "retry", "traffic", "safety", "capture", "notifications", "logging"];
   const restartHint = <small className="field-hint">{t("settings:restartHint")}</small>;
 
   return <div className="settings-shell">
@@ -133,7 +133,7 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty }
         <label className="field"><span>{t("settings:fields.historyLimit")}</span><input type="number" min="1" value={config.history.maxItems} onChange={(event) => patch("history", { maxItems: Number(event.target.value) })} /></label>
         <DurationField label={t("settings:fields.historyRetention")} value={config.history.retention} onChange={(retention) => patch("history", { retention })} />
       </div></section>}
-      {tab === "safety" && <>
+	  {tab === "safety" && <>
         <section><div className="section-heading"><div><h2>{t("settings:sections.observability.title")}</h2><p>{t("settings:sections.observability.description")}</p></div></div><div className="form-grid">
           <label className="field"><span>{t("settings:fields.collectionMode")}</span><select value={config.observability.errorDetails} onChange={(event) => patch("observability", { errorDetails: event.target.value as Config["observability"]["errorDetails"] })}><option value="safe">{t("settings:fields.safeExtraction")}</option><option value="off">{t("settings:fields.off")}</option></select></label>
           <ByteSizeField label={t("settings:fields.detailLimit")} value={config.observability.maxErrorDetail} disabled={config.observability.errorDetails === "off"} onChange={(maxErrorDetail) => patch("observability", { maxErrorDetail })} />
@@ -145,7 +145,19 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty }
           <label className="field"><span>{t("settings:fields.queueWarningPercent")}</span><input type="number" min="1" max="100" value={config.risk.queueWarningPercent} onChange={(event) => patch("risk", { queueWarningPercent: Number(event.target.value) })} /></label>
           <ByteSizeField label={t("settings:fields.minimumFreeDisk")} value={config.risk.minimumFreeDisk} onChange={(minimumFreeDisk) => patch("risk", { minimumFreeDisk })} />
         </div></section>
-      </>}
+	  </>}
+	  {tab === "capture" && <section><div className="section-heading"><div><h2>{t("settings:sections.capture.title")}</h2><p>{t("settings:sections.capture.description")}</p></div><Toggle label={t("settings:fields.captureOnStartup")} checked={config.capture.enabled} onChange={(enabled) => patch("capture", { enabled })} /></div><div className="form-grid">
+		<label className="field wide"><span>{t("settings:fields.captureStorageDir")}</span><input value={config.capture.storageDir} onChange={(event) => patch("capture", { storageDir: event.target.value })} />{restartHint}</label>
+		<DurationField label={t("settings:fields.captureRetention")} value={config.capture.retention} onChange={(retention) => patch("capture", { retention })} />
+		<label className="field"><span>{t("settings:fields.captureRequestLimit")}</span><input type="number" min="1" max="100" value={config.capture.defaultRequestLimit} onChange={(event) => patch("capture", { defaultRequestLimit: Number(event.target.value) })} /></label>
+		<DurationField label={t("settings:fields.captureActivationTimeout")} value={config.capture.activationTimeout} onChange={(activationTimeout) => patch("capture", { activationTimeout })} />
+		<ByteSizeField label={t("settings:fields.captureBodyLimit")} value={config.capture.maxBodySize} onChange={(maxBodySize) => patch("capture", { maxBodySize })} />
+		<ByteSizeField label={t("settings:fields.captureTotalLimit")} value={config.capture.maxTotalSize} onChange={(maxTotalSize) => patch("capture", { maxTotalSize })} />
+		<label className="field"><span>{t("settings:fields.captureAttemptLimit")}</span><input type="number" min="1" max="1000" value={config.capture.maxAttemptsPerRequest} onChange={(event) => patch("capture", { maxAttemptsPerRequest: Number(event.target.value) })} /></label>
+		<ByteSizeField label={t("settings:fields.captureMinimumDisk")} value={config.capture.minimumFreeDisk} onChange={(minimumFreeDisk) => patch("capture", { minimumFreeDisk })} />
+		<label className="field"><span>{t("settings:fields.runtimeLogLimit")}</span><input type="number" min="100" max="100000" value={config.capture.logMaxItems} onChange={(event) => patch("capture", { logMaxItems: Number(event.target.value) })} /></label>
+		<DurationField label={t("settings:fields.runtimeLogRetention")} value={config.capture.logRetention} onChange={(logRetention) => patch("capture", { logRetention })} />
+	  </div></section>}
       {tab === "notifications" && <section><div className="section-heading"><div><h2>{t("settings:sections.notifications.title")}</h2><p>{t("settings:sections.notifications.description")}</p></div></div><div className="form-grid">
         <DurationField label={t("settings:fields.stalledAfter")} value={config.notifications.stalledAfter} onChange={(stalledAfter) => patch("notifications", { stalledAfter })} />
         <label className="field"><span>{t("settings:fields.deliveryAttempts")}</span><input type="number" min="1" max="10" value={config.notifications.deliveryAttempts} onChange={(event) => patch("notifications", { deliveryAttempts: Number(event.target.value) })} /></label>

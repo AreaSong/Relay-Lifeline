@@ -16,17 +16,20 @@ const maxPreviewBytes = 1 << 20
 
 func (m *Manager) Preview(id string) (Preview, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, ok := m.records[id]
 	if !ok {
+		m.mu.Unlock()
 		return Preview{}, os.ErrNotExist
 	}
+	record = cloneRecord(record)
+	root := m.root
 	key, err := unwrapKey(m.masterKey, record.WrappedKey)
+	m.mu.Unlock()
 	if err != nil {
 		return Preview{}, err
 	}
 	preview := Preview{Record: publicRecord(record)}
-	requestBody, requestTruncated, err := m.filteredObjectLocked(record, key, record.Request, maxPreviewBytes)
+	requestBody, requestTruncated, err := filteredObject(root, record, key, record.Request, maxPreviewBytes)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -35,14 +38,14 @@ func (m *Manager) Preview(id string) (Preview, error) {
 		if attempt.Response == nil {
 			continue
 		}
-		body, truncated, readErr := m.filteredObjectLocked(record, key, *attempt.Response, maxPreviewBytes)
+		body, truncated, readErr := filteredObject(root, record, key, *attempt.Response, maxPreviewBytes)
 		if readErr != nil {
 			return Preview{}, readErr
 		}
 		preview.Parts = append(preview.Parts, PreviewPart{Name: "attempt", Attempt: attempt.Number, StatusCode: attempt.StatusCode, Headers: attempt.Response.Headers.Clone(), ContentType: attempt.Response.ContentType, Body: string(body), OriginalBytes: attempt.Response.OriginalBytes, Truncated: attempt.Response.Truncated || truncated})
 	}
 	if record.Final != nil {
-		body, truncated, readErr := m.filteredObjectLocked(record, key, *record.Final, maxPreviewBytes)
+		body, truncated, readErr := filteredObject(root, record, key, *record.Final, maxPreviewBytes)
 		if readErr != nil {
 			return Preview{}, readErr
 		}
@@ -51,22 +54,29 @@ func (m *Manager) Preview(id string) (Preview, error) {
 	return preview, nil
 }
 
-func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) error {
+func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) (returnErr error) {
 	if mode != "raw" && mode != "filtered" {
 		return errors.New("export mode must be raw or filtered")
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record, ok := m.records[id]
 	if !ok {
+		m.mu.Unlock()
 		return os.ErrNotExist
 	}
+	record = cloneRecord(record)
+	root := m.root
 	key, err := unwrapKey(m.masterKey, record.WrappedKey)
+	m.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	archive := zip.NewWriter(destination)
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); returnErr == nil {
+			returnErr = err
+		}
+	}()
 	if err := writeJSONEntry(archive, "manifest.json", publicRecord(record)); err != nil {
 		return err
 	}
@@ -79,7 +89,7 @@ func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) e
 		return err
 	}
 	requestExt := bodyExtension(record.Request.ContentType)
-	if err := m.writeBodyEntryLocked(archive, record, key, record.Request, "request/body"+requestExt, mode); err != nil {
+	if err := writeBodyEntry(archive, root, record, key, record.Request, "request/body"+requestExt, mode); err != nil {
 		return err
 	}
 	for _, attempt := range record.Attempts {
@@ -93,7 +103,7 @@ func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) e
 		if err := writeJSONEntry(archive, prefix+"headers.json", attempt.Response.Headers); err != nil {
 			return err
 		}
-		if err := m.writeBodyEntryLocked(archive, record, key, *attempt.Response, prefix+"body"+bodyExtension(attempt.Response.ContentType), mode); err != nil {
+		if err := writeBodyEntry(archive, root, record, key, *attempt.Response, prefix+"body"+bodyExtension(attempt.Response.ContentType), mode); err != nil {
 			return err
 		}
 	}
@@ -101,19 +111,19 @@ func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) e
 		if err := writeJSONEntry(archive, "final/headers.json", record.Final.Headers); err != nil {
 			return err
 		}
-		if err := m.writeBodyEntryLocked(archive, record, key, *record.Final, "final/body"+bodyExtension(record.Final.ContentType), mode); err != nil {
+		if err := writeBodyEntry(archive, root, record, key, *record.Final, "final/body"+bodyExtension(record.Final.ContentType), mode); err != nil {
 			return err
 		}
 	}
-	return archive.Close()
+	return nil
 }
 
-func (m *Manager) writeBodyEntryLocked(archive *zip.Writer, record Record, key []byte, part BodyPart, name, mode string) error {
+func writeBodyEntry(archive *zip.Writer, root string, record Record, key []byte, part BodyPart, name, mode string) error {
 	entry, err := archive.Create(name)
 	if err != nil {
 		return err
 	}
-	file, err := os.Open(filepath.Join(m.recordDir(record.ID), part.Object))
+	file, err := os.Open(filepath.Join(root, record.ID, part.Object))
 	if err != nil {
 		return err
 	}
@@ -129,8 +139,8 @@ func (m *Manager) writeBodyEntryLocked(archive *zip.Writer, record Record, key [
 	return err
 }
 
-func (m *Manager) filteredObjectLocked(record Record, key []byte, part BodyPart, limit int64) ([]byte, bool, error) {
-	file, err := os.Open(filepath.Join(m.recordDir(record.ID), part.Object))
+func filteredObject(root string, record Record, key []byte, part BodyPart, limit int64) ([]byte, bool, error) {
+	file, err := os.Open(filepath.Join(root, record.ID, part.Object))
 	if err != nil {
 		return nil, false, err
 	}

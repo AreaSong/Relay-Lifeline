@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -12,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/risk"
+	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
 	"github.com/areasong/relay-lifeline/internal/timeline"
 )
@@ -194,5 +197,60 @@ func TestAdminPersistsValidConfig(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("配置权限错误: %v %v", info.Mode(), err)
+	}
+}
+
+func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	cfg := config.Default()
+	cfg.Capture.StorageDir = t.TempDir()
+	cfg.Capture.MaxBodySize = 1 << 20
+	cfg.Capture.MaxTotalSize = 8 << 20
+	cfg.Capture.MinimumFreeDisk = 64 << 20
+	store := config.NewStore("", cfg)
+	key := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x31}, 32))
+	captures := capture.New(func() config.CaptureConfig { return store.Get().Capture }, key)
+	logs := runlog.New(func() runlog.Limits { return runlog.Limits{MaxItems: 100, Retention: time.Hour} })
+	registry := state.NewRegistry()
+	handler := NewWithExtendedServices(store, registry, state.NewController(), risk.New(), diagnostics.New(store, "test", time.Now()), nil, captures, logs)
+
+	startRequest := httptest.NewRequest(http.MethodPost, "/admin/api/capture/start", strings.NewReader(`{"requestLimit":1,"activationTimeout":"1m"}`))
+	startRequest.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	startRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(startRecorder, startRequest)
+	if startRecorder.Code != http.StatusOK || !strings.Contains(startRecorder.Body.String(), `"active":true`) {
+		t.Fatalf("启动捕获失败: %d %s", startRecorder.Code, startRecorder.Body.String())
+	}
+
+	id, err := captures.BeginRequest("request-capture", http.MethodPost, "/v1/responses", http.Header{"Content-Type": []string{"application/json"}}, []byte(`{"api_key":"secret"}`))
+	if err != nil || id == "" {
+		t.Fatalf("创建捕获失败: %q %v", id, err)
+	}
+	if err := captures.RecordAttempt("request-capture", 1, 200, http.Header{"Content-Type": []string{"application/json"}}, strings.NewReader(`{"status":"completed"}`), nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := captures.Finish("request-capture", "successful", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	preview := authenticatedRequest(handler, http.MethodGet, "/admin/api/captures/"+id+"/preview")
+	if preview.Code != http.StatusOK || strings.Contains(preview.Body.String(), "secret") || !strings.Contains(preview.Body.String(), "[REDACTED]") {
+		t.Fatalf("过滤预览异常: %d %s", preview.Code, preview.Body.String())
+	}
+	rawWithoutConfirmation := authenticatedRequest(handler, http.MethodGet, "/admin/api/captures/"+id+"/download?mode=raw")
+	if rawWithoutConfirmation.Code != http.StatusPreconditionRequired {
+		t.Fatalf("原文下载未要求确认: %d", rawWithoutConfirmation.Code)
+	}
+	rawRequest := httptest.NewRequest(http.MethodGet, "/admin/api/captures/"+id+"/download?mode=raw", nil)
+	rawRequest.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	rawRequest.Header.Set("X-Relay-Lifeline-Confirm", "download-sensitive")
+	rawRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(rawRecorder, rawRequest)
+	if rawRecorder.Code != http.StatusOK || rawRecorder.Header().Get("Content-Type") != "application/zip" || rawRecorder.Body.Len() == 0 {
+		t.Fatalf("原文下载异常: %d %s", rawRecorder.Code, rawRecorder.Header().Get("Content-Type"))
+	}
+	logResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs")
+	if logResponse.Code != http.StatusOK || !strings.Contains(logResponse.Body.String(), "capture.downloaded") {
+		t.Fatalf("审计日志缺失: %d %s", logResponse.Code, logResponse.Body.String())
 	}
 }

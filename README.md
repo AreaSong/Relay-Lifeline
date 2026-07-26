@@ -32,6 +32,8 @@ The public project name is **Relay-Lifeline**. Executables, images, environment 
 - Client cancellation propagation, bounded concurrency, waiting queue, and recovery pacing.
 - Per-request timeline, bounded in-memory history, diagnostics, and risk alerts.
 - Safe extraction of structured upstream error details with redaction and size limits.
+- Filterable, pausable, downloadable structured runtime logs without request or response bodies.
+- Explicit temporary diagnostic capture for requests, every CPA response, and the final response, with filtered preview plus filtered and full-raw downloads.
 - Asynchronous Webhook delivery with event filters and retry.
 - Chinese and English UI, API messages, CLI text, logs, diagnostics, and Webhooks.
 - Separate UI, log, and notification locales with hot-reloadable configuration.
@@ -46,7 +48,13 @@ cp config.docker.example.yaml config.docker.yaml
 cp .env.example .env
 ```
 
-Set a long random `RELAY_LIFELINE_ADMIN_KEY` in `.env`, then set the upstream address in `config.docker.yaml`. When CPA listens on host port `8317`, use:
+Set a long random `RELAY_LIFELINE_ADMIN_KEY` in `.env` and generate a separate 32-byte capture key:
+
+```bash
+openssl rand -base64 32
+```
+
+Store it as `RELAY_LIFELINE_CAPTURE_KEY`, then set the upstream address in `config.docker.yaml`. When CPA listens on host port `8317`, use:
 
 ```yaml
 upstream:
@@ -106,6 +114,8 @@ The console uses a separate `RELAY_LIFELINE_ADMIN_KEY`. It can:
 - Pause or resume all requests, retry immediately, or cancel a request.
 - Change retry, stream, queue, history, risk, notification, logging, and locale settings.
 - Save configuration atomically or reload it from disk.
+- Filter and download live structured runtime logs.
+- Capture the next bounded set of requests, preview filtered bodies, and download filtered or full-raw ZIP archives.
 
 History is memory-only and is cleared on restart. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
 
@@ -136,6 +146,10 @@ Stable JSON fields, status values, event codes, and message codes remain in Engl
 - Temporary response files use `0600` permissions and are deleted after delivery or failure.
 - Diagnostic exports redact URL credentials, query strings, Webhook targets, and error details.
 - The admin console has strict security headers and no third-party CDN dependency.
+- Temporary capture is idle by default. Bodies use chunked AES-256-GCM encryption and authentication headers are never persisted.
+- Full raw content cannot be previewed online. It is streamed through decryption into a download ZIP without a plaintext ZIP on disk.
+- Captures expire after 72 hours by default. Capacity or free-disk exhaustion stops body capture without blocking proxy traffic.
+- Persist `RELAY_LIFELINE_CAPTURE_KEY` independently. The first release has no historical key ring; download or delete old captures before rotation.
 
 Do not expose the admin endpoint directly to the public internet. Put TLS, access control, and a trusted network boundary in front of it when remote access is required.
 

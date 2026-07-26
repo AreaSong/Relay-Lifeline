@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/risk"
+	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
 )
 
@@ -56,6 +60,8 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 	}))
 	defer upstream.Close()
 	gateway, registry := testGateway(t, upstream.URL)
+	runtimeLogs := runlog.New(func() runlog.Limits { return runlog.Limits{MaxItems: 100, Retention: time.Hour} })
+	gateway.SetRunLog(runtimeLogs)
 	server := httptest.NewServer(gateway)
 	defer server.Close()
 
@@ -97,6 +103,62 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 	}
 	if failed != 2 || waiting != 2 || completed != 1 {
 		t.Fatalf("请求时间线不完整: %+v", history[0].Events)
+	}
+	events := map[string]bool{}
+	for _, entry := range runtimeLogs.List(0, "", "", "") {
+		events[entry.Event] = true
+	}
+	for _, event := range []string{"queue.entered", "queue.acquired", "downstream.heartbeat", "retry.scheduled", "retry.resumed", "request.succeeded"} {
+		if !events[event] {
+			t.Fatalf("结构化运行日志缺少 %s: %+v", event, events)
+		}
+	}
+}
+
+func TestGatewayCapturesRequestEveryAttemptAndFinalResponse(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(writer, `{"error":{"message":"first failure"}}`)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\"}\n\n")
+	}))
+	defer upstream.Close()
+	gateway, _ := testGateway(t, upstream.URL)
+	cfg := config.Default().Capture
+	cfg.StorageDir = t.TempDir()
+	cfg.MaxBodySize = 1 << 20
+	cfg.MaxTotalSize = 8 << 20
+	cfg.MinimumFreeDisk = 64 << 20
+	key := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x23}, 32))
+	manager := capture.New(func() config.CaptureConfig { return cfg }, key)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	gateway.SetCaptureManager(manager)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"test","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	records := manager.List()
+	if len(records) != 1 || records[0].State != "successful" || len(records[0].Attempts) != 2 || records[0].Final == nil {
+		t.Fatalf("网关捕获不完整: %+v", records)
+	}
+	preview, err := manager.Preview(records[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Parts) != 4 || preview.Parts[1].StatusCode != http.StatusServiceUnavailable || preview.Parts[2].StatusCode != http.StatusOK || preview.Parts[3].Name != "final" {
+		t.Fatalf("请求、尝试或最终响应缺失: %+v", preview.Parts)
 	}
 }
 

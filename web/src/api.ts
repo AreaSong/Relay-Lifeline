@@ -1,4 +1,4 @@
-import type { Alert, Config, DiagnosticReport, HistoryRecord, Status } from "./types";
+import type { Alert, CapturePreview, CaptureRecord, CaptureStatus, Config, DiagnosticReport, HistoryRecord, RuntimeLogEntry, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -57,6 +57,40 @@ export class ApiClient {
     return this.request<HistoryRecord[]>("/history");
   }
 
+  runtimeLogs(filters: { after?: number; level?: string; event?: string; requestId?: string } = {}) {
+    const query = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+    return this.request<RuntimeLogEntry[]>(`/runtime-logs?${query}`);
+  }
+
+  captureStatus() {
+    return this.request<CaptureStatus>("/capture/status");
+  }
+
+  captures() {
+    return this.request<CaptureRecord[]>("/captures");
+  }
+
+  startCapture(requestLimit: number, activationTimeout: string) {
+    return this.request<CaptureStatus>("/capture/start", { method: "POST", body: JSON.stringify({ requestLimit, activationTimeout }) });
+  }
+
+  stopCapture() {
+    return this.request<CaptureStatus>("/capture/stop", { method: "POST" });
+  }
+
+  capturePreview(id: string) {
+    return this.request<CapturePreview>(`/captures/${encodeURIComponent(id)}/preview`);
+  }
+
+  deleteCapture(id: string) {
+    return this.request<{ deleted: boolean }>(`/captures/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  deleteExpiredCaptures() {
+    return this.request<{ deleted: number }>("/captures/expired", { method: "DELETE" });
+  }
+
   timeline(id: string) {
     return this.request<HistoryRecord>(`/requests/${encodeURIComponent(id)}/timeline`);
   }
@@ -74,6 +108,25 @@ export class ApiClient {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
     link.download = "relay-lifeline-diagnostics.json";
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  downloadRuntimeLogs() {
+    return this.download("/runtime-logs/export", "relay-lifeline-runtime-logs.json");
+  }
+
+  downloadCapture(id: string, mode: "filtered" | "raw") {
+    return this.download(`/captures/${encodeURIComponent(id)}/download?mode=${mode}`, `relay-lifeline-capture-${id}-${mode}.zip`, mode === "raw" ? { "X-Relay-Lifeline-Confirm": "download-sensitive" } : undefined);
+  }
+
+  private async download(path: string, filename: string, extraHeaders?: Record<string, string>) {
+    const response = await fetch(`/admin/api${path}`, { headers: { Authorization: `Bearer ${this.token}`, "Accept-Language": this.locale, ...extraHeaders } });
+    if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
     link.click();
     URL.revokeObjectURL(link.href);
   }

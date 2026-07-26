@@ -1,7 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, Archive, CirclePause, CirclePlay, Clock3, HeartPulse, LogOut,
-  RefreshCw, RotateCcw, Settings2, ShieldAlert, ShieldCheck, Stethoscope,
+  Activity, Archive, CirclePause, CirclePlay, Clock3, FileLock2, HeartPulse, LogOut,
+  RefreshCw, RotateCcw, ScrollText, Settings2, ShieldAlert, ShieldCheck, Stethoscope,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ApiClient, errorMessage } from "./api";
@@ -14,8 +14,10 @@ import type { Alert, Config, DiagnosticReport, HistoryRecord, Status } from "./t
 import { DiagnosticsView } from "./views/DiagnosticsView";
 import { HistoryView } from "./views/HistoryView";
 import { SettingsView } from "./views/SettingsView";
+import { CapturesView } from "./views/CapturesView";
+import { LogsView } from "./views/LogsView";
 
-type View = "overview" | "requests" | "history" | "diagnostics" | "settings";
+type View = "overview" | "requests" | "history" | "logs" | "captures" | "diagnostics" | "settings";
 
 function Login({ onLogin }: { onLogin: (token: string) => Promise<void> }) {
   const { t } = useTranslation(["auth", "common"]);
@@ -94,9 +96,9 @@ export function App() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  function showMessage(value: string, kind: "success" | "error" = "success") {
-    setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
-  }
+  const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
+	setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
+  }, []);
   async function togglePause() {
     try { status?.paused ? await api.resume() : await api.pause(); await refresh(); }
     catch (reason) { showMessage(errorMessage(reason), "error"); }
@@ -139,9 +141,10 @@ export function App() {
   if (!token) return <Login onLogin={login} />;
   if (!status || !config || !savedConfig) return <div className="loading"><HeartPulse size={26} />{t("common:loading")}</div>;
 
-  const navigation: Array<{ view: View; icon: ReactNode }> = [
-    { view: "overview", icon: <Activity size={18} /> }, { view: "requests", icon: <Clock3 size={18} /> },
-    { view: "history", icon: <Archive size={18} /> }, { view: "diagnostics", icon: <Stethoscope size={18} /> },
+	const navigation: Array<{ view: View; icon: ReactNode }> = [
+	  { view: "overview", icon: <Activity size={18} /> }, { view: "requests", icon: <Clock3 size={18} /> },
+	  { view: "history", icon: <Archive size={18} /> }, { view: "logs", icon: <ScrollText size={18} /> },
+	  { view: "captures", icon: <FileLock2 size={18} /> }, { view: "diagnostics", icon: <Stethoscope size={18} /> },
     { view: "settings", icon: <Settings2 size={18} /> },
   ];
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
@@ -157,7 +160,9 @@ export function App() {
         <section className="content-section"><div className="section-heading"><div><h2>{t("overview:alerts.title")}</h2><p>{t("overview:alerts.description")}</p></div><ShieldAlert size={18} /></div><AlertsList alerts={alerts} /></section>
         <section className="content-section spaced"><div className="section-heading"><div><h2>{t("overview:recent.title")}</h2><p>{t("overview:recent.description")}</p></div><span className={`mode ${status.paused ? "paused" : ""}`}>{status.paused ? t("common:status.paused") : t("common:status.running")}</span></div><RequestsTable requests={status.requests.slice(0, 6)} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} /></section></>}
       {view === "requests" && <section className="content-section"><div className="section-heading"><div><h2>{t("overview:queue.title")}</h2><p>{t("overview:queue.description")}</p></div><span>{t("common:requestCount", { count: status.requests.length })}</span></div><RequestsTable requests={status.requests} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} /></section>}
-      {view === "history" && <HistoryView records={history} onOpen={setTimeline} />}
+	  {view === "history" && <HistoryView records={history} onOpen={setTimeline} />}
+	  {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
+	  {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} />}
       {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} />}
       {view === "settings" && <SettingsView config={config} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} />}
     </main>
