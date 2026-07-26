@@ -24,3 +24,15 @@ func TestValidateAdminKey(t *testing.T) {
 		})
 	}
 }
+
+func TestLocaleResolution(t *testing.T) {
+	if locale, ok := environmentLocale("zh_CN.UTF-8"); !ok || locale != "zh-CN" {
+		t.Fatalf("中文环境语言解析异常: %s %v", locale, ok)
+	}
+	if locale, ok := environmentLocale("C"); ok || locale != "en-US" {
+		t.Fatalf("C 环境语言解析异常: %s %v", locale, ok)
+	}
+	if !hasLocaleArgument([]string{"--locale=en-US"}) || hasLocaleArgument([]string{"--config", "x"}) {
+		t.Fatal("locale 参数识别异常")
+	}
+}

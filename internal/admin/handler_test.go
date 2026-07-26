@@ -3,14 +3,20 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/timeline"
 )
 
 func TestAdminRequiresKeyAndControlsGateway(t *testing.T) {
@@ -43,6 +49,63 @@ func TestAdminRequiresKeyAndControlsGateway(t *testing.T) {
 	if recorder.Code != http.StatusOK || !controller.IsPaused() {
 		t.Fatal("暂停失败")
 	}
+}
+
+func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			connection.Close()
+		}
+	}()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.Default()
+	cfg.Upstream.BaseURL = "http://user:upstream-secret@" + listener.Addr().String() + "?token=hidden"
+	cfg.Notifications.WebhookURL = "https://hooks.example.com/webhook-secret"
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(path, cfg)
+	registry := state.NewRegistry()
+	id, _ := registry.Add("POST", "/v1/responses", func() {})
+	registry.RecordEvent(id, timeline.Event{Type: "attempt_failed", Attempt: 1, StatusCode: 503, Message: "HTTP 503", ErrorDetail: &timeline.ErrorDetail{Message: "diagnostic-only-secret", Parsed: true}})
+	registry.Remove(id, "successful")
+	handler := NewWithServices(store, registry, state.NewController(), risk.New(), diagnostics.New(store, "test", time.Now()), nil)
+
+	history := authenticatedRequest(handler, http.MethodGet, "/admin/api/history")
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), id) {
+		t.Fatalf("历史接口异常: %d %s", history.Code, history.Body.String())
+	}
+	timelineResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/requests/"+id+"/timeline")
+	if timelineResponse.Code != http.StatusOK || !strings.Contains(timelineResponse.Body.String(), "HTTP 503") {
+		t.Fatalf("时间线接口异常: %d %s", timelineResponse.Code, timelineResponse.Body.String())
+	}
+	if !strings.Contains(timelineResponse.Body.String(), "diagnostic-only-secret") {
+		t.Fatal("时间线未返回安全错误详情")
+	}
+	bundle := authenticatedRequest(handler, http.MethodGet, "/admin/api/diagnostics/export")
+	if bundle.Code != http.StatusOK || !strings.Contains(bundle.Header().Get("Content-Disposition"), "diagnostics.json") {
+		t.Fatalf("诊断包接口异常: %d %s", bundle.Code, bundle.Body.String())
+	}
+	for _, secret := range []string{"upstream-secret", "hidden", "webhook-secret", "diagnostic-only-secret"} {
+		if strings.Contains(bundle.Body.String(), secret) {
+			t.Fatalf("诊断包泄露敏感值 %q", secret)
+		}
+	}
+}
+
+func authenticatedRequest(handler http.Handler, method, path string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, nil)
+	request.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
 }
 
 func TestAdminRejectsTrailingConfigJSON(t *testing.T) {

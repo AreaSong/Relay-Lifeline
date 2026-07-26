@@ -1,0 +1,14 @@
+{
+  "title": "运行诊断",
+  "description": "仅检查本地资源和 CPA TCP 连接，不调用模型",
+  "export": "导出诊断包",
+  "start": "开始检查",
+  "running": "检查中",
+  "empty": "尚未运行诊断",
+  "healthy": "全部关键检查通过",
+  "unhealthy": "发现需要处理的问题",
+  "summary": "版本 {{version}} · 已运行 {{uptime}}",
+  "exported": "诊断包已导出",
+  "runFailed": "诊断失败",
+  "exportFailed": "导出失败"
+}

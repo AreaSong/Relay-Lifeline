@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/l10n"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +24,7 @@ type Duration struct {
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	parsed, err := time.ParseDuration(value.Value)
 	if err != nil {
-		return fmt.Errorf("无效时间 %q: %w", value.Value, err)
+		return l10n.E("config.duration_yaml_invalid", err, map[string]any{"Value": value.Value})
 	}
 	d.Duration = parsed
 	return nil
@@ -38,11 +39,11 @@ func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()
 func (d *Duration) UnmarshalJSON(data []byte) error {
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
-		return errors.New("时间必须是字符串")
+		return l10n.E("config.duration_json_string", err)
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		return fmt.Errorf("无效时间 %q: %w", value, err)
+		return l10n.E("config.duration_invalid", err, map[string]any{"Value": value})
 	}
 	d.Duration = parsed
 	return nil
@@ -68,7 +69,7 @@ func (b ByteSize) MarshalJSON() ([]byte, error) { return json.Marshal(FormatByte
 func (b *ByteSize) UnmarshalJSON(data []byte) error {
 	var value string
 	if err := json.Unmarshal(bytes.TrimSpace(data), &value); err != nil {
-		return errors.New("容量必须是字符串")
+		return l10n.E("config.bytes_json_string", err)
 	}
 	parsed, err := ParseByteSize(value)
 	if err != nil {
@@ -79,13 +80,17 @@ func (b *ByteSize) UnmarshalJSON(data []byte) error {
 }
 
 type Config struct {
-	Server        ServerConfig       `yaml:"server" json:"server"`
-	Upstream      UpstreamConfig     `yaml:"upstream" json:"upstream"`
-	Retry         RetryConfig        `yaml:"retry" json:"retry"`
-	Stream        StreamConfig       `yaml:"stream" json:"stream"`
-	Queue         QueueConfig        `yaml:"queue" json:"queue"`
-	Notifications NotificationConfig `yaml:"notifications" json:"notifications"`
-	Logging       LoggingConfig      `yaml:"logging" json:"logging"`
+	Server        ServerConfig        `yaml:"server" json:"server"`
+	Upstream      UpstreamConfig      `yaml:"upstream" json:"upstream"`
+	Retry         RetryConfig         `yaml:"retry" json:"retry"`
+	Stream        StreamConfig        `yaml:"stream" json:"stream"`
+	Queue         QueueConfig         `yaml:"queue" json:"queue"`
+	History       HistoryConfig       `yaml:"history" json:"history"`
+	Observability ObservabilityConfig `yaml:"observability" json:"observability"`
+	Risk          RiskConfig          `yaml:"risk" json:"risk"`
+	Localization  LocalizationConfig  `yaml:"localization" json:"localization"`
+	Notifications NotificationConfig  `yaml:"notifications" json:"notifications"`
+	Logging       LoggingConfig       `yaml:"logging" json:"logging"`
 }
 
 type ServerConfig struct {
@@ -123,14 +128,42 @@ type QueueConfig struct {
 	RecoverySpacing Duration `yaml:"recovery-spacing" json:"recoverySpacing"`
 }
 
+type HistoryConfig struct {
+	MaxItems  int      `yaml:"max-items" json:"maxItems"`
+	Retention Duration `yaml:"retention" json:"retention"`
+}
+
+type ObservabilityConfig struct {
+	ErrorDetails   string   `yaml:"error-details" json:"errorDetails"`
+	MaxErrorDetail ByteSize `yaml:"max-error-detail" json:"maxErrorDetail"`
+}
+
+type RiskConfig struct {
+	WarningAfter        Duration `yaml:"warning-after" json:"warningAfter"`
+	WarningAttempts     int      `yaml:"warning-attempts" json:"warningAttempts"`
+	AuthErrorAttempts   int      `yaml:"auth-error-attempts" json:"authErrorAttempts"`
+	QueueWarningPercent int      `yaml:"queue-warning-percent" json:"queueWarningPercent"`
+	MinimumFreeDisk     ByteSize `yaml:"minimum-free-disk" json:"minimumFreeDisk"`
+}
+
+type LocalizationConfig struct {
+	DefaultLocale  string `yaml:"default-locale" json:"defaultLocale"`
+	FallbackLocale string `yaml:"fallback-locale" json:"fallbackLocale"`
+}
+
 type NotificationConfig struct {
 	StalledAfter     Duration `yaml:"stalled-after" json:"stalledAfter"`
 	NotifyOnRecovery bool     `yaml:"notify-on-recovery" json:"notifyOnRecovery"`
 	WebhookURL       string   `yaml:"webhook-url" json:"webhookUrl"`
+	DeliveryAttempts int      `yaml:"delivery-attempts" json:"deliveryAttempts"`
+	DeliveryBackoff  Duration `yaml:"delivery-backoff" json:"deliveryBackoff"`
+	EventTypes       []string `yaml:"event-types" json:"eventTypes"`
+	Locale           string   `yaml:"locale" json:"locale"`
 }
 
 type LoggingConfig struct {
 	Level            string `yaml:"level" json:"level"`
+	Locale           string `yaml:"locale" json:"locale"`
 	LogRequestBody   bool   `yaml:"log-request-body" json:"logRequestBody"`
 	LogResponseBody  bool   `yaml:"log-response-body" json:"logResponseBody"`
 	LogAuthorization bool   `yaml:"log-authorization" json:"logAuthorization"`
@@ -160,10 +193,20 @@ func Default() Config {
 		Queue: QueueConfig{
 			MaxActive: 8, MaxWaiting: 100, RecoverySpacing: duration(2 * time.Second),
 		},
+		History:       HistoryConfig{MaxItems: 500, Retention: duration(24 * time.Hour)},
+		Observability: ObservabilityConfig{ErrorDetails: "safe", MaxErrorDetail: ByteSize(2 << 10)},
+		Risk: RiskConfig{
+			WarningAfter: duration(15 * time.Minute), WarningAttempts: 10,
+			AuthErrorAttempts: 3, QueueWarningPercent: 80, MinimumFreeDisk: ByteSize(512 << 20),
+		},
+		Localization: LocalizationConfig{DefaultLocale: l10n.LocaleChinese, FallbackLocale: l10n.LocaleEnglish},
 		Notifications: NotificationConfig{
 			StalledAfter: duration(10 * time.Minute), NotifyOnRecovery: true,
+			DeliveryAttempts: 3, DeliveryBackoff: duration(5 * time.Second),
+			EventTypes: []string{"stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"},
+			Locale:     l10n.LocaleChinese,
 		},
-		Logging: LoggingConfig{Level: "info"},
+		Logging: LoggingConfig{Level: "info", Locale: l10n.LocaleChinese},
 	}
 }
 
@@ -173,12 +216,12 @@ func Load(path string) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("读取配置: %w", err)
+		return Config{}, l10n.E("config.read_failed", err, map[string]any{"Error": err.Error()})
 	}
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
-		return Config{}, fmt.Errorf("解析配置: %w", err)
+		return Config{}, l10n.E("config.parse_failed", err, map[string]any{"Error": err.Error()})
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -189,43 +232,84 @@ func Load(path string) (Config, error) {
 func (c Config) Validate() error {
 	var problems []error
 	if strings.TrimSpace(c.Server.Listen) == "" {
-		problems = append(problems, errors.New("server.listen 不能为空"))
+		problems = append(problems, l10n.E("config.server.listen_required", nil))
 	}
 	parsed, err := url.Parse(c.Upstream.BaseURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		problems = append(problems, errors.New("upstream.base-url 必须是有效的 HTTP(S) URL"))
+		problems = append(problems, l10n.E("config.upstream.url_invalid", nil))
 	} else if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		problems = append(problems, errors.New("upstream.base-url 仅支持 http 或 https"))
+		problems = append(problems, l10n.E("config.upstream.scheme_invalid", nil))
 	}
 	if c.Upstream.ConnectTimeout.Duration <= 0 || c.Upstream.ResponseHeaderTimeout.Duration <= 0 {
-		problems = append(problems, errors.New("上游超时必须大于 0"))
+		problems = append(problems, l10n.E("config.upstream.timeout_invalid", nil))
 	}
 	if c.Retry.Mode != "all-errors" && c.Retry.Mode != "transient-errors" {
-		problems = append(problems, errors.New("retry.mode 只能是 all-errors 或 transient-errors"))
+		problems = append(problems, l10n.E("config.retry.mode_invalid", nil))
 	}
 	if c.Retry.MinInterval.Duration <= 0 || c.Retry.MaxInterval.Duration < c.Retry.MinInterval.Duration {
-		problems = append(problems, errors.New("重试间隔必须大于 0，且最大值不能小于最小值"))
+		problems = append(problems, l10n.E("config.retry.interval_invalid", nil))
 	}
 	if c.Retry.MaxAttempts < 0 {
-		problems = append(problems, errors.New("retry.max-attempts 不能小于 0"))
+		problems = append(problems, l10n.E("config.retry.max_attempts", nil))
 	}
 	if c.Stream.HeartbeatInterval.Duration <= 0 || c.Stream.MemoryLimit < 1<<20 {
-		problems = append(problems, errors.New("心跳必须大于 0，缓存至少为 1MiB"))
+		problems = append(problems, l10n.E("config.stream.invalid", nil))
 	}
 	if c.Server.MaxRequestBody < 1<<20 {
-		problems = append(problems, errors.New("请求体上限至少为 1MiB"))
+		problems = append(problems, l10n.E("config.server.body_limit", nil))
 	}
 	if c.Queue.MaxActive < 1 || c.Queue.MaxWaiting < 0 || c.Queue.RecoverySpacing.Duration < 0 {
-		problems = append(problems, errors.New("队列参数无效"))
+		problems = append(problems, l10n.E("config.queue.invalid", nil))
+	}
+	if c.History.MaxItems < 1 || c.History.Retention.Duration <= 0 {
+		problems = append(problems, l10n.E("config.history.invalid", nil))
+	}
+	if c.Observability.ErrorDetails != "off" && c.Observability.ErrorDetails != "safe" {
+		problems = append(problems, l10n.E("config.observability.mode_invalid", nil))
+	}
+	if c.Observability.MaxErrorDetail < 256 || c.Observability.MaxErrorDetail > 64<<10 {
+		problems = append(problems, l10n.E("config.observability.limit_invalid", nil))
+	}
+	if c.Risk.WarningAfter.Duration <= 0 || c.Risk.WarningAttempts < 1 || c.Risk.AuthErrorAttempts < 1 {
+		problems = append(problems, l10n.E("config.risk.threshold_invalid", nil))
+	}
+	if c.Risk.QueueWarningPercent < 1 || c.Risk.QueueWarningPercent > 100 || c.Risk.MinimumFreeDisk < 1<<20 {
+		problems = append(problems, l10n.E("config.risk.capacity_invalid", nil))
+	}
+	if c.Notifications.DeliveryAttempts < 1 || c.Notifications.DeliveryAttempts > 10 || c.Notifications.DeliveryBackoff.Duration <= 0 {
+		problems = append(problems, l10n.E("config.notification.delivery_invalid", nil))
+	}
+	validEvents := map[string]bool{
+		"stalled": true, "recovered": true, "long_running": true, "many_attempts": true,
+		"auth_errors": true, "queue_pressure": true, "disk_pressure": true,
+	}
+	for _, eventType := range c.Notifications.EventTypes {
+		if !validEvents[eventType] {
+			problems = append(problems, l10n.E("config.notification.event_invalid", nil, map[string]any{"Event": eventType}))
+		}
 	}
 	if c.Notifications.WebhookURL != "" {
 		webhook, parseErr := url.Parse(c.Notifications.WebhookURL)
 		if parseErr != nil || (webhook.Scheme != "http" && webhook.Scheme != "https") {
-			problems = append(problems, errors.New("notifications.webhook-url 必须是 HTTP(S) URL"))
+			problems = append(problems, l10n.E("config.notification.url_invalid", nil))
 		}
 	}
 	if c.Logging.LogRequestBody || c.Logging.LogResponseBody || c.Logging.LogAuthorization {
-		problems = append(problems, errors.New("出于安全原因，不允许记录请求体、响应体或 Authorization"))
+		problems = append(problems, l10n.E("config.logging.sensitive", nil))
+	}
+	locales := []struct {
+		field string
+		value string
+	}{
+		{"localization.default-locale", c.Localization.DefaultLocale},
+		{"localization.fallback-locale", c.Localization.FallbackLocale},
+		{"logging.locale", c.Logging.Locale},
+		{"notifications.locale", c.Notifications.Locale},
+	}
+	for _, locale := range locales {
+		if !l10n.IsSupported(locale.value) {
+			problems = append(problems, l10n.E("config.locale.invalid", nil, map[string]any{"Field": locale.field}))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -236,10 +320,10 @@ func (c Config) Save(path string) error {
 	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
-		return fmt.Errorf("序列化配置: %w", err)
+		return l10n.E("config.parse_failed", err, map[string]any{"Error": err.Error()})
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("创建配置目录: %w", err)
+		return l10n.E("config.write_failed", err, map[string]any{"Error": err.Error()})
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".relay-lifeline-*.yaml")
 	if err != nil {
@@ -272,7 +356,7 @@ func (c Config) Save(path string) error {
 func writeBoundFile(path string, data []byte, cause error) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("替换配置: %w", errors.Join(cause, err))
+		return l10n.E("config.write_failed", errors.Join(cause, err), map[string]any{"Error": err.Error()})
 	}
 	if err := file.Chmod(0o600); err != nil {
 		file.Close()
@@ -280,7 +364,7 @@ func writeBoundFile(path string, data []byte, cause error) error {
 	}
 	if _, err := file.Write(data); err != nil {
 		file.Close()
-		return fmt.Errorf("写入绑定配置: %w", err)
+		return l10n.E("config.write_failed", err, map[string]any{"Error": err.Error()})
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
@@ -296,6 +380,12 @@ type Store struct {
 }
 
 func NewStore(path string, cfg Config) *Store { return &Store{path: path, cfg: cfg} }
+
+func (s *Store) Path() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.path
+}
 
 func (s *Store) Get() Config {
 	s.mu.RLock()
@@ -337,14 +427,14 @@ func ParseByteSize(raw string) (int64, error) {
 			number := strings.TrimSpace(strings.TrimSuffix(value, unit.suffix))
 			parsed, err := strconv.ParseFloat(number, 64)
 			if err != nil || parsed < 0 {
-				return 0, fmt.Errorf("无效容量 %q", raw)
+				return 0, l10n.E("config.bytes_invalid", err, map[string]any{"Value": raw})
 			}
 			return int64(parsed * float64(unit.factor)), nil
 		}
 	}
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < 0 {
-		return 0, fmt.Errorf("无效容量 %q", raw)
+		return 0, l10n.E("config.bytes_invalid", err, map[string]any{"Value": raw})
 	}
 	return parsed, nil
 }

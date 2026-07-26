@@ -1,0 +1,33 @@
+{
+  "tabs": { "general": "General", "retry": "Retry", "traffic": "Traffic", "safety": "Safety", "notifications": "Notifications", "logging": "Logging" },
+  "sections": {
+    "service": { "title": "Service and upstream", "description": "Listener and the single CPA upstream" },
+    "localization": { "title": "Localization", "description": "Default, fallback, log, and notification languages" },
+    "retry": { "title": "Retry policy", "description": "Wait and recovery rules for failed requests" },
+    "stream": { "title": "Streaming and cache", "description": "SSE keepalive and complete response delivery" },
+    "traffic": { "title": "Concurrency and history", "description": "Request capacity and in-memory history retention" },
+    "observability": { "title": "Error details", "description": "Only extracts redacted structured failure fields" },
+    "risk": { "title": "Risk alerts", "description": "Alerts only; requests are never stopped automatically" },
+    "notifications": { "title": "Notifications", "description": "Delivered on an independent queue without blocking model requests" },
+    "logging": { "title": "Logging", "description": "Structured runtime log settings" }
+  },
+  "fields": {
+    "listen": "Listen address", "requestBodyLimit": "Request body limit", "upstreamBaseUrl": "Upstream Base URL", "connectTimeout": "Connect timeout", "responseHeaderTimeout": "Response header timeout",
+    "defaultLocale": "Default locale", "fallbackLocale": "Fallback locale", "loggingLocale": "Log locale", "notificationLocale": "Notification locale",
+    "enableRetry": "Enable retries", "errorScope": "Error scope", "allErrors": "All errors", "transientErrors": "Transient errors only", "maxAttempts": "Maximum attempts", "minWait": "Minimum wait", "maxWait": "Maximum wait", "honorRetryAfter": "Honor Retry-After",
+    "heartbeat": "Heartbeat interval", "memoryLimit": "Memory cache limit", "tempDir": "Temporary directory", "systemDefault": "System default",
+    "maxActive": "Maximum active requests", "maxWaiting": "Maximum queued requests", "recoverySpacing": "Recovery release interval", "historyLimit": "History record limit", "historyRetention": "History retention",
+    "collectionMode": "Collection mode", "safeExtraction": "Safe extraction", "off": "Off", "detailLimit": "Per-detail limit",
+    "warningAfter": "Duration threshold", "warningAttempts": "Attempt threshold", "authErrorAttempts": "Authentication error threshold", "queueWarningPercent": "Queue utilization threshold", "minimumFreeDisk": "Minimum free disk",
+    "stalledAfter": "Stalled notification threshold", "deliveryAttempts": "Delivery attempts", "deliveryBackoff": "Delivery backoff", "webhook": "Notification webhook", "notifyOnRecovery": "Notify after recovery",
+    "logLevel": "Log level"
+  },
+  "events": { "stalled": "Ongoing outage", "recovered": "Recovery", "long_running": "Long-running request", "many_attempts": "Excessive attempts", "auth_errors": "Authentication errors", "queue_pressure": "Queue pressure", "disk_pressure": "Disk pressure" },
+  "saved": "Settings saved and applied",
+  "savedRestart": "Settings saved; some changes require a restart",
+  "reloaded": "Reloaded from the configuration file",
+  "unsaved": "Unsaved changes",
+  "leaveConfirm": "Discard unsaved settings?",
+  "restartHint": "Changes to this field require a restart"
+  ,"units": { "unit": "Unit", "milliseconds": "Milliseconds", "seconds": "Seconds", "minutes": "Minutes", "hours": "Hours" }
+}

@@ -28,10 +28,35 @@ queue:
   max-waiting: 100
   recovery-spacing: "2s"
 
+history:
+  max-items: 500
+  retention: "24h"
+
+observability:
+  error-details: "safe"
+  max-error-detail: "2KiB"
+
+risk:
+  warning-after: "15m"
+  warning-attempts: 10
+  auth-error-attempts: 3
+  queue-warning-percent: 80
+  minimum-free-disk: "512MiB"
+
 notifications:
   stalled-after: "10m"
   notify-on-recovery: true
   webhook-url: ""
+  delivery-attempts: 3
+  delivery-backoff: "5s"
+  event-types:
+    - stalled
+    - recovered
+    - long_running
+    - many_attempts
+    - auth_errors
+    - queue_pressure
+    - disk_pressure
 
 logging:
   level: "info"

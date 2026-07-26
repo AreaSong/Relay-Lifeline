@@ -21,6 +21,30 @@ func TestLoadMergesDefaultsAndValidates(t *testing.T) {
 	if cfg.Server.Listen != "127.0.0.1:8318" || cfg.Retry.MinInterval.Duration != time.Second {
 		t.Fatalf("配置合并异常: %+v", cfg)
 	}
+	if cfg.History.MaxItems != 500 || cfg.Observability.ErrorDetails != "safe" || cfg.Observability.MaxErrorDetail != 2<<10 || cfg.Risk.WarningAttempts != 10 || cfg.Notifications.DeliveryAttempts != 3 {
+		t.Fatalf("v0.2 默认配置未合并: %+v", cfg)
+	}
+}
+
+func TestConfigValidatesSafeErrorDetailSettings(t *testing.T) {
+	cfg := Default()
+	cfg.Observability.ErrorDetails = "raw"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝 raw 错误详情模式")
+	}
+	cfg = Default()
+	cfg.Observability.MaxErrorDetail = 128
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝过小的错误详情上限")
+	}
+}
+
+func TestConfigRejectsUnknownNotificationEvent(t *testing.T) {
+	cfg := Default()
+	cfg.Notifications.EventTypes = append(cfg.Notifications.EventTypes, "unknown-event")
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝未知通知事件")
+	}
 }
 
 func TestConfigRejectsSensitiveLogging(t *testing.T) {

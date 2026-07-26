@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 type attemptResult struct {
@@ -36,23 +36,23 @@ func newHTTPClient(cfg config.Config) *http.Client {
 func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, source *http.Request, body []byte, streaming bool) attemptResult {
 	target, err := buildTargetURL(cfg.Upstream.BaseURL, source.URL)
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Reason: "上游 URL 无效"}}
+		return attemptResult{err: err, validation: Validation{Message: l10n.M("proxy.upstream_url_invalid")}}
 	}
 	request, err := http.NewRequestWithContext(ctx, source.Method, target, bytes.NewReader(body))
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Reason: "创建上游请求失败"}}
+		return attemptResult{err: err, validation: Validation{Message: l10n.M("proxy.request_create_failed")}}
 	}
 	copyHeaders(request.Header, source.Header)
 	request.Host = request.URL.Host
 	response, err := client.Do(request)
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Reason: classifyTransportError(err)}}
+		return attemptResult{err: err, validation: Validation{Message: classifyTransportError(err)}}
 	}
 	defer response.Body.Close()
 	buffer := NewReplayBuffer(int64(cfg.Stream.MemoryLimit), cfg.Stream.TempDir)
 	if _, err := io.Copy(buffer, response.Body); err != nil {
 		buffer.Close()
-		return attemptResult{response: response, err: err, validation: Validation{Reason: "读取上游响应中断"}}
+		return attemptResult{response: response, err: err, validation: Validation{Message: l10n.M("proxy.response_interrupted")}}
 	}
 	return attemptResult{response: response, buffer: buffer, validation: validateResponse(response, buffer, streaming)}
 }
@@ -91,12 +91,12 @@ func isHopByHopHeader(key string) bool {
 	}
 }
 
-func classifyTransportError(err error) string {
+func classifyTransportError(err error) l10n.Message {
 	var netError net.Error
 	if errors.As(err, &netError) && netError.Timeout() {
-		return "上游连接超时"
+		return l10n.M("proxy.connection_timeout")
 	}
-	return "上游连接失败"
+	return l10n.M("proxy.connection_failed")
 }
 
 func retryAfter(response *http.Response) time.Duration {
@@ -130,12 +130,9 @@ func shouldRetry(cfg config.Config, result attemptResult) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusConflict || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500
 }
 
-func describeAttempt(result attemptResult) string {
-	if result.validation.Reason != "" {
-		return result.validation.Reason
+func describeAttempt(result attemptResult) l10n.Message {
+	if result.validation.Message.ID != "" {
+		return result.validation.Message
 	}
-	if result.err != nil {
-		return fmt.Sprintf("请求失败: %T", result.err)
-	}
-	return "未知错误"
+	return l10n.M("proxy.unknown_error")
 }

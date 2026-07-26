@@ -1,0 +1,14 @@
+{
+  "title": "Runtime diagnostics",
+  "description": "Checks local resources and the CPA TCP connection without calling the model",
+  "export": "Export diagnostics",
+  "start": "Run checks",
+  "running": "Checking",
+  "empty": "Diagnostics have not been run",
+  "healthy": "All critical checks passed",
+  "unhealthy": "Issues require attention",
+  "summary": "Version {{version}} · Uptime {{uptime}}",
+  "exported": "Diagnostics exported",
+  "runFailed": "Diagnostics failed",
+  "exportFailed": "Export failed"
+}

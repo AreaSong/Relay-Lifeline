@@ -1,0 +1,33 @@
+{
+  "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "notifications": "通知", "logging": "日志" },
+  "sections": {
+    "service": { "title": "服务与上游", "description": "监听地址及唯一 CPA 上游" },
+    "localization": { "title": "本地化", "description": "默认、回退、日志和通知语言" },
+    "retry": { "title": "重试策略", "description": "失败请求的等待与恢复规则" },
+    "stream": { "title": "流式与缓存", "description": "SSE 保活及完整响应交付" },
+    "traffic": { "title": "并发与历史", "description": "请求容量及内存历史保留" },
+    "observability": { "title": "错误详情", "description": "仅提取脱敏后的结构化失败字段" },
+    "risk": { "title": "风险提醒", "description": "只提醒，不会自动停止请求" },
+    "notifications": { "title": "通知", "description": "独立队列投递，不阻塞模型请求" },
+    "logging": { "title": "日志", "description": "结构化运行日志设置" }
+  },
+  "fields": {
+    "listen": "监听地址", "requestBodyLimit": "请求体上限", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时",
+    "defaultLocale": "默认语言", "fallbackLocale": "回退语言", "loggingLocale": "日志语言", "notificationLocale": "通知语言",
+    "enableRetry": "启用重试", "errorScope": "错误范围", "allErrors": "所有错误", "transientErrors": "仅临时错误", "maxAttempts": "最大尝试次数", "minWait": "最小等待", "maxWait": "最大等待", "honorRetryAfter": "遵循 Retry-After",
+    "heartbeat": "心跳间隔", "memoryLimit": "内存缓存上限", "tempDir": "临时目录", "systemDefault": "系统默认",
+    "maxActive": "最大活动请求", "maxWaiting": "最大等待请求", "recoverySpacing": "恢复放行间隔", "historyLimit": "历史记录上限", "historyRetention": "历史保留时间",
+    "collectionMode": "采集模式", "safeExtraction": "安全提取", "off": "关闭", "detailLimit": "单条详情上限",
+    "warningAfter": "持续时间阈值", "warningAttempts": "尝试次数阈值", "authErrorAttempts": "鉴权错误次数", "queueWarningPercent": "队列使用率阈值", "minimumFreeDisk": "最小剩余磁盘",
+    "stalledAfter": "故障通知阈值", "deliveryAttempts": "投递尝试次数", "deliveryBackoff": "投递退避时间", "webhook": "通知 Webhook", "notifyOnRecovery": "恢复后通知",
+    "logLevel": "日志级别"
+  },
+  "events": { "stalled": "持续故障", "recovered": "恢复成功", "long_running": "长时间运行", "many_attempts": "尝试次数过多", "auth_errors": "鉴权错误", "queue_pressure": "队列压力", "disk_pressure": "磁盘压力" },
+  "saved": "设置已保存并生效",
+  "savedRestart": "设置已保存，部分配置重启后生效",
+  "reloaded": "已从配置文件重新载入",
+  "unsaved": "存在未保存的修改",
+  "leaveConfirm": "要放弃未保存的设置吗？",
+  "restartHint": "修改此字段后需要重启"
+  ,"units": { "unit": "单位", "milliseconds": "毫秒", "seconds": "秒", "minutes": "分钟", "hours": "小时" }
+}

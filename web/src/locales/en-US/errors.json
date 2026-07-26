@@ -1,0 +1,12 @@
+{
+  "generic": "Operation failed",
+  "save": "Unable to save settings",
+  "reload": "Unable to reload settings",
+  "api": {
+    "INVALID_ADMIN_KEY": "Invalid admin key",
+    "ENDPOINT_NOT_FOUND": "Endpoint not found",
+    "INVALID_CONFIG_JSON": "Invalid configuration JSON",
+    "TRAILING_CONFIG_JSON": "Configuration JSON contains trailing content",
+    "REQUEST_NOT_FOUND": "Request not found"
+  }
+}

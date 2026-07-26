@@ -1,18 +1,21 @@
 {
   "name": "relay-lifeline-console",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --pretty false"
+    "typecheck": "tsc -b --pretty false",
+    "l10n:check": "node scripts/check-l10n.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "i18next": "^26.3.6",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "react-i18next": "^17.0.11",
     "vite": "latest"
   },
   "devDependencies": {

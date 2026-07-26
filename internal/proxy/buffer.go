@@ -2,9 +2,10 @@ package proxy
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"os"
+
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 type ReplayBuffer struct {
@@ -39,7 +40,7 @@ func (b *ReplayBuffer) Write(data []byte) (int, error) {
 func (b *ReplayBuffer) spill() error {
 	file, err := os.CreateTemp(b.tempDir, "relay-lifeline-response-*")
 	if err != nil {
-		return fmt.Errorf("创建响应缓存: %w", err)
+		return l10n.E("proxy.cache_create_failed", err)
 	}
 	if err := file.Chmod(0o600); err != nil {
 		file.Close()

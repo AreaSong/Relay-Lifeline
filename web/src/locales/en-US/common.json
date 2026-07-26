@@ -1,0 +1,18 @@
+{
+  "brandSubtitle": "Relay resilience console",
+  "language": { "label": "Language", "zhCN": "简体中文", "enUS": "English" },
+  "nav": { "overview": "Overview", "requests": "Requests", "history": "History", "diagnostics": "Diagnostics", "settings": "Settings" },
+  "title": { "overview": "Operations overview", "requests": "Active requests", "history": "Request history", "diagnostics": "Runtime diagnostics", "settings": "Gateway settings" },
+  "actions": { "refresh": "Refresh", "pause": "Pause", "resume": "Resume", "logout": "Sign out", "close": "Close", "save": "Save settings", "reload": "Reload", "retry": "Retry now", "cancel": "Cancel request", "openTimeline": "View timeline", "discard": "Discard changes" },
+  "status": { "gatewayOnline": "Gateway online", "upstreamHealthy": "Upstream healthy", "upstreamDegraded": "Upstream degraded", "upstreamUnknown": "Upstream unknown", "running": "Running", "paused": "Paused", "queued": "Queued", "waiting": "Waiting", "requesting": "Requesting", "completed": "Completed", "successful": "Successful", "failed": "Failed", "canceled": "Canceled" },
+  "time": { "seconds": "{{count}} sec", "minutes": "{{count}} min", "hoursMinutes": "{{hours}} hr {{minutes}} min", "ago": "{{value}} ago", "attempt": "Attempt {{count}}", "waitSeconds": "Wait {{count}} sec" },
+  "loading": "Connecting to Relay Lifeline",
+  "httpError": "HTTP {{status}}",
+  "notAvailable": "-",
+  "requestCount": "{{count}} requests",
+  "requestCount_one": "{{count}} request",
+  "requestCount_other": "{{count}} requests",
+  "recordCount": "{{count}} records",
+  "recordCount_one": "{{count}} record",
+  "recordCount_other": "{{count}} records"
+}

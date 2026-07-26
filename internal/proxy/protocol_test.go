@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 func buffered(t *testing.T, content string) *ReplayBuffer {
@@ -72,7 +73,7 @@ func TestRequestWantsStream(t *testing.T) {
 
 func TestRetryPolicyCoversAllErrors(t *testing.T) {
 	cfg := config.Default()
-	result := attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}, validation: Validation{Reason: "HTTP 400"}}
+	result := attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}, validation: Validation{Message: l10n.M("proxy.http_error", map[string]any{"Status": 400})}}
 	if !shouldRetry(cfg, result) {
 		t.Fatal("all-errors 应重试 400")
 	}

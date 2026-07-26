@@ -2,28 +2,36 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/areasong/relay-lifeline/internal/admin"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/proxy"
+	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/timeline"
 	"github.com/areasong/relay-lifeline/internal/webui"
 )
 
 var version = "dev"
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "配置文件路径")
-	showVersion := flag.Bool("version", false, "显示版本")
+	preLocale, localeFromEnvironment := environmentLocale(os.Getenv("LANG"))
+	localeExplicit := hasLocaleArgument(os.Args[1:])
+	configPath := flag.String("config", "config.yaml", l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_path")))
+	showVersion := flag.Bool("version", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.version")))
+	localeFlag := flag.String("locale", preLocale, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.locale")))
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -32,20 +40,33 @@ func main() {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		message := l10n.M("cli.config_load_failed", map[string]any{"Error": l10n.Default.Error(preLocale, l10n.LocaleEnglish, err)})
+		fmt.Fprintln(os.Stderr, l10n.Default.Text(preLocale, l10n.LocaleEnglish, message))
 		os.Exit(1)
 	}
+	cliLocale := cfg.Localization.DefaultLocale
+	if localeExplicit || localeFromEnvironment {
+		cliLocale = l10n.Normalize(*localeFlag)
+	}
 	if err := validateAdminKey(cfg.Server.AdminEnabled, os.Getenv("RELAY_LIFELINE_ADMIN_KEY")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, l10n.Default.Error(cliLocale, cfg.Localization.FallbackLocale, err))
 		os.Exit(1)
 	}
 	logger := newLogger(cfg.Logging.Level)
+	startedAt := time.Now()
 	store := config.NewStore(*configPath, cfg)
-	registry := state.NewRegistry()
+	timelineStore := timeline.New(func() timeline.Limits {
+		current := store.Get().History
+		return timeline.Limits{MaxItems: current.MaxItems, Retention: current.Retention.Duration}
+	})
+	registry := state.NewRegistry(timelineStore)
 	controller := state.NewController()
+	riskManager := risk.New()
 	notifier := notify.New(store, logger)
-	gateway := proxy.NewGateway(store, registry, controller, notifier, logger)
-	adminHandler := admin.New(store, registry, controller)
+	defer notifier.Close()
+	gateway := proxy.NewGateway(store, registry, controller, notifier, logger, riskManager)
+	diagnosticService := diagnostics.New(store, version, startedAt)
+	adminHandler := admin.NewWithServices(store, registry, controller, riskManager, diagnosticService, notifier)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
@@ -67,7 +88,7 @@ func main() {
 	mux.Handle("/", gateway)
 
 	server := &http.Server{
-		Addr: cfg.Server.Listen, Handler: requestLogger(logger, mux),
+		Addr: cfg.Server.Listen, Handler: requestLogger(store, logger, mux),
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.Duration,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -78,19 +99,20 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), store.Get().Server.ShutdownTimeout.Duration)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("服务关闭失败", "error", err)
+			current := store.Get()
+			logger.Error(logText(current, "log.shutdown_failed"), "event", "service.shutdown_failed", "error", err)
 		}
 	}()
-	logger.Info("Relay Lifeline 已启动", "version", version, "listen", cfg.Server.Listen, "upstream", cfg.Upstream.BaseURL)
+	logger.Info(logText(cfg, "log.service_started"), "event", "service.started", "version", version, "listen", cfg.Server.Listen, "upstream", cfg.Upstream.BaseURL)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("服务异常退出", "error", err)
+		logger.Error(logText(store.Get(), "log.service_exit_failed"), "event", "service.exit_failed", "error", err)
 		os.Exit(1)
 	}
 }
 
 func validateAdminKey(adminEnabled bool, adminKey string) error {
 	if adminEnabled && len(adminKey) < 24 {
-		return errors.New("管理控制台已启用，RELAY_LIFELINE_ADMIN_KEY 至少需要 24 个字符")
+		return l10n.E("cli.admin_key_short", nil)
 	}
 	return nil
 }
@@ -103,9 +125,9 @@ func newLogger(level string) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slogLevel}))
 }
 
-func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
+func requestLogger(store *config.Store, logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		logger.Debug("收到请求", "method", request.Method, "path", request.URL.Path)
+		logger.Debug(logText(store.Get(), "log.request_received"), "event", "request.received", "method", request.Method, "path", request.URL.Path)
 		next.ServeHTTP(writer, request)
 	})
 }
@@ -115,9 +137,32 @@ func reloadOnSignal(store *config.Store, logger *slog.Logger) {
 	signal.Notify(signals, syscall.SIGHUP)
 	for range signals {
 		if err := store.Reload(); err != nil {
-			logger.Error("重新加载配置失败", "error", err)
+			cfg := store.Get()
+			logger.Error(logText(cfg, "log.config_reload_failed"), "event", "config.reload_failed", "error", l10n.Default.Error(cfg.Logging.Locale, cfg.Localization.FallbackLocale, err))
 			continue
 		}
-		logger.Info("配置已重新加载")
+		logger.Info(logText(store.Get(), "log.config_reloaded"), "event", "config.reloaded")
 	}
+}
+
+func logText(cfg config.Config, messageID string) string {
+	return l10n.Default.Text(cfg.Logging.Locale, cfg.Localization.FallbackLocale, l10n.M(messageID))
+}
+
+func environmentLocale(raw string) (string, bool) {
+	value := strings.Split(raw, ".")[0]
+	value = strings.ReplaceAll(value, "_", "-")
+	if value == "" || value == "C" || value == "POSIX" {
+		return l10n.LocaleEnglish, false
+	}
+	return l10n.Normalize(value), true
+}
+
+func hasLocaleArgument(args []string) bool {
+	for _, argument := range args {
+		if argument == "-locale" || argument == "--locale" || strings.HasPrefix(argument, "-locale=") || strings.HasPrefix(argument, "--locale=") {
+			return true
+		}
+	}
+	return false
 }

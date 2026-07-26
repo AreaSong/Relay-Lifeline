@@ -4,25 +4,26 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 type Validation struct {
 	Success bool
-	Reason  string
+	Message l10n.Message
 }
 
 func validateResponse(response *http.Response, buffer *ReplayBuffer, streaming bool) Validation {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return Validation{Reason: fmt.Sprintf("HTTP %d", response.StatusCode)}
+		return Validation{Message: l10n.M("proxy.http_error", map[string]any{"Status": response.StatusCode})}
 	}
 	reader, err := buffer.Reader()
 	if err != nil {
-		return Validation{Reason: "无法读取响应缓存"}
+		return Validation{Message: l10n.M("proxy.cache_unreadable")}
 	}
 	defer reader.Close()
 	contentType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
@@ -32,7 +33,7 @@ func validateResponse(response *http.Response, buffer *ReplayBuffer, streaming b
 	if contentType == "application/json" || strings.HasSuffix(contentType, "+json") {
 		return validateJSON(reader)
 	}
-	return Validation{Success: buffer.Size() > 0, Reason: "空响应"}
+	return Validation{Success: buffer.Size() > 0, Message: l10n.M("proxy.empty_response")}
 }
 
 func validateEventStream(reader io.Reader) Validation {
@@ -69,13 +70,13 @@ func validateEventStream(reader io.Reader) Validation {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return Validation{Reason: "SSE 读取失败"}
+		return Validation{Message: l10n.M("proxy.sse_read_failed")}
 	}
 	if failed {
-		return Validation{Reason: "SSE 返回失败事件"}
+		return Validation{Message: l10n.M("proxy.sse_failed")}
 	}
 	if !completed {
-		return Validation{Reason: "SSE 缺少完成事件"}
+		return Validation{Message: l10n.M("proxy.sse_incomplete")}
 	}
 	return Validation{Success: true}
 }
@@ -83,20 +84,20 @@ func validateEventStream(reader io.Reader) Validation {
 func validateJSON(reader io.Reader) Validation {
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return Validation{Reason: "JSON 读取失败"}
+		return Validation{Message: l10n.M("proxy.json_read_failed")}
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return Validation{Reason: "JSON 响应为空"}
+		return Validation{Message: l10n.M("proxy.json_empty")}
 	}
 	var response struct {
 		Error  json.RawMessage `json:"error"`
 		Status string          `json:"status"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return Validation{Reason: "JSON 无法解析"}
+		return Validation{Message: l10n.M("proxy.json_invalid")}
 	}
 	if len(response.Error) > 0 && string(response.Error) != "null" || response.Status == "failed" || response.Status == "incomplete" {
-		return Validation{Reason: "JSON 返回错误状态"}
+		return Validation{Message: l10n.M("proxy.json_error")}
 	}
 	return Validation{Success: true}
 }

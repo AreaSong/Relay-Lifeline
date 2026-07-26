@@ -1,0 +1,9 @@
+{
+  "columns": { "request": "Request", "result": "Result", "status": "Status", "attempts": "Attempts", "duration": "Duration", "nextRetry": "Next retry", "lastError": "Latest error", "actions": "Actions" },
+  "emptyActive": "No active requests",
+  "history": { "title": "Request history", "description": "Only redacted metadata from this process is retained", "empty": "No completed requests yet" },
+  "timeline": { "label": "Request timeline", "attempts": "Attempts", "duration": "Duration" },
+  "operationFailed": "Operation failed",
+  "timelineLoadFailed": "Unable to load timeline",
+  "errorDetail": { "title": "Upstream error detail", "type": "Type", "code": "Error code", "requestId": "Upstream request ID", "retryAfter": "Retry-After", "responseBytes": "Response size", "structured": "The upstream returned a structured error", "unparsed": "The upstream returned an error response that could not be parsed safely" }
+}

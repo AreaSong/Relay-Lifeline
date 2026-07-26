@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/notify"
+	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/timeline"
 )
 
 type Gateway struct {
@@ -21,6 +24,7 @@ type Gateway struct {
 	registry   *state.Registry
 	controller *state.Controller
 	notifier   *notify.Notifier
+	risk       *risk.Manager
 	logger     *slog.Logger
 	client     *http.Client
 	limiter    Limiter
@@ -29,26 +33,39 @@ type Gateway struct {
 	random     *rand.Rand
 }
 
-func NewGateway(store *config.Store, registry *state.Registry, controller *state.Controller, notifier *notify.Notifier, logger *slog.Logger) *Gateway {
-	return &Gateway{
-		store: store, registry: registry, controller: controller, notifier: notifier, logger: logger,
-		client: newHTTPClient(store.Get()), random: rand.New(rand.NewSource(time.Now().UnixNano())),
+func NewGateway(store *config.Store, registry *state.Registry, controller *state.Controller, notifier *notify.Notifier, logger *slog.Logger, managers ...*risk.Manager) *Gateway {
+	riskManager := risk.New()
+	if len(managers) > 0 && managers[0] != nil {
+		riskManager = managers[0]
 	}
+	gateway := &Gateway{
+		store: store, registry: registry, controller: controller, notifier: notifier, logger: logger,
+		risk: riskManager, client: newHTTPClient(store.Get()), random: rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+	gateway.limiter.SetOnChange(gateway.queueChanged)
+	return gateway
 }
 
 func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	cfg := g.store.Get()
-	body, err := readRequestBody(writer, request, int64(cfg.Server.MaxRequestBody))
+	clientLocale := l10n.FromAcceptLanguage(request.Header.Get("Accept-Language"), cfg.Localization.DefaultLocale)
+	body, err := readRequestBody(writer, request, int64(cfg.Server.MaxRequestBody), clientLocale, cfg.Localization.FallbackLocale)
 	if err != nil {
 		return
 	}
 	streaming := requestWantsStream(body, request.Header)
 	ctx, cancel := context.WithCancel(request.Context())
 	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
-	succeeded := false
+	started := time.Now()
+	outcome := "failed"
 	defer func() {
+		if outcome != "successful" && ctx.Err() != nil {
+			outcome = "canceled"
+			g.registry.RecordEvent(requestID, timeline.Event{Type: "canceled", MessageCode: "timeline.canceled"})
+		}
 		cancel()
-		g.registry.Remove(requestID, succeeded)
+		g.risk.ResolveRequest(requestID)
+		g.registry.Remove(requestID, outcome)
 	}()
 
 	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration)
@@ -57,12 +74,15 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		current := g.store.Get().Queue
 		return current.MaxActive, current.MaxWaiting
 	}); err != nil {
-		downstream.fail(err.Error())
+		message := l10n.M("proxy.queue_full")
+		if !errors.Is(err, ErrQueueFull) {
+			return
+		}
+		downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, message))
 		return
 	}
 	defer g.limiter.Release()
 
-	started := time.Now()
 	for attempt := 1; ; attempt++ {
 		cfg = g.store.Get()
 		if err := g.controller.Wait(ctx); err != nil {
@@ -73,58 +93,77 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-		g.registry.Update(requestID, "requesting", attempt, "", time.Time{})
+		g.registry.UpdateMessage(requestID, "requesting", attempt, l10n.Message{}, time.Time{})
+		g.registry.RecordEvent(requestID, timeline.Event{Type: "attempt_started", Attempt: attempt, MessageCode: "timeline.attempt_started"})
 		result := runAttempt(ctx, g.client, cfg, request, body, streaming)
 		if result.validation.Success {
-			g.registry.SetUpstream(true, "")
+			g.registry.SetUpstreamMessage(true, l10n.Message{})
 			if err := downstream.deliver(result.buffer); err != nil {
 				result.buffer.Close()
+				g.registry.RecordEvent(requestID, timeline.Event{Type: "delivery_failed", Attempt: attempt, Category: "client", MessageCode: "timeline.delivery_failed"})
 				return
 			}
 			result.buffer.Close()
-			succeeded = true
-			g.registry.Update(requestID, "completed", attempt, "", time.Time{})
-			if g.registry.WasNotified(requestID) && cfg.Notifications.NotifyOnRecovery {
-				g.notifier.Send(notify.Event{Type: "recovered", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), Message: "上游已恢复"})
+			outcome = "successful"
+			g.registry.UpdateMessage(requestID, "completed", attempt, l10n.Message{}, time.Time{})
+			g.registry.RecordEvent(requestID, timeline.Event{Type: "completed", Attempt: attempt, MessageCode: "timeline.completed"})
+			if (g.registry.WasNotified(requestID) || g.risk.HasOpenRequestAlerts(requestID)) && cfg.Notifications.NotifyOnRecovery {
+				g.notifier.Send(notify.Event{Type: "recovered", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), MessageCode: "notify.recovered"})
 			}
-			g.logger.Info("请求成功", "request_id", requestID, "attempt", attempt, "elapsed", time.Since(started).Round(time.Millisecond).String())
+			g.logger.Info(g.logText(cfg, "log.request_success"), "event", "request.succeeded", "request_id", requestID, "attempt", attempt, "elapsed_ms", time.Since(started).Milliseconds())
 			return
 		}
+		errorDetail := extractSafeErrorDetail(cfg.Observability, result, streaming)
 		if result.buffer != nil {
 			result.buffer.Close()
 		}
 		g.registry.RecordFailure()
 		reason := describeAttempt(result)
-		g.registry.SetUpstream(false, reason)
-		g.logger.Warn("上游请求失败", "request_id", requestID, "attempt", attempt, "reason", reason)
+		statusCode := attemptStatus(result)
+		g.registry.SetUpstreamMessage(false, reason)
+		g.registry.RecordEvent(requestID, timeline.Event{
+			Type: "attempt_failed", Attempt: attempt, StatusCode: statusCode,
+			Category: attemptCategory(result), MessageCode: reason.ID, MessageDetails: reason.Data,
+			ErrorDetail: errorDetail,
+		})
+		g.publishAlerts(g.risk.EvaluateAttempt(requestID, attempt, started, statusCode, cfg.Risk))
+		g.logger.Warn(g.logText(cfg, "log.upstream_failed"), "event", "upstream.request_failed", "request_id", requestID, "attempt", attempt, "reason_code", reason.ID, "status", statusCode)
 		if !shouldRetry(cfg, result) || cfg.Retry.MaxAttempts > 0 && attempt >= cfg.Retry.MaxAttempts {
-			downstream.fail(reason)
+			downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, reason))
 			return
 		}
 
 		delay := g.retryDelay(cfg, result.response)
 		nextRetry := time.Now().Add(delay)
-		g.registry.Update(requestID, "waiting", attempt, reason, nextRetry)
+		g.registry.UpdateMessage(requestID, "waiting", attempt, reason, nextRetry)
+		g.registry.RecordEvent(requestID, timeline.Event{
+			Type: "waiting", Attempt: attempt, MessageCode: "timeline.waiting", WaitMilliseconds: delay.Milliseconds(),
+		})
 		if time.Since(started) >= cfg.Notifications.StalledAfter.Duration && g.registry.MarkNotified(requestID) {
-			g.notifier.Send(notify.Event{Type: "stalled", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), Message: reason})
+			g.notifier.Send(notify.Event{Type: "stalled", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), MessageCode: "notify.stalled"})
 		}
-		if err := waitForRetry(ctx, retryNow, delay); err != nil {
+		resumeReason, err := waitForRetry(ctx, retryNow, delay, cfg.Risk.WarningAfter.Duration-time.Since(started), func() {
+			g.publishAlerts(g.risk.EvaluateLongRunning(requestID, attempt, started, g.store.Get().Risk))
+		})
+		if err != nil {
 			return
 		}
+		g.registry.RecordEvent(requestID, timeline.Event{Type: "retry_resumed", Attempt: attempt + 1, MessageCode: resumeReason})
 	}
 }
 
-func readRequestBody(writer http.ResponseWriter, request *http.Request, limit int64) ([]byte, error) {
+func readRequestBody(writer http.ResponseWriter, request *http.Request, limit int64, locale, fallback string) ([]byte, error) {
 	defer request.Body.Close()
 	reader := io.LimitReader(request.Body, limit+1)
 	body, err := io.ReadAll(reader)
 	if err != nil {
-		http.Error(writer, "无法读取请求", http.StatusBadRequest)
+		http.Error(writer, l10n.Default.Text(locale, fallback, l10n.M("api.request.read_failed")), http.StatusBadRequest)
 		return nil, err
 	}
 	if int64(len(body)) > limit {
-		http.Error(writer, "请求体过大", http.StatusRequestEntityTooLarge)
-		return nil, errors.New("请求体过大")
+		message := l10n.Default.Text(locale, fallback, l10n.M("api.request.body_too_large"))
+		http.Error(writer, message, http.StatusRequestEntityTooLarge)
+		return nil, l10n.E("api.request.body_too_large", nil)
 	}
 	return body, nil
 }
@@ -143,21 +182,78 @@ func (g *Gateway) retryDelay(cfg config.Config, response *http.Response) time.Du
 	return delay
 }
 
-func waitForRetry(ctx context.Context, retryNow <-chan struct{}, delay time.Duration) error {
+func waitForRetry(ctx context.Context, retryNow <-chan struct{}, delay, riskAfter time.Duration, onRisk func()) (string, error) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-retryNow:
-		return nil
-	case <-timer.C:
-		return nil
+	var riskTimer *time.Timer
+	var riskChannel <-chan time.Time
+	if riskAfter <= 0 {
+		onRisk()
+	} else if riskAfter < delay {
+		riskTimer = time.NewTimer(riskAfter)
+		riskChannel = riskTimer.C
+		defer riskTimer.Stop()
 	}
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-retryNow:
+			return "timeline.retry_manual", nil
+		case <-timer.C:
+			return "timeline.retry_timer", nil
+		case <-riskChannel:
+			onRisk()
+			riskChannel = nil
+		}
+	}
+}
+
+func (g *Gateway) queueChanged(active, waiting int) {
+	cfg := g.store.Get()
+	alerts := g.risk.EvaluateQueue(active, waiting, cfg.Queue.MaxActive, cfg.Queue.MaxWaiting, cfg.Risk)
+	g.publishAlerts(alerts)
+}
+
+func (g *Gateway) publishAlerts(alerts []risk.Alert) {
+	for _, alert := range alerts {
+		if alert.RequestID != "" {
+			g.registry.RecordEvent(alert.RequestID, timeline.Event{Type: "risk_warning", Category: alert.Type, MessageCode: alert.MessageCode, MessageDetails: alert.MessageDetails})
+		}
+		g.notifier.Send(notify.Event{
+			Type: alert.Type, RequestID: alert.RequestID, Attempts: alert.Attempts,
+			Elapsed: time.Duration(alert.ElapsedMilliseconds) * time.Millisecond, MessageCode: alert.MessageCode, MessageDetails: alert.MessageDetails,
+		})
+	}
+}
+
+func attemptStatus(result attemptResult) int {
+	if result.response == nil {
+		return 0
+	}
+	return result.response.StatusCode
+}
+
+func attemptCategory(result attemptResult) string {
+	if result.err != nil || result.response == nil {
+		return "transport"
+	}
+	if result.response.StatusCode < 200 || result.response.StatusCode >= 300 {
+		return "http"
+	}
+	return "protocol"
 }
 
 func (g *Gateway) Registry() *state.Registry     { return g.registry }
 func (g *Gateway) Controller() *state.Controller { return g.controller }
+
+func (g *Gateway) text(locale, fallback string, message l10n.Message) string {
+	return l10n.Default.Text(locale, fallback, message)
+}
+
+func (g *Gateway) logText(cfg config.Config, messageID string) string {
+	return g.text(cfg.Logging.Locale, cfg.Localization.FallbackLocale, l10n.M(messageID))
+}
 
 func (g *Gateway) String() string {
 	return fmt.Sprintf("Relay Lifeline -> %s", g.store.Get().Upstream.BaseURL)

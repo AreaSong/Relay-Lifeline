@@ -1,0 +1,12 @@
+{
+  "generic": "操作失败",
+  "save": "保存失败",
+  "reload": "载入失败",
+  "api": {
+    "INVALID_ADMIN_KEY": "管理密钥无效",
+    "ENDPOINT_NOT_FOUND": "接口不存在",
+    "INVALID_CONFIG_JSON": "配置 JSON 无效",
+    "TRAILING_CONFIG_JSON": "配置 JSON 包含多余内容",
+    "REQUEST_NOT_FOUND": "请求不存在"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "stats": { "active": "Active requests", "recovering": "Waiting to recover", "successful": "Successful requests", "failedAttempts": "Failed attempts" },
+  "alerts": { "title": "Risk alerts", "description": "Alerts do not change the active retry policy", "empty": "No risk alerts", "resolved": "Request ended" },
+  "recent": { "title": "Recent activity", "description": "Requests currently processing or waiting to recover" },
+  "queue": { "title": "Request queue", "description": "All active connections and requests waiting to retry" }
+}

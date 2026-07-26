@@ -1,0 +1,9 @@
+{
+  "columns": { "request": "请求", "result": "结果", "status": "状态", "attempts": "尝试", "duration": "持续时间", "nextRetry": "下次重试", "lastError": "最近错误", "actions": "操作" },
+  "emptyActive": "当前没有活动请求",
+  "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求" },
+  "timeline": { "label": "请求时间线", "attempts": "尝试", "duration": "耗时" },
+  "operationFailed": "操作失败",
+  "timelineLoadFailed": "无法载入时间线",
+  "errorDetail": { "title": "上游错误详情", "type": "类型", "code": "错误码", "requestId": "上游请求 ID", "retryAfter": "Retry-After", "responseBytes": "响应大小", "structured": "上游返回了结构化错误", "unparsed": "上游返回了无法安全解析的错误响应" }
+}
