@@ -1,0 +1,10 @@
+.DS_Store
+.env
+config.yaml
+config.docker.yaml
+coverage.out
+/relay-lifeline
+.playwright-cli/
+output/
+web/node_modules/
+web/*.tsbuildinfo

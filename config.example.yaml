@@ -1,0 +1,40 @@
+server:
+  listen: "127.0.0.1:8318"
+  admin-enabled: true
+  read-header-timeout: "10s"
+  shutdown-timeout: "15s"
+  max-request-body: "32MiB"
+
+upstream:
+  base-url: "http://cli-proxy-api:8317"
+  connect-timeout: "10s"
+  response-header-timeout: "30s"
+
+retry:
+  enabled: true
+  mode: "all-errors"
+  min-interval: "60s"
+  max-interval: "120s"
+  max-attempts: 0
+  honor-retry-after: true
+
+stream:
+  heartbeat-interval: "15s"
+  memory-limit: "64MiB"
+  temp-dir: ""
+
+queue:
+  max-active: 8
+  max-waiting: 100
+  recovery-spacing: "2s"
+
+notifications:
+  stalled-after: "10m"
+  notify-on-recovery: true
+  webhook-url: ""
+
+logging:
+  level: "info"
+  log-request-body: false
+  log-response-body: false
+  log-authorization: false

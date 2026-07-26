@@ -1,0 +1,25 @@
+services:
+  relay-lifeline:
+    build:
+      context: .
+      args:
+        VERSION: ${RELAY_LIFELINE_VERSION:-dev}
+    image: ghcr.io/areasong/relay-lifeline:${RELAY_LIFELINE_VERSION:-latest}
+    container_name: relay-lifeline
+    restart: unless-stopped
+    user: "${RELAY_LIFELINE_UID:-1000}:${RELAY_LIFELINE_GID:-1000}"
+    ports:
+      - "127.0.0.1:8318:8318"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      RELAY_LIFELINE_ADMIN_KEY: ${RELAY_LIFELINE_ADMIN_KEY:?请设置管理密钥}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ${RELAY_LIFELINE_CONFIG:-./config.docker.yaml}:/etc/relay-lifeline/config.yaml:rw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8318/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
