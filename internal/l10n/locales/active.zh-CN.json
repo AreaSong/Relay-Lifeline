@@ -131,5 +131,9 @@
   {"id":"diagnostic.disk.name","translation":"缓存磁盘空间"},
   {"id":"diagnostic.disk.read_failed","translation":"无法读取磁盘空间"},
   {"id":"diagnostic.disk.low","translation":"剩余空间低于 {{.Minimum}}"},
-  {"id":"diagnostic.disk.ready","translation":"可用 {{.Available}}"}
+  {"id":"diagnostic.disk.ready","translation":"可用 {{.Available}}"},
+  {"id":"api.monitoring.unavailable","translation":"监控指标暂不可用"},
+  {"id":"api.monitoring.window_invalid","translation":"时间范围只能是 15m、1h、6h 或 24h"},
+  {"id":"api.monitoring.cursor_invalid","translation":"事件游标必须是非负整数"},
+  {"id":"api.monitoring.limit_invalid","translation":"事件数量必须在 1 到 200 之间"}
 ]

@@ -1,10 +1,17 @@
-import { RotateCcw, Save, Undo2 } from "lucide-react";
+import { Power, RotateCcw, Save, Undo2, Zap } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ThemeSelector } from "../components/ThemeSelector";
+import type { ThemeMode } from "../theme";
 import type { Config } from "../types";
 
-type Tab = "general" | "retry" | "traffic" | "safety" | "capture" | "notifications" | "logging";
+type Tab = "general" | "retry" | "traffic" | "safety" | "capture" | "notifications" | "appearance" | "logging";
 type Locale = "zh-CN" | "en-US";
+const configTabs: Record<keyof Config, Tab> = {
+  server: "general", upstream: "general", localization: "general", retry: "retry", stream: "retry",
+  queue: "traffic", history: "traffic", observability: "safety", risk: "safety", capture: "capture",
+  notifications: "notifications", logging: "logging",
+};
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
   return <label className="toggle"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className="toggle-track" /><span>{label}</span></label>;
@@ -32,7 +39,7 @@ function durationParts(raw: string): [number, DurationUnit] {
   return [seconds * 1000, "ms"];
 }
 
-function DurationField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function DurationField({ label, value, onChange, restart = false }: { label: string; value: string; onChange: (value: string) => void; restart?: boolean }) {
   const { t } = useTranslation("settings");
   const [amount, unit] = durationParts(value);
   const update = (nextAmount: number, nextUnit: DurationUnit) => onChange(`${Math.max(0, nextAmount)}${nextUnit}`);
@@ -41,7 +48,7 @@ function DurationField({ label, value, onChange }: { label: string; value: strin
     <select aria-label={t("units.unit")} value={unit} onChange={(event) => update(amount, event.target.value as DurationUnit)}>
       <option value="ms">{t("units.milliseconds")}</option><option value="s">{t("units.seconds")}</option><option value="m">{t("units.minutes")}</option><option value="h">{t("units.hours")}</option>
     </select>
-  </div></label>;
+  </div>{restart && <small className="field-hint">{t("restartHint")}</small>}</label>;
 }
 
 const byteFactors = { B: 1, KiB: 1 << 10, MiB: 1 << 20, GiB: 1 << 30 } as const;
@@ -84,29 +91,36 @@ interface Props {
   reload: () => Promise<void>;
   discard: () => void;
   dirty: boolean;
+  baseline: Config;
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
 }
 
-export function SettingsView({ config, setConfig, save, reload, discard, dirty }: Props) {
+export function SettingsView({ config, setConfig, save, reload, discard, dirty, baseline, themeMode, setThemeMode }: Props) {
   const { t } = useTranslation(["settings", "common"]);
   const [tab, setTab] = useState<Tab>("general");
   const patch = <K extends keyof Config>(key: K, value: Partial<Config[K]>) => setConfig({ ...config, [key]: { ...config[key], ...value } });
   const toggleEvent = (eventType: string, enabled: boolean) => patch("notifications", {
     eventTypes: enabled ? Array.from(new Set([...config.notifications.eventTypes, eventType])) : config.notifications.eventTypes.filter((value) => value !== eventType),
   });
-	const tabs: Tab[] = ["general", "retry", "traffic", "safety", "capture", "notifications", "logging"];
+  const tabs: Tab[] = ["general", "retry", "traffic", "safety", "capture", "notifications", "appearance", "logging"];
+  const changedSections = Array.from(new Set((Object.keys(config) as Array<keyof Config>)
+    .filter((key) => JSON.stringify(config[key]) !== JSON.stringify(baseline[key]))
+    .map((key) => configTabs[key])));
   const restartHint = <small className="field-hint">{t("settings:restartHint")}</small>;
 
   return <div className="settings-shell">
     <div className="settings-tabs" role="tablist">{tabs.map((value) => <button role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} key={value} onClick={() => setTab(value)}>{t(`settings:tabs.${value}`)}</button>)}</div>
     {dirty && <div className="unsaved-banner">{t("settings:unsaved")}</div>}
     <div className="settings-stack">
+      <div className="settings-apply-legend"><span><Zap size={14} />{t("settings:hotReload")}</span><span><Power size={14} />{t("settings:restartApply")}</span></div>
       {tab === "general" && <>
         <section><div className="section-heading"><div><h2>{t("settings:sections.service.title")}</h2><p>{t("settings:sections.service.description")}</p></div></div><div className="form-grid">
           <label className="field"><span>{t("settings:fields.listen")}</span><input required value={config.server.listen} onChange={(event) => patch("server", { listen: event.target.value })} />{restartHint}</label>
           <ByteSizeField label={t("settings:fields.requestBodyLimit")} value={config.server.maxRequestBody} onChange={(maxRequestBody) => patch("server", { maxRequestBody })} />
           <label className="field wide"><span>{t("settings:fields.upstreamBaseUrl")}</span><input required type="url" value={config.upstream.baseUrl} onChange={(event) => patch("upstream", { baseUrl: event.target.value })} />{restartHint}</label>
-          <DurationField label={t("settings:fields.connectTimeout")} value={config.upstream.connectTimeout} onChange={(connectTimeout) => patch("upstream", { connectTimeout })} />
-          <DurationField label={t("settings:fields.responseHeaderTimeout")} value={config.upstream.responseHeaderTimeout} onChange={(responseHeaderTimeout) => patch("upstream", { responseHeaderTimeout })} />
+          <DurationField restart label={t("settings:fields.connectTimeout")} value={config.upstream.connectTimeout} onChange={(connectTimeout) => patch("upstream", { connectTimeout })} />
+          <DurationField restart label={t("settings:fields.responseHeaderTimeout")} value={config.upstream.responseHeaderTimeout} onChange={(responseHeaderTimeout) => patch("upstream", { responseHeaderTimeout })} />
         </div></section>
         <section><div className="section-heading"><div><h2>{t("settings:sections.localization.title")}</h2><p>{t("settings:sections.localization.description")}</p></div></div><div className="form-grid">
           <LocaleField label={t("settings:fields.defaultLocale")} value={config.localization.defaultLocale} onChange={(defaultLocale) => patch("localization", { defaultLocale })} />
@@ -164,12 +178,14 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty }
         <DurationField label={t("settings:fields.deliveryBackoff")} value={config.notifications.deliveryBackoff} onChange={(deliveryBackoff) => patch("notifications", { deliveryBackoff })} />
         <LocaleField label={t("settings:fields.notificationLocale")} value={config.notifications.locale} onChange={(locale) => patch("notifications", { locale })} />
         <label className="field wide"><span>{t("settings:fields.webhook")}</span><input type="url" value={config.notifications.webhookUrl} onChange={(event) => patch("notifications", { webhookUrl: event.target.value })} placeholder="https://" /></label>
-      </div><div className="event-options">{config.notifications.eventTypes.concat(["stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"]).filter((value, index, all) => all.indexOf(value) === index).map((eventType) => <Toggle key={eventType} label={t(`settings:events.${eventType}`)} checked={config.notifications.eventTypes.includes(eventType)} onChange={(value) => toggleEvent(eventType, value)} />)}</div><Toggle label={t("settings:fields.notifyOnRecovery")} checked={config.notifications.notifyOnRecovery} onChange={(notifyOnRecovery) => patch("notifications", { notifyOnRecovery })} /></section>}
+      </div><div className="event-options">{config.notifications.eventTypes.concat(["stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"]).filter((value, index, all) => all.indexOf(value) === index).map((eventType) => <Toggle key={eventType} label={t(`settings:events.${eventType}`, { defaultValue: eventType })} checked={config.notifications.eventTypes.includes(eventType)} onChange={(value) => toggleEvent(eventType, value)} />)}</div><Toggle label={t("settings:fields.notifyOnRecovery")} checked={config.notifications.notifyOnRecovery} onChange={(notifyOnRecovery) => patch("notifications", { notifyOnRecovery })} /></section>}
+      {tab === "appearance" && <section><div className="section-heading"><div><h2>{t("settings:sections.appearance.title")}</h2><p>{t("settings:sections.appearance.description")}</p></div></div><ThemeSelector mode={themeMode} onChange={setThemeMode} /></section>}
       {tab === "logging" && <section><div className="section-heading"><div><h2>{t("settings:sections.logging.title")}</h2><p>{t("settings:sections.logging.description")}</p></div></div><div className="form-grid">
-        <label className="field"><span>{t("settings:fields.logLevel")}</span><select value={config.logging.level} onChange={(event) => patch("logging", { level: event.target.value })}><option value="debug">{t("settings:logLevels.debug")}</option><option value="info">{t("settings:logLevels.info")}</option><option value="warn">{t("settings:logLevels.warn")}</option><option value="error">{t("settings:logLevels.error")}</option></select></label>
+        <label className="field"><span>{t("settings:fields.logLevel")}</span><select value={config.logging.level} onChange={(event) => patch("logging", { level: event.target.value })}><option value="debug">{t("settings:logLevels.debug")}</option><option value="info">{t("settings:logLevels.info")}</option><option value="warn">{t("settings:logLevels.warn")}</option><option value="error">{t("settings:logLevels.error")}</option></select>{restartHint}</label>
         <LocaleField label={t("settings:fields.loggingLocale")} value={config.logging.locale} onChange={(locale) => patch("logging", { locale })} />
       </div></section>}
     </div>
+    <div className={`settings-diff${dirty ? " dirty" : ""}`} aria-live="polite"><strong>{dirty ? t("settings:changeSummary", { count: changedSections.length }) : t("settings:noConfigChanges")}</strong>{dirty && <span>{t("settings:changeSections", { sections: changedSections.map((section) => t(`settings:tabs.${section}`, { defaultValue: section })).join(", ") })}</span>}</div>
     <div className="settings-actions"><button className="button" disabled={!dirty} onClick={discard}><Undo2 size={17} />{t("common:actions.discard")}</button><button className="button" onClick={reload}><RotateCcw size={17} />{t("common:actions.reload")}</button><button className="button primary" disabled={!dirty} onClick={save}><Save size={17} />{t("common:actions.save")}</button></div>
   </div>;
 }

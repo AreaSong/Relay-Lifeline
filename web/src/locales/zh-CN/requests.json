@@ -1,9 +1,26 @@
 {
   "columns": { "request": "请求", "result": "结果", "status": "状态", "attempts": "尝试", "duration": "持续时间", "nextRetry": "下次重试", "lastError": "最近错误", "actions": "操作" },
   "emptyActive": "当前没有活动请求",
-  "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求" },
+  "filters": { "search": "搜索请求 ID 或路径", "state": "状态", "allStates": "全部状态" },
+  "summary": { "active": "活动", "requesting": "请求中", "waiting": "等待中", "queued": "排队中" },
+  "windowLabels": { "15m": "15 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" },
+  "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求", "window": "时间范围", "events": "运行事件", "eventsEmpty": "当前进程还没有运行事件" },
   "timeline": { "label": "请求时间线", "attempts": "尝试", "duration": "耗时" },
   "operationFailed": "操作失败",
   "timelineLoadFailed": "无法载入时间线",
+  "events": {
+    "request.received": "收到请求",
+    "request.succeeded": "请求恢复成功",
+    "request.failed": "请求失败",
+    "request.canceled": "请求已取消",
+    "request.rejected": "队列拒绝请求",
+    "upstream.failure": "上游尝试失败",
+    "upstream.attempt_started": "开始上游尝试",
+    "upstream.recovered": "上游链路已恢复",
+    "admin.pause": "网关已暂停",
+    "admin.resume": "网关已恢复",
+    "config.reload": "配置已重新载入",
+    "config.save": "配置已保存"
+  },
   "errorDetail": { "title": "上游错误详情", "type": "类型", "code": "错误码", "requestId": "上游请求 ID", "retryAfter": "Retry-After", "responseBytes": "响应大小", "structured": "上游返回了结构化错误", "unparsed": "上游返回了无法安全解析的错误响应" }
 }

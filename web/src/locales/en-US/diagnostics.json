@@ -10,5 +10,7 @@
   "summary": "Version {{version}} · Uptime {{uptime}}",
   "exported": "Diagnostics exported",
   "runFailed": "Diagnostics failed",
-  "exportFailed": "Export failed"
+  "exportFailed": "Export failed",
+  "pathTitle": "Execution path",
+  "pathDescription": "Checks run in operational order; no model request or token usage is involved"
 }

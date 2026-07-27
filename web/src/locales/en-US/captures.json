@@ -29,5 +29,7 @@
   "requestPart": "Raw request (filtered)",
   "attemptPart": "CPA attempt {{count}} (filtered)",
   "finalPart": "Final response (filtered)",
-  "truncated": "body truncated"
+  "truncated": "body truncated",
+  "headers": "Headers"
+  ,"actions": "Actions"
 }

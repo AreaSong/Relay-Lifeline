@@ -6,7 +6,9 @@
   "download": "下载日志",
   "level": "级别",
   "event": "事件类型",
+  "eventPlaceholder": "例如 upstream.request_failed",
   "requestId": "请求 ID",
   "all": "全部级别",
-  "empty": "当前筛选条件下没有运行日志"
+  "empty": "当前筛选条件下没有运行日志",
+  "levels": { "debug": "调试", "info": "信息", "warn": "警告", "error": "错误" }
 }

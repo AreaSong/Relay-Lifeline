@@ -1,4 +1,4 @@
-import type { Alert, CapturePreview, CaptureRecord, CaptureStatus, Config, DiagnosticReport, HistoryRecord, RuntimeLogEntry, Status } from "./types";
+import type { Alert, CapturePreview, CaptureRecord, CaptureStatus, Config, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RuntimeLogEntry, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -55,6 +55,18 @@ export class ApiClient {
 
   history() {
     return this.request<HistoryRecord[]>("/history");
+  }
+
+  metrics(window: MetricsWindow = "1h") {
+    return this.request<MetricsSnapshot>(`/metrics?window=${window}`);
+  }
+
+  metricErrors(window: MetricsWindow = "1h") {
+    return this.request<MetricsErrors>(`/metrics/errors?window=${window}`);
+  }
+
+  events(after = 0, limit = 200) {
+    return this.request<MonitoringEvents>(`/events?after=${after}&limit=${limit}`);
   }
 
   runtimeLogs(filters: { after?: number; level?: string; event?: string; requestId?: string } = {}) {

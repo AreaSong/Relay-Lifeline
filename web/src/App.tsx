@@ -1,53 +1,87 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Archive, CirclePause, CirclePlay, Clock3, FileLock2, HeartPulse, LogOut,
-  RefreshCw, RotateCcw, ScrollText, Settings2, ShieldAlert, ShieldCheck, Stethoscope,
+  Menu, RefreshCw, ScrollText, Settings2, ShieldCheck, Stethoscope,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ApiClient, errorMessage } from "./api";
-import { AlertsList } from "./components/AlertsList";
 import { LanguageSelector } from "./components/LanguageSelector";
-import { RequestsTable } from "./components/RequestsTable";
+import { SignalTopology } from "./components/SignalTopology";
+import { ThemeSelector } from "./components/ThemeSelector";
 import { TimelinePanel } from "./components/TimelinePanel";
+import { ViewErrorBoundary } from "./components/ViewErrorBoundary";
 import { normalizeLocale } from "./i18n";
-import type { Alert, Config, DiagnosticReport, HistoryRecord, Status } from "./types";
+import { useTheme } from "./theme";
+import type {
+  Alert, Config, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot,
+  MetricsWindow, MonitoringEvent, Status,
+} from "./types";
+import { CapturesView } from "./views/CapturesView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
 import { HistoryView } from "./views/HistoryView";
-import { SettingsView } from "./views/SettingsView";
-import { CapturesView } from "./views/CapturesView";
 import { LogsView } from "./views/LogsView";
+import { OverviewView } from "./views/OverviewView";
+import { RequestsView } from "./views/RequestsView";
+import { SettingsView } from "./views/SettingsView";
 
 type View = "overview" | "requests" | "history" | "logs" | "captures" | "diagnostics" | "settings";
+const allViews: View[] = ["overview", "requests", "history", "logs", "captures", "diagnostics", "settings"];
+const mobileViews: View[] = ["overview", "requests", "history", "diagnostics", "settings"];
+const navigation: Array<{ view: View; icon: LucideIcon }> = [
+  { view: "overview", icon: Activity }, { view: "requests", icon: Clock3 }, { view: "history", icon: Archive },
+  { view: "logs", icon: ScrollText }, { view: "captures", icon: FileLock2 },
+  { view: "diagnostics", icon: Stethoscope }, { view: "settings", icon: Settings2 },
+];
 
-function Login({ onLogin }: { onLogin: (token: string) => Promise<void> }) {
-  const { t } = useTranslation(["auth", "common"]);
+function currentView(): View {
+  const candidate = window.location.hash.replace(/^#\/?/, "") as View;
+  return allViews.includes(candidate) ? candidate : "overview";
+}
+
+function Login({ onLogin, themeMode, setThemeMode }: {
+  onLogin: (token: string) => Promise<void>;
+  themeMode: ReturnType<typeof useTheme>["mode"];
+  setThemeMode: ReturnType<typeof useTheme>["setMode"];
+}) {
+  const { t, i18n } = useTranslation(["auth", "common", "overview"]);
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    setBusy(true);
-    setError("");
-    try { await onLogin(token); } catch (reason) { setError(errorMessage(reason, "generic")); }
+    setBusy(true); setError("");
+    try { await onLogin(token); }
+    catch (reason) { setError(errorMessage(reason, "generic")); }
     finally { setBusy(false); }
   }
-  return <main className="login-shell"><div className="login-language"><LanguageSelector /></div><form className="login-panel" onSubmit={submit}>
-    <div className="brand-mark"><HeartPulse size={24} /></div><h1>Relay-Lifeline</h1><p>{t("common:brandSubtitle")}</p>
-    <label className="field"><span>{t("auth:adminKey")}</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoFocus required /></label>
-    {error && <div className="error-banner">{error}</div>}
-    <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
-  </form></main>;
-}
-
-function Stat({ icon, label, value }: { icon: ReactNode; label: string; value: number | string }) {
-  return <div className="stat"><span className="stat-icon">{icon}</span><div><span>{label}</span><strong>{value}</strong></div></div>;
+  const labels = {
+    ariaLabel: t("overview:signal.topologyLabel"), codex: t("overview:signal.codex"), relay: t("overview:signal.relay"), cpa: t("overview:signal.cpa"),
+    healthy: t("overview:signal.healthy"), degraded: t("overview:signal.degraded"), unknown: t("overview:signal.unknown"), active: t("overview:signal.active"),
+    waiting: t("overview:signal.waiting"), nextRetry: t("overview:signal.nextRetry"), retryNow: t("overview:signal.retryNow"), staticFallback: t("overview:signal.staticFallback"),
+  };
+  return <main className="login-shell">
+    <section className="login-visual"><div className="login-wordmark"><span className="rail-brand"><HeartPulse size={19} /></span><span>Relay-Lifeline</span></div>
+      <div className="login-topology"><SignalTopology upstreamState="unknown" active={0} waiting={0} labels={labels} locale={i18n.resolvedLanguage} /></div>
+      <div className="login-statement"><h1>Relay-Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
+    </section>
+    <section className="login-access"><div className="login-language"><LanguageSelector /><ThemeSelector mode={themeMode} onChange={setThemeMode} compact /></div>
+      <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
+        <input className="sr-only" type="text" name="username" value="relay-lifeline-admin" autoComplete="username" tabIndex={-1} aria-hidden="true" readOnly />
+        <label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="current-password" autoFocus required /></label>
+        {error && <div className="error-banner" role="alert">{error}</div>}
+        <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
+      </form>
+    </section>
+  </main>;
 }
 
 export function App() {
   const { t, i18n } = useTranslation(["common", "overview", "settings", "diagnostics", "requests", "errors"]);
   const locale = normalizeLocale(i18n.resolvedLanguage);
+  const theme = useTheme();
   const [token, setToken] = useState(() => sessionStorage.getItem("relay-lifeline-token") || "");
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>(currentView);
   const [status, setStatus] = useState<Status | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [savedConfig, setSavedConfig] = useState<Config | null>(null);
@@ -56,76 +90,93 @@ export function App() {
   const [timeline, setTimeline] = useState<HistoryRecord | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
   const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+  const [metricsWindow, setMetricsWindow] = useState<MetricsWindow>("1h");
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const [metricErrors, setMetricErrors] = useState<MetricsErrors | null>(null);
+  const [events, setEvents] = useState<MonitoringEvent[]>([]);
+  const [mobileTools, setMobileTools] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
   const api = useMemo(() => new ApiClient(token, locale), [token, locale]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
+
+  const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
+    setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
+  }, []);
   const refresh = useCallback(async () => {
     const [nextStatus, nextAlerts] = await Promise.all([api.status(), api.alerts()]);
-    setStatus(nextStatus);
-    setAlerts(nextAlerts);
+    setStatus(nextStatus); setAlerts(nextAlerts);
   }, [api]);
+  const refreshMonitoring = useCallback(async () => {
+    const [nextMetrics, nextErrors, nextEvents] = await Promise.all([
+      api.metrics(metricsWindow), api.metricErrors(metricsWindow), api.events(0, 200),
+    ]);
+    setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events);
+  }, [api, metricsWindow]);
 
-  async function login(value: string) {
-    await new ApiClient(value, locale).session();
-    sessionStorage.setItem("relay-lifeline-token", value);
-    setToken(value);
-  }
-  function logout() {
-    sessionStorage.removeItem("relay-lifeline-token");
-    setToken(""); setStatus(null); setConfig(null); setSavedConfig(null); setTimeline(null);
-  }
+  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
   useEffect(() => {
-    document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`;
-  }, [t, view, locale]);
+    const changed = () => setView(currentView());
+    window.addEventListener("hashchange", changed);
+    return () => window.removeEventListener("hashchange", changed);
+  }, []);
   useEffect(() => {
     if (!token) return;
     Promise.all([
-      refresh(),
-      api.config().then((value) => { setConfig(value); setSavedConfig(value); }),
-      api.history().then(setHistory),
+      refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory),
     ]).catch((reason) => showMessage(errorMessage(reason), "error"));
-    setTimeline(null);
-    setDiagnostics(null);
-    const timer = window.setInterval(() => refresh().catch(() => undefined), 2000);
-    return () => clearInterval(timer);
-  }, [token, api, refresh]);
+    setTimeline(null); setDiagnostics(null);
+    const statusTimer = window.setInterval(() => refresh().catch(() => undefined), 2000);
+    return () => window.clearInterval(statusTimer);
+  }, [api, refresh, showMessage, token]);
+  useEffect(() => {
+    if (!token) return;
+    void refreshMonitoring().catch((reason) => showMessage(errorMessage(reason), "error"));
+    const metricsTimer = window.setInterval(() => refreshMonitoring().catch(() => undefined), 10_000);
+    return () => window.clearInterval(metricsTimer);
+  }, [refreshMonitoring, showMessage, token]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
+  useEffect(() => {
+    if (!mobileTools) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileTools(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [mobileTools]);
 
-  const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
-	setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
-  }, []);
-  async function togglePause() {
-    try { status?.paused ? await api.resume() : await api.pause(); await refresh(); }
-    catch (reason) { showMessage(errorMessage(reason), "error"); }
+  async function login(value: string) {
+    await new ApiClient(value, locale).session();
+    sessionStorage.setItem("relay-lifeline-token", value); setToken(value);
   }
-  async function save() {
-    if (!config) return;
-    try {
-      const result = await api.saveConfig(config);
-      setSavedConfig(config);
-      showMessage(result.restartRequired ? t("settings:savedRestart") : t("settings:saved"));
-    } catch (reason) { showMessage(errorMessage(reason, "save"), "error"); }
-  }
-  async function reload() {
-    try {
-      await api.reloadConfig();
-      const value = await api.config();
-      setConfig(value); setSavedConfig(value); showMessage(t("settings:reloaded"));
-    } catch (reason) { showMessage(errorMessage(reason, "reload"), "error"); }
+  function logout() {
+    sessionStorage.removeItem("relay-lifeline-token");
+    setToken(""); setStatus(null); setConfig(null); setSavedConfig(null); setTimeline(null); setMetrics(null); setEvents([]);
   }
   async function selectView(next: View) {
     if (view === "settings" && next !== "settings" && dirty && !window.confirm(t("settings:leaveConfirm"))) return;
-    setView(next);
-    if (next === "history") api.history().then(setHistory).catch((reason) => showMessage(errorMessage(reason), "error"));
+    setView(next); setMobileTools(false); setTimeline(null);
+    window.location.hash = `/${next}`;
+    if (next === "history") await Promise.all([api.history().then(setHistory), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
   }
   async function openTimeline(id: string) {
     try { setTimeline(await api.timeline(id)); }
     catch (reason) { showMessage(errorMessage(reason), "error"); }
+  }
+  async function togglePause() {
+    try { status?.paused ? await api.resume() : await api.pause(); await refresh(); await refreshMonitoring(); }
+    catch (reason) { showMessage(errorMessage(reason), "error"); }
+  }
+  async function save() {
+    if (!config) return;
+    try { const result = await api.saveConfig(config); setSavedConfig(config); showMessage(result.restartRequired ? t("settings:savedRestart") : t("settings:saved")); await refreshMonitoring(); }
+    catch (reason) { showMessage(errorMessage(reason, "save"), "error"); }
+  }
+  async function reload() {
+    try { await api.reloadConfig(); const value = await api.config(); setConfig(value); setSavedConfig(value); showMessage(t("settings:reloaded")); await refreshMonitoring(); }
+    catch (reason) { showMessage(errorMessage(reason, "reload"), "error"); }
   }
   async function runDiagnostics() {
     setDiagnosticBusy(true);
@@ -138,34 +189,35 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
 
-  if (!token) return <Login onLogin={login} />;
-  if (!status || !config || !savedConfig) return <div className="loading"><HeartPulse size={26} />{t("common:loading")}</div>;
+  if (!token) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} />;
+  if (!status || !config || !savedConfig) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
-	const navigation: Array<{ view: View; icon: ReactNode }> = [
-	  { view: "overview", icon: <Activity size={18} /> }, { view: "requests", icon: <Clock3 size={18} /> },
-	  { view: "history", icon: <Archive size={18} /> }, { view: "logs", icon: <ScrollText size={18} /> },
-	  { view: "captures", icon: <FileLock2 size={18} /> }, { view: "diagnostics", icon: <Stethoscope size={18} /> },
-    { view: "settings", icon: <Settings2 size={18} /> },
-  ];
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
-  return <div className="app-shell">
-    <aside><div className="brand"><span className="brand-mark"><HeartPulse size={21} /></span><div><strong>Relay-Lifeline</strong><span>{t("common:brandSubtitle")}</span></div></div>
-      <nav>{navigation.map((item) => <button key={item.view} aria-label={t(`common:nav.${item.view}`)} data-tooltip={t(`common:nav.${item.view}`)} className={view === item.view ? "active" : ""} onClick={() => selectView(item.view)}>{item.icon}{t(`common:nav.${item.view}`)}</button>)}</nav>
-      <div className="aside-footer"><LanguageSelector compact /><button className="logout" onClick={logout}><LogOut size={17} />{t("common:actions.logout")}</button></div>
+  const incident = status.upstream.state === "degraded" && (status.waiting + status.queued > 0 || (status.upstream.lastChecked ? Date.now() - new Date(status.upstream.lastChecked).getTime() >= 10_000 : false));
+  return <div className={`app-shell${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
+    <aside className="app-rail" aria-label={t("common:brandSubtitle")}><button className="rail-brand" aria-label="Relay-Lifeline" data-tooltip="Relay-Lifeline" onClick={() => selectView("overview")}><HeartPulse size={21} /></button>
+      <nav>{navigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={t(`common:nav.${itemView}`)} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /></button>)}</nav>
+      <div className="rail-footer"><ThemeSelector mode={theme.mode} onChange={theme.setMode} compact /><LanguageSelector compact /><button className="rail-action" aria-label={t("common:actions.logout")} data-tooltip={t("common:actions.logout")} onClick={logout}><LogOut size={17} /></button></div>
     </aside>
-    <main className="workspace"><header><div><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span></div></div>
-      <div className="header-actions"><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={refresh}><RefreshCw size={17} /></button><button className={`button ${status.paused ? "primary" : ""}`} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</button></div></header>
-      {message && <div className={messageKind === "success" ? "success-banner" : "error-banner page-banner"}>{message}</div>}
-      {view === "overview" && <><div className="stats"><Stat icon={<Activity />} label={t("overview:stats.active")} value={status.active} /><Stat icon={<Clock3 />} label={t("overview:stats.recovering")} value={status.waiting + status.queued} /><Stat icon={<ShieldCheck />} label={t("overview:stats.successful")} value={status.successful} /><Stat icon={<RotateCcw />} label={t("overview:stats.failedAttempts")} value={status.failedAttempts} /></div>
-        <section className="content-section"><div className="section-heading"><div><h2>{t("overview:alerts.title")}</h2><p>{t("overview:alerts.description")}</p></div><ShieldAlert size={18} /></div><AlertsList alerts={alerts} /></section>
-        <section className="content-section spaced"><div className="section-heading"><div><h2>{t("overview:recent.title")}</h2><p>{t("overview:recent.description")}</p></div><span className={`mode ${status.paused ? "paused" : ""}`}>{status.paused ? t("common:status.paused") : t("common:status.running")}</span></div><RequestsTable requests={status.requests.slice(0, 6)} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} /></section></>}
-      {view === "requests" && <section className="content-section"><div className="section-heading"><div><h2>{t("overview:queue.title")}</h2><p>{t("overview:queue.description")}</p></div><span>{t("common:requestCount", { count: status.requests.length })}</span></div><RequestsTable requests={status.requests} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} /></section>}
-	  {view === "history" && <HistoryView records={history} onOpen={setTimeline} />}
-	  {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
-	  {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} />}
-      {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} />}
-      {view === "settings" && <SettingsView config={config} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} />}
+
+    <main className="workspace"><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Relay-Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
+      <div className="desktop-heading"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span></div></div>
+      <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button><button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button></div>
+    </header>
+      {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
+      <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
+        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} locale={locale} dark={theme.resolved === "dark"} incident={incident} />}
+        {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} />}
+        {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
+        {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
+        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} />}
+        {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} />}
+        {view === "settings" && <SettingsView config={config} baseline={savedConfig} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
+      </ViewErrorBoundary>
     </main>
+
+    <nav className="mobile-bottom-nav" aria-label={t("common:brandSubtitle")}>{mobileViews.map((itemView) => { const Icon = navigation.find((item) => item.view === itemView)!.icon; return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>
+    <div className="mobile-tools" hidden={!mobileTools}><div className="mobile-tools-row"><button className="button" onClick={() => selectView("logs")}><ScrollText size={17} />{t("common:nav.logs")}</button><button className="button" onClick={() => selectView("captures")}><FileLock2 size={17} />{t("common:nav.captures")}</button></div><ThemeSelector mode={theme.mode} onChange={theme.setMode} /><div className="mobile-tools-row"><LanguageSelector /><button className="button" onClick={logout}><LogOut size={17} />{t("common:actions.logout")}</button></div></div>
     {timeline && <TimelinePanel record={timeline} onClose={() => setTimeline(null)} />}
   </div>;
 }

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Ban, CheckCircle2, Clock3, Inbox, RotateCcw, Send, ShieldAlert, X, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { formatBytes, formatDuration, formatTime } from "../format";
@@ -40,13 +40,25 @@ function SafeErrorDetail({ detail }: { detail: ErrorDetail }) {
 
 export function TimelinePanel({ record, onClose }: { record: HistoryRecord; onClose: () => void }) {
   const { t } = useTranslation(["common", "requests"]);
+  const drawer = useRef<HTMLElement>(null);
   useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    drawer.current?.querySelector<HTMLElement>("button")?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key !== "Tab" || !drawer.current) return;
+      const focusable = Array.from(drawer.current.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("disabled"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => { window.removeEventListener("keydown", handleKey); previous?.focus(); };
   }, [onClose]);
   return <div className="drawer-backdrop" onMouseDown={onClose}>
-    <aside className="timeline-drawer" role="dialog" aria-modal="true" aria-label={t("requests:timeline.label")} onMouseDown={(event) => event.stopPropagation()}>
+    <aside ref={drawer} className="timeline-drawer" role="dialog" aria-modal="true" aria-label={t("requests:timeline.label")} onMouseDown={(event) => event.stopPropagation()}>
       <div className="drawer-header"><div><span className={`status ${record.state}`}>{t(`common:status.${record.state}`, { defaultValue: record.state })}</span><h2>{record.method} {record.path}</h2><p>{record.id}</p></div>
         <button className="icon-button" aria-label={t("common:actions.close")} data-tooltip={t("common:actions.close")} onClick={onClose}><X size={18} /></button>
       </div>

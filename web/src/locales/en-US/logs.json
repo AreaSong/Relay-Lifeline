@@ -6,7 +6,9 @@
   "download": "Download logs",
   "level": "Level",
   "event": "Event type",
+  "eventPlaceholder": "For example, upstream.request_failed",
   "requestId": "Request ID",
   "all": "All levels",
-  "empty": "No runtime logs match the current filters"
+  "empty": "No runtime logs match the current filters",
+  "levels": { "debug": "Debug", "info": "Info", "warn": "Warning", "error": "Error" }
 }

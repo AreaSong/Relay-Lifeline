@@ -231,7 +231,7 @@ export interface CaptureRecord {
   completedAt?: string;
   expiresAt: string;
   request: CaptureBodyPart;
-  attempts: CaptureAttempt[];
+  attempts: CaptureAttempt[] | null;
   final?: CaptureBodyPart;
   capturedBytes: number;
   warnings?: string[];
@@ -251,4 +251,85 @@ export interface CapturePreviewPart {
 export interface CapturePreview {
   record: CaptureRecord;
   parts: CapturePreviewPart[];
+}
+
+export type MetricsWindow = "15m" | "1h" | "6h" | "24h";
+
+export interface MetricsPoint {
+  time: string;
+  requests: number;
+  successful: number;
+  failed: number;
+  canceled: number;
+  rejected: number;
+  attempts: number;
+  failedAttempts: number;
+  recovered: number;
+  active: number;
+  queued: number;
+  waiting: number;
+  requesting: number;
+}
+
+export interface MetricBucket {
+  bucket: string;
+  count: number;
+}
+
+export interface MetricsSnapshot {
+  generatedAt: string;
+  dataSince: string;
+  complete: boolean;
+  window: MetricsWindow;
+  from: string;
+  to: string;
+  totals: {
+    requests: number;
+    successful: number;
+    failed: number;
+    canceled: number;
+    rejected: number;
+    attempts: number;
+    failedAttempts: number;
+    recovered: number;
+    successRate: number;
+    averageRecoveryMilliseconds: number;
+  };
+  load: {
+    active: number;
+    queued: number;
+    waiting: number;
+    requesting: number;
+  };
+  series: MetricsPoint[];
+  recovery: {
+    durationBuckets: MetricBucket[];
+    attemptBuckets: MetricBucket[];
+  };
+}
+
+export interface MetricsErrors {
+  generatedAt?: string;
+  window: MetricsWindow;
+  from: string;
+  to: string;
+  categories: Array<{ code: string; count: number }>;
+}
+
+export interface MonitoringEvent {
+  id: number;
+  time: string;
+  code: string;
+  category?: string;
+  requestId?: string;
+  statusCode?: number;
+  attempt?: number;
+}
+
+export interface MonitoringEvents {
+  events: MonitoringEvent[];
+  nextAfter: number;
+  oldestAfter?: number;
+  hasMore: boolean;
+  hasGap?: boolean;
 }

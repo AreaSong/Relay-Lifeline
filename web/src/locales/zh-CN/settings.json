@@ -1,5 +1,5 @@
 {
-  "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "capture": "捕获", "notifications": "通知", "logging": "日志" },
+  "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "capture": "捕获", "notifications": "通知", "appearance": "外观", "logging": "日志" },
   "sections": {
     "service": { "title": "服务与上游", "description": "监听地址及唯一 CPA 上游" },
     "localization": { "title": "本地化", "description": "默认、回退、日志和通知语言" },
@@ -10,7 +10,8 @@
     "risk": { "title": "风险提醒", "description": "只提醒，不会自动停止请求" },
     "notifications": { "title": "通知", "description": "独立队列投递，不阻塞模型请求" },
     "logging": { "title": "日志", "description": "结构化运行日志设置" },
-    "capture": { "title": "诊断捕获与运行日志", "description": "加密正文的容量、保留和自动启动限制" }
+    "capture": { "title": "诊断捕获与运行日志", "description": "加密正文的容量、保留和自动启动限制" },
+    "appearance": { "title": "控制台外观", "description": "跟随操作系统，或显式使用浅色、深色工作区" }
   },
   "fields": {
     "listen": "监听地址", "requestBodyLimit": "请求体上限", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时",
@@ -30,7 +31,13 @@
   "savedRestart": "设置已保存，部分配置重启后生效",
   "reloaded": "已从配置文件重新载入",
   "unsaved": "存在未保存的修改",
+  "changeSummary": "已修改 {{count}} 个配置分区",
+  "changeSummary_one": "已修改 {{count}} 个配置分区",
+  "changeSections": "发生变化：{{sections}}",
+  "noConfigChanges": "网关配置没有变化",
   "leaveConfirm": "要放弃未保存的设置吗？",
   "restartHint": "修改此字段后需要重启",
+  "hotReload": "未标记字段无需重启即可生效",
+  "restartApply": "已标记字段将在重启后生效",
   "units": { "unit": "单位", "milliseconds": "毫秒", "seconds": "秒", "minutes": "分钟", "hours": "小时" }
 }

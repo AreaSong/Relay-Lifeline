@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -98,6 +99,36 @@ func TestCaptureLifecyclePreviewExportAndRestart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.StorageDir, id)); !os.IsNotExist(err) {
 		t.Fatalf("删除后目录仍存在: %v", err)
+	}
+}
+
+func TestActiveCaptureSerializesAttemptsAsEmptyArray(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("active-request", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	records := manager.List()
+	if len(records) != 1 || records[0].Attempts == nil || len(records[0].Attempts) != 0 {
+		t.Fatalf("活动捕获应返回空尝试数组: %+v", records)
+	}
+	payload, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte(`"attempts":[]`)) {
+		t.Fatalf("API JSON 未保持空数组契约: %s", payload)
+	}
+	metadata, err := os.ReadFile(filepath.Join(cfg.StorageDir, id, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(metadata, []byte(`"attempts": []`)) {
+		t.Fatalf("持久化元数据未保持空数组契约: %s", metadata)
 	}
 }
 

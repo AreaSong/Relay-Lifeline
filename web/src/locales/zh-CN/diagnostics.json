@@ -10,5 +10,7 @@
   "summary": "版本 {{version}} · 已运行 {{uptime}}",
   "exported": "诊断包已导出",
   "runFailed": "诊断失败",
-  "exportFailed": "导出失败"
+  "exportFailed": "导出失败",
+  "pathTitle": "执行路径",
+  "pathDescription": "按真实运行顺序检查，不会发起模型请求或消耗额度"
 }

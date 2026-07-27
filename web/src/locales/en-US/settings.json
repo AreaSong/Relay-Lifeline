@@ -1,5 +1,5 @@
 {
-  "tabs": { "general": "General", "retry": "Retry", "traffic": "Traffic", "safety": "Safety", "capture": "Capture", "notifications": "Notifications", "logging": "Logging" },
+  "tabs": { "general": "General", "retry": "Retry", "traffic": "Traffic", "safety": "Safety", "capture": "Capture", "notifications": "Notifications", "appearance": "Appearance", "logging": "Logging" },
   "sections": {
     "service": { "title": "Service and upstream", "description": "Listener and the single CPA upstream" },
     "localization": { "title": "Localization", "description": "Default, fallback, log, and notification languages" },
@@ -10,7 +10,8 @@
     "risk": { "title": "Risk alerts", "description": "Alerts only; requests are never stopped automatically" },
     "notifications": { "title": "Notifications", "description": "Delivered on an independent queue without blocking model requests" },
     "logging": { "title": "Logging", "description": "Structured runtime log settings" },
-    "capture": { "title": "Diagnostic capture and runtime logs", "description": "Encrypted body storage, retention, and automatic activation limits" }
+    "capture": { "title": "Diagnostic capture and runtime logs", "description": "Encrypted body storage, retention, and automatic activation limits" },
+    "appearance": { "title": "Console appearance", "description": "Follow the operating system or use an explicit light or dark workspace" }
   },
   "fields": {
     "listen": "Listen address", "requestBodyLimit": "Request body limit", "upstreamBaseUrl": "Upstream Base URL", "connectTimeout": "Connect timeout", "responseHeaderTimeout": "Response header timeout",
@@ -30,7 +31,13 @@
   "savedRestart": "Settings saved; some changes require a restart",
   "reloaded": "Reloaded from the configuration file",
   "unsaved": "Unsaved changes",
+  "changeSummary": "{{count}} configuration sections changed",
+  "changeSummary_one": "{{count}} configuration section changed",
+  "changeSections": "Changed sections: {{sections}}",
+  "noConfigChanges": "No gateway configuration changes",
   "leaveConfirm": "Discard unsaved settings?",
   "restartHint": "Changes to this field require a restart",
+  "hotReload": "Unmarked fields apply without restarting",
+  "restartApply": "Marked fields apply after restart",
   "units": { "unit": "Unit", "milliseconds": "Milliseconds", "seconds": "Seconds", "minutes": "Minutes", "hours": "Hours" }
 }

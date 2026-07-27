@@ -1,9 +1,26 @@
 {
   "columns": { "request": "Request", "result": "Result", "status": "Status", "attempts": "Attempts", "duration": "Duration", "nextRetry": "Next retry", "lastError": "Latest error", "actions": "Actions" },
   "emptyActive": "No active requests",
-  "history": { "title": "Request history", "description": "Only redacted metadata from this process is retained", "empty": "No completed requests yet" },
+  "filters": { "search": "Search request ID or path", "state": "State", "allStates": "All states" },
+  "summary": { "active": "Active", "requesting": "Requesting", "waiting": "Waiting", "queued": "Queued" },
+  "windowLabels": { "15m": "15 min", "1h": "1 hr", "6h": "6 hr", "24h": "24 hr" },
+  "history": { "title": "Request history", "description": "Only redacted metadata from this process is retained", "empty": "No completed requests yet", "window": "Time window", "events": "Operational events", "eventsEmpty": "No operational events in this process" },
   "timeline": { "label": "Request timeline", "attempts": "Attempts", "duration": "Duration" },
   "operationFailed": "Operation failed",
   "timelineLoadFailed": "Unable to load timeline",
+  "events": {
+    "request.received": "Request received",
+    "request.succeeded": "Request recovered",
+    "request.failed": "Request failed",
+    "request.canceled": "Request canceled",
+    "request.rejected": "Queue rejected request",
+    "upstream.failure": "Upstream attempt failed",
+    "upstream.attempt_started": "Upstream attempt started",
+    "upstream.recovered": "Upstream path recovered",
+    "admin.pause": "Gateway paused",
+    "admin.resume": "Gateway resumed",
+    "config.reload": "Configuration reloaded",
+    "config.save": "Configuration saved"
+  },
   "errorDetail": { "title": "Upstream error detail", "type": "Type", "code": "Error code", "requestId": "Upstream request ID", "retryAfter": "Retry-After", "responseBytes": "Response size", "structured": "The upstream returned a structured error", "unparsed": "The upstream returned an error response that could not be parsed safely" }
 }

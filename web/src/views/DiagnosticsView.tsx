@@ -1,4 +1,4 @@
-import { CircleCheck, CircleX, Download, Play, Stethoscope, TriangleAlert } from "lucide-react";
+import { CircleCheck, CircleX, Download, Play, Route, Stethoscope, TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { formatSeconds } from "../format";
 import type { DiagnosticCheck, DiagnosticReport } from "../types";
@@ -22,6 +22,8 @@ export function DiagnosticsView({ report, busy, run, download }: {
   </div></div>
     {!report ? <div className="empty-state"><Stethoscope size={25} /><span>{t("empty")}</span></div> : <>
       <div className={`diagnostic-summary ${report.healthy ? "healthy" : "unhealthy"}`}><strong>{report.healthy ? t("healthy") : t("unhealthy")}</strong><span>{t("summary", { version: report.version, uptime: formatSeconds(report.uptimeSeconds) })}</span></div>
+      <div className="section-heading"><div><h2>{t("pathTitle")}</h2><p>{t("pathDescription")}</p></div><Route size={18} /></div>
+      <div className="diagnostic-path" role="list">{report.checks.map((check) => <div className={`diagnostic-node ${check.status}`} role="listitem" key={`path-${check.id}`}><CheckIcon status={check.status} /><strong>{check.name}</strong></div>)}</div>
       <div className="check-list">{report.checks.map((check) => <div className={`check-row ${check.status}`} key={check.id}>
         <span><CheckIcon status={check.status} /></span><div><strong>{check.name}</strong><p>{check.message}</p></div>
       </div>)}</div>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
@@ -305,6 +307,82 @@ func TestGatewayStopsWhenClientCancels(t *testing.T) {
 	}
 	if registry.Snapshot(false).Active != 0 {
 		t.Fatal("取消后请求未清理")
+	}
+}
+
+func TestGatewayRecordsMonitoringLifecycleAndBoundedErrorCategory(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(writer, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"status":"completed"}`)
+	}))
+	defer upstream.Close()
+	gateway, _ := testGateway(t, upstream.URL)
+	metricsStore := monitoring.New()
+	gateway.SetMonitoring(metricsStore)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+
+	metrics := metricsStore.Metrics(15 * time.Minute)
+	if metrics.Totals.Requests != 1 || metrics.Totals.Successful != 1 || metrics.Totals.Attempts != 2 || metrics.Totals.FailedAttempts != 1 || metrics.Totals.Recovered != 1 {
+		t.Fatalf("网关监控计数异常: %+v", metrics.Totals)
+	}
+	if metrics.Load.Active != 0 || metrics.Load.Queued != 0 || metrics.Load.Waiting != 0 || metrics.Load.Requesting != 0 {
+		t.Fatalf("请求结束后负载未归零: %+v", metrics.Load)
+	}
+	errors := metricsStore.Errors()
+	serverFailures := false
+	for _, category := range errors.Categories {
+		if category.Code == "server" && category.Count == 1 {
+			serverFailures = true
+		}
+	}
+	if !serverFailures {
+		t.Fatalf("HTTP 503 未归入 server: %+v", errors.Categories)
+	}
+	events := metricsStore.Events(0, 10)
+	wantCodes := []string{"request.received", "upstream.attempt_started", "upstream.failure", "upstream.attempt_started", "upstream.recovered", "request.succeeded"}
+	if len(events.Events) != len(wantCodes) {
+		t.Fatalf("网关运行事件数量异常: %+v", events.Events)
+	}
+	for index, code := range wantCodes {
+		if events.Events[index].Code != code {
+			t.Fatalf("网关运行事件[%d] = %q，期望 %q", index, events.Events[index].Code, code)
+		}
+	}
+}
+
+func TestAttemptCategoryIsLimitedAndSpecific(t *testing.T) {
+	tests := []struct {
+		name   string
+		result attemptResult
+		want   string
+	}{
+		{name: "传输", result: attemptResult{err: errors.New("private transport detail")}, want: "transport"},
+		{name: "协议", result: attemptResult{response: &http.Response{StatusCode: http.StatusOK}}, want: "protocol"},
+		{name: "鉴权", result: attemptResult{response: &http.Response{StatusCode: http.StatusUnauthorized}}, want: "auth"},
+		{name: "限流", result: attemptResult{response: &http.Response{StatusCode: http.StatusTooManyRequests}}, want: "rate_limit"},
+		{name: "客户端", result: attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}}, want: "client"},
+		{name: "服务端", result: attemptResult{response: &http.Response{StatusCode: http.StatusBadGateway}}, want: "server"},
+		{name: "其他 HTTP", result: attemptResult{response: &http.Response{StatusCode: http.StatusTemporaryRedirect}}, want: "http"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := attemptCategory(test.result); got != test.want {
+				t.Fatalf("attemptCategory() = %q，期望 %q", got, test.want)
+			}
+		})
 	}
 }
 

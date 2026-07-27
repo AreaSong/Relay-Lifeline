@@ -131,5 +131,9 @@
   {"id":"diagnostic.disk.name","translation":"Cache disk space"},
   {"id":"diagnostic.disk.read_failed","translation":"Unable to read disk space"},
   {"id":"diagnostic.disk.low","translation":"Available space is below {{.Minimum}}"},
-  {"id":"diagnostic.disk.ready","translation":"{{.Available}} available"}
+  {"id":"diagnostic.disk.ready","translation":"{{.Available}} available"},
+  {"id":"api.monitoring.unavailable","translation":"Monitoring is unavailable"},
+  {"id":"api.monitoring.window_invalid","translation":"Window must be one of 15m, 1h, 6h, or 24h"},
+  {"id":"api.monitoring.cursor_invalid","translation":"Event cursor must be a non-negative integer"},
+  {"id":"api.monitoring.limit_invalid","translation":"Event limit must be between 1 and 200"}
 ]

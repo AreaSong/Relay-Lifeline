@@ -29,5 +29,7 @@
   "requestPart": "原始请求（已过滤）",
   "attemptPart": "第 {{count}} 次 CPA 响应（已过滤）",
   "finalPart": "最终响应（已过滤）",
-  "truncated": "正文已截断"
+  "truncated": "正文已截断",
+  "headers": "响应头"
+  ,"actions": "操作"
 }

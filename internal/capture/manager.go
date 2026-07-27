@@ -156,7 +156,8 @@ func (m *Manager) BeginRequest(requestID, method, path string, headers http.Head
 	record := Record{
 		ID: id, RequestID: requestID, Method: method, Path: sanitizePath(path), State: "active",
 		StartedAt: now, ExpiresAt: now.Add(m.config().Retention.Duration), WrappedKey: wrapped,
-		Request: BodyPart{Headers: safeHeaders(headers), ContentType: headers.Get("Content-Type")},
+		Request:  BodyPart{Headers: safeHeaders(headers), ContentType: headers.Get("Content-Type")},
+		Attempts: make([]Attempt, 0),
 	}
 	if err := os.MkdirAll(m.recordDir(id), 0o700); err != nil {
 		return "", err
@@ -474,7 +475,7 @@ func sanitizePath(value string) string {
 
 func cloneRecord(record Record) Record {
 	record.Request.Headers = record.Request.Headers.Clone()
-	record.Attempts = append([]Attempt(nil), record.Attempts...)
+	record.Attempts = append([]Attempt{}, record.Attempts...)
 	for i := range record.Attempts {
 		if record.Attempts[i].Response != nil {
 			part := *record.Attempts[i].Response

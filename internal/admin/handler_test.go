@@ -17,6 +17,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -252,5 +253,77 @@ func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
 	logResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs")
 	if logResponse.Code != http.StatusOK || !strings.Contains(logResponse.Body.String(), "capture.downloaded") {
 		t.Fatalf("审计日志缺失: %d %s", logResponse.Code, logResponse.Body.String())
+	}
+}
+
+func TestAdminMonitoringAPIsAndSecurityEventCursor(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.Default()
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(path, cfg)
+	handler := New(store, state.NewRegistry(), state.NewController())
+	metricsStore := monitoring.New()
+	metricsStore.RecordReceived()
+	metricsStore.RecordAttempt()
+	metricsStore.RecordAttemptFailure("auth")
+	metricsStore.RecordFinal("failed")
+	handler.SetMonitoring(metricsStore)
+
+	metricsResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/metrics?window=15m")
+	if metricsResponse.Code != http.StatusOK {
+		t.Fatalf("指标接口异常: %d %s", metricsResponse.Code, metricsResponse.Body.String())
+	}
+	var metrics monitoring.Metrics
+	if err := json.NewDecoder(metricsResponse.Body).Decode(&metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Window != "15m" || len(metrics.Series) != 15 || metrics.Totals.Requests != 1 || metrics.Totals.Failed != 1 {
+		t.Fatalf("指标响应异常: %+v", metrics)
+	}
+
+	errorResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/metrics/errors?window=15m")
+	if errorResponse.Code != http.StatusOK || !strings.Contains(errorResponse.Body.String(), `"window":"15m"`) || !strings.Contains(errorResponse.Body.String(), `"code":"auth","count":1`) {
+		t.Fatalf("错误分布接口异常: %d %s", errorResponse.Code, errorResponse.Body.String())
+	}
+	invalidWindow := authenticatedRequest(handler, http.MethodGet, "/admin/api/metrics?window=30m")
+	if invalidWindow.Code != http.StatusBadRequest || !strings.Contains(invalidWindow.Body.String(), "INVALID_METRICS_WINDOW") {
+		t.Fatalf("非法指标窗口未拒绝: %d %s", invalidWindow.Code, invalidWindow.Body.String())
+	}
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/admin/api/status", nil))
+	authenticatedRequest(handler, http.MethodPost, "/admin/api/control/pause")
+	authenticatedRequest(handler, http.MethodPost, "/admin/api/control/resume")
+
+	payload, _ := json.Marshal(cfg)
+	saveRequest := httptest.NewRequest(http.MethodPut, "/admin/api/config", bytes.NewReader(payload))
+	saveRequest.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	saveRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(saveRecorder, saveRequest)
+	if saveRecorder.Code != http.StatusOK {
+		t.Fatalf("配置保存事件准备失败: %d %s", saveRecorder.Code, saveRecorder.Body.String())
+	}
+	reloadRecorder := authenticatedRequest(handler, http.MethodPost, "/admin/api/config/reload")
+	if reloadRecorder.Code != http.StatusOK {
+		t.Fatalf("配置重载事件准备失败: %d %s", reloadRecorder.Code, reloadRecorder.Body.String())
+	}
+
+	eventsResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/events?after=0&limit=2")
+	if eventsResponse.Code != http.StatusOK {
+		t.Fatalf("安全事件接口异常: %d %s", eventsResponse.Code, eventsResponse.Body.String())
+	}
+	var page monitoring.EventPage
+	if err := json.NewDecoder(eventsResponse.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 2 || !page.HasMore || page.NextAfter != 2 || page.Events[0].Code != "admin.authentication_failed" || page.Events[1].Code != "admin.pause" {
+		t.Fatalf("安全事件游标异常: %+v", page)
+	}
+	next := authenticatedRequest(handler, http.MethodGet, "/admin/api/events?after=2&limit=10")
+	if next.Code != http.StatusOK || !strings.Contains(next.Body.String(), "admin.resume") || !strings.Contains(next.Body.String(), "config.save") || !strings.Contains(next.Body.String(), "config.reload") {
+		t.Fatalf("安全事件续页异常: %d %s", next.Code, next.Body.String())
 	}
 }

@@ -1,10 +1,12 @@
 {
   "brandSubtitle": "中转生命线控制台",
   "language": { "label": "语言", "zhCN": "简体中文", "enUS": "English" },
+  "theme": { "label": "外观", "system": "跟随系统", "light": "浅色", "dark": "深色" },
   "nav": { "overview": "概览", "requests": "请求", "history": "历史", "logs": "日志", "captures": "捕获", "diagnostics": "诊断", "settings": "设置" },
   "title": { "overview": "运行概览", "requests": "活动请求", "history": "请求历史", "logs": "实时运行日志", "captures": "诊断捕获", "diagnostics": "运行诊断", "settings": "网关设置" },
   "actions": { "refresh": "刷新", "pause": "暂停", "resume": "恢复", "logout": "退出", "close": "关闭", "save": "保存设置", "reload": "重新载入", "retry": "立即重试", "cancel": "取消请求", "openTimeline": "查看时间线", "discard": "放弃修改" },
-  "status": { "gatewayOnline": "Gateway 在线", "upstreamHealthy": "上游正常", "upstreamDegraded": "上游异常", "upstreamUnknown": "上游未知", "running": "运行中", "paused": "已暂停", "queued": "排队中", "waiting": "等待中", "requesting": "请求中", "completed": "已完成", "successful": "成功", "failed": "失败", "canceled": "已取消" },
+  "tools": "工具",
+  "status": { "gatewayOnline": "网关在线", "upstreamHealthy": "上游正常", "upstreamDegraded": "上游异常", "upstreamUnknown": "上游未知", "running": "运行中", "paused": "已暂停", "queued": "排队中", "waiting": "等待中", "requesting": "请求中", "completed": "已完成", "successful": "成功", "failed": "失败", "canceled": "已取消" },
   "time": { "seconds": "{{count}} 秒", "minutes": "{{count}} 分钟", "hoursMinutes": "{{hours}} 小时 {{minutes}} 分钟", "ago": "{{value}}前", "attempt": "第 {{count}} 次", "waitSeconds": "等待 {{count}} 秒" },
   "loading": "正在连接 Relay-Lifeline",
   "httpError": "HTTP {{status}}",
@@ -14,5 +16,6 @@
   "requestCount_other": "{{count}} 个请求",
   "recordCount": "{{count}} 条",
   "recordCount_one": "{{count}} 条",
-  "recordCount_other": "{{count}} 条"
+  "recordCount_other": "{{count}} 条",
+  "viewError": { "title": "当前页面无法显示", "description": "页面数据存在异常，代理服务和正在处理的请求不受影响。", "reload": "重新加载页面" }
 }

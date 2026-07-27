@@ -1,6 +1,70 @@
 {
-  "stats": { "active": "活动请求", "recovering": "等待恢复", "successful": "成功请求", "failedAttempts": "失败尝试" },
-  "alerts": { "title": "风险提醒", "description": "提醒不会改变当前重试策略", "empty": "当前没有风险提醒", "resolved": "请求已结束" },
-  "recent": { "title": "最近活动", "description": "当前处理中及等待恢复的请求" },
-  "queue": { "title": "请求队列", "description": "所有活动和等待重试的连接" }
+  "signal": {
+    "kicker": "信号连续性",
+    "healthyTitle": "中转链路保持连续。",
+    "degradedTitle": "上游恢复期间，链路正在托住请求。",
+    "unknownTitle": "正在等待首次上游信号。",
+    "healthyDescription": "请求正通过 Relay-Lifeline 连续到达已配置的中转站，没有发生中断。",
+    "degradedDescription": "活动连接会保持开启，Relay-Lifeline 将按策略重试，不会改写原请求。",
+    "unknownDescription": "网关已经在线，将在下一个请求到达时判断上游状态。",
+    "codex": "Codex",
+    "relay": "Relay-Lifeline",
+    "cpa": "CPA / 上游",
+    "healthy": "已连接",
+    "degraded": "恢复中",
+    "unknown": "待命",
+    "active": "活动",
+    "waiting": "等待",
+    "nextRetry": "下次重试",
+    "retryNow": "重试信号",
+    "staticFallback": "实时渲染不可用，运行数据仍保持更新"
+    ,"topologyLabel": "从 Codex 经 Relay-Lifeline 到已配置上游的实时链路"
+  },
+  "incident": {
+    "title": "故障模式",
+    "stable": "链路稳定",
+    "started": "故障开始",
+    "affected": "受影响请求",
+    "dominant": "主要错误",
+    "nextRetry": "下次恢复尝试",
+    "noRetry": "等待请求状态"
+  },
+  "stats": {
+    "active": "活动请求",
+    "recovering": "等待恢复",
+    "successful": "成功请求",
+    "failedAttempts": "失败尝试"
+  },
+  "charts": {
+    "reliability": "可靠性趋势",
+    "pressure": "请求压力",
+    "errors": "错误构成",
+    "recovery": "恢复时间分布",
+    "empty": "当前时间范围内没有观测数据",
+    "unavailable": "图表渲染不可用，运行控制仍可正常使用",
+    "requests": "请求",
+    "successRate": "成功率",
+    "active": "活动",
+    "waiting": "等待",
+    "queued": "排队",
+    "failedAttempts": "失败尝试",
+    "duration": "恢复耗时",
+    "window": "最近一小时"
+  },
+  "errorCategories": { "transport": "网络传输", "protocol": "响应协议", "auth": "鉴权", "rate_limit": "限流", "client": "客户端请求", "server": "上游服务", "http": "其他 HTTP" },
+  "recoveryBuckets": { "<=1s": "1 秒内", "<=5s": "5 秒内", "<=15s": "15 秒内", "<=30s": "30 秒内", "<=1m": "1 分钟内", "<=5m": "5 分钟内", "<=15m": "15 分钟内", "<=1h": "1 小时内", ">1h": "超过 1 小时" },
+  "alerts": {
+    "title": "风险提醒",
+    "description": "提醒不会改变当前重试策略",
+    "empty": "当前没有风险提醒",
+    "resolved": "请求已结束"
+  },
+  "recent": {
+    "title": "活动请求",
+    "description": "当前处理中及等待恢复的请求"
+  },
+  "queue": {
+    "title": "请求队列",
+    "description": "所有活动和等待重试的连接"
+  }
 }

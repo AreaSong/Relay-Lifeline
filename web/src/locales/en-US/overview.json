@@ -1,6 +1,70 @@
 {
-  "stats": { "active": "Active requests", "recovering": "Waiting to recover", "successful": "Successful requests", "failedAttempts": "Failed attempts" },
-  "alerts": { "title": "Risk alerts", "description": "Alerts do not change the active retry policy", "empty": "No risk alerts", "resolved": "Request ended" },
-  "recent": { "title": "Recent activity", "description": "Requests currently processing or waiting to recover" },
-  "queue": { "title": "Request queue", "description": "All active connections and requests waiting to retry" }
+  "signal": {
+    "kicker": "Signal continuity",
+    "healthyTitle": "The relay path is continuous.",
+    "degradedTitle": "The path is holding while upstream recovers.",
+    "unknownTitle": "Waiting for the first upstream signal.",
+    "healthyDescription": "Requests are moving through Relay-Lifeline to the configured relay without interruption.",
+    "degradedDescription": "Active connections stay open. Relay-Lifeline will retry according to policy without changing the request.",
+    "unknownDescription": "The gateway is online and will assess upstream health on the next request.",
+    "codex": "Codex",
+    "relay": "Relay-Lifeline",
+    "cpa": "CPA / upstream",
+    "healthy": "Connected",
+    "degraded": "Recovering",
+    "unknown": "Standby",
+    "active": "Active",
+    "waiting": "Waiting",
+    "nextRetry": "Next retry",
+    "retryNow": "Retry signal",
+    "staticFallback": "Live rendering unavailable; operational data remains current"
+    ,"topologyLabel": "Live route from Codex through Relay-Lifeline to the configured upstream"
+  },
+  "incident": {
+    "title": "Incident mode",
+    "stable": "Path stable",
+    "started": "Outage observed",
+    "affected": "Affected requests",
+    "dominant": "Dominant error",
+    "nextRetry": "Next recovery attempt",
+    "noRetry": "Awaiting request state"
+  },
+  "stats": {
+    "active": "Active requests",
+    "recovering": "Waiting to recover",
+    "successful": "Successful requests",
+    "failedAttempts": "Failed attempts"
+  },
+  "charts": {
+    "reliability": "Reliability trend",
+    "pressure": "Request pressure",
+    "errors": "Error composition",
+    "recovery": "Recovery-time distribution",
+    "empty": "No observations in this window",
+    "unavailable": "Chart rendering is unavailable; operational controls remain active",
+    "requests": "Requests",
+    "successRate": "Success rate",
+    "active": "Active",
+    "waiting": "Waiting",
+    "queued": "Queued",
+    "failedAttempts": "Failed attempts",
+    "duration": "Recovery",
+    "window": "Last hour"
+  },
+  "errorCategories": { "transport": "Transport", "protocol": "Protocol", "auth": "Authentication", "rate_limit": "Rate limit", "client": "Client request", "server": "Upstream server", "http": "Other HTTP" },
+  "recoveryBuckets": { "<=1s": "Up to 1 sec", "<=5s": "Up to 5 sec", "<=15s": "Up to 15 sec", "<=30s": "Up to 30 sec", "<=1m": "Up to 1 min", "<=5m": "Up to 5 min", "<=15m": "Up to 15 min", "<=1h": "Up to 1 hr", ">1h": "Over 1 hr" },
+  "alerts": {
+    "title": "Risk alerts",
+    "description": "Alerts do not change the active retry policy",
+    "empty": "No risk alerts",
+    "resolved": "Request ended"
+  },
+  "recent": {
+    "title": "Active requests",
+    "description": "Requests currently processing or waiting to recover"
+  },
+  "queue": {
+    "title": "Request queue",
+    "description": "All active connections and requests waiting to retry"
+  }
 }

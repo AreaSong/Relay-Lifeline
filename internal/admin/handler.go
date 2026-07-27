@@ -15,6 +15,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
@@ -32,7 +33,10 @@ type Handler struct {
 	notifier    *notify.Notifier
 	captures    *capture.Manager
 	runLogs     *runlog.Store
+	monitor     *monitoring.Store
 }
+
+func (h *Handler) SetMonitoring(store *monitoring.Store) { h.monitor = store }
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
 	return NewWithServices(store, registry, controller, risk.New(), diagnostics.New(store, "dev", time.Now()), nil)
@@ -54,6 +58,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	locale, fallback := h.requestLocales(request)
 	writer.Header().Set("Content-Language", locale)
 	if !h.authorized(request) {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
 		h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
 		return
 	}
@@ -63,6 +68,12 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
 	case request.Method == http.MethodGet && path == "/status":
 		writeJSON(writer, http.StatusOK, h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback))
+	case request.Method == http.MethodGet && path == "/metrics":
+		h.metrics(writer, request)
+	case request.Method == http.MethodGet && path == "/metrics/errors":
+		h.metricErrors(writer, request)
+	case request.Method == http.MethodGet && path == "/events":
+		h.securityEvents(writer, request)
 	case request.Method == http.MethodGet && path == "/config":
 		writeJSON(writer, http.StatusOK, h.store.Get())
 	case request.Method == http.MethodGet && path == "/alerts":
@@ -95,14 +106,20 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.updateConfig(writer, request)
 	case request.Method == http.MethodPost && path == "/config/reload":
 		if err := h.store.Reload(); err != nil {
+			h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.reload", Outcome: "failed"})
 			h.writeConfigError(writer, err, locale, fallback)
 			return
 		}
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.reload", Outcome: "succeeded"})
 		writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
 	case request.Method == http.MethodPost && path == "/control/pause":
-		writeJSON(writer, http.StatusOK, map[string]bool{"changed": h.controller.Pause(), "paused": true})
+		changed := h.controller.Pause()
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.pause", Outcome: "succeeded", Changed: monitoring.Bool(changed)})
+		writeJSON(writer, http.StatusOK, map[string]bool{"changed": changed, "paused": true})
 	case request.Method == http.MethodPost && path == "/control/resume":
-		writeJSON(writer, http.StatusOK, map[string]bool{"changed": h.controller.Resume(), "paused": false})
+		changed := h.controller.Resume()
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.resume", Outcome: "succeeded", Changed: monitoring.Bool(changed)})
+		writeJSON(writer, http.StatusOK, map[string]bool{"changed": changed, "paused": false})
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry")
 		h.requestAction(writer, h.registry.RetryNow(id), locale, fallback)
@@ -126,6 +143,69 @@ func (h *Handler) runtimeLogs(writer http.ResponseWriter, request *http.Request)
 	}
 	after, _ := strconv.ParseUint(request.URL.Query().Get("after"), 10, 64)
 	writeJSON(writer, http.StatusOK, h.runLogs.List(after, request.URL.Query().Get("level"), request.URL.Query().Get("event"), request.URL.Query().Get("requestId")))
+}
+
+func (h *Handler) metrics(writer http.ResponseWriter, request *http.Request) {
+	locale, fallback := h.requestLocales(request)
+	if h.monitor == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "MONITORING_UNAVAILABLE", l10n.M("api.monitoring.unavailable"), locale, fallback)
+		return
+	}
+	windowValue := request.URL.Query().Get("window")
+	if windowValue == "" {
+		windowValue = "1h"
+	}
+	window, valid := monitoring.ParseWindow(windowValue)
+	if !valid {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_METRICS_WINDOW", l10n.M("api.monitoring.window_invalid"), locale, fallback)
+		return
+	}
+	writeJSON(writer, http.StatusOK, h.monitor.Metrics(window))
+}
+
+func (h *Handler) metricErrors(writer http.ResponseWriter, request *http.Request) {
+	locale, fallback := h.requestLocales(request)
+	if h.monitor == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "MONITORING_UNAVAILABLE", l10n.M("api.monitoring.unavailable"), locale, fallback)
+		return
+	}
+	windowValue := request.URL.Query().Get("window")
+	if windowValue == "" {
+		windowValue = "24h"
+	}
+	window, valid := monitoring.ParseWindow(windowValue)
+	if !valid {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_METRICS_WINDOW", l10n.M("api.monitoring.window_invalid"), locale, fallback)
+		return
+	}
+	writeJSON(writer, http.StatusOK, h.monitor.ErrorsFor(window))
+}
+
+func (h *Handler) securityEvents(writer http.ResponseWriter, request *http.Request) {
+	locale, fallback := h.requestLocales(request)
+	if h.monitor == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "MONITORING_UNAVAILABLE", l10n.M("api.monitoring.unavailable"), locale, fallback)
+		return
+	}
+	after := uint64(0)
+	if raw := request.URL.Query().Get("after"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			h.writeError(writer, http.StatusBadRequest, "INVALID_EVENT_CURSOR", l10n.M("api.monitoring.cursor_invalid"), locale, fallback)
+			return
+		}
+		after = parsed
+	}
+	limit := 100
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			h.writeError(writer, http.StatusBadRequest, "INVALID_EVENT_LIMIT", l10n.M("api.monitoring.limit_invalid"), locale, fallback)
+			return
+		}
+		limit = parsed
+	}
+	writeJSON(writer, http.StatusOK, h.monitor.Events(after, limit))
 }
 
 func (h *Handler) exportRuntimeLogs(writer http.ResponseWriter, request *http.Request) {
@@ -342,20 +422,30 @@ func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request
 	decoder.DisallowUnknownFields()
 	var cfg config.Config
 	if err := decoder.Decode(&cfg); err != nil {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
 		h.writeError(writer, http.StatusBadRequest, "INVALID_CONFIG_JSON", l10n.M("api.config.invalid_json"), locale, fallback)
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
 		h.writeError(writer, http.StatusBadRequest, "TRAILING_CONFIG_JSON", l10n.M("api.config.trailing_json"), locale, fallback)
 		return
 	}
 	before := h.store.Get()
 	if err := h.store.Update(cfg, true); err != nil {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
 		h.writeConfigError(writer, err, locale, fallback)
 		return
 	}
 	restartRequired := before.Server.Listen != cfg.Server.Listen || before.Server.AdminEnabled != cfg.Server.AdminEnabled || before.Upstream != cfg.Upstream || before.Server.ReadHeaderTimeout != cfg.Server.ReadHeaderTimeout || before.Server.ShutdownTimeout != cfg.Server.ShutdownTimeout || before.Logging.Level != cfg.Logging.Level || before.Capture.StorageDir != cfg.Capture.StorageDir
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "succeeded", RestartRequired: monitoring.Bool(restartRequired)})
 	writeJSON(writer, http.StatusOK, map[string]bool{"saved": true, "restartRequired": restartRequired})
+}
+
+func (h *Handler) recordSecurityEvent(event monitoring.SecurityEvent) {
+	if h.monitor != nil {
+		h.monitor.RecordSecurityEvent(event)
+	}
 }
 
 func (h *Handler) requestAction(writer http.ResponseWriter, found bool, locale, fallback string) {

@@ -1,2 +1,15 @@
-<div id="root"></div>
-<script type="module" src="/src/main.tsx"></script>
+<!doctype html>
+<html lang="zh-CN" data-theme-mode="system" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#111412" />
+    <script id="theme-bootstrap">(function(){var k="relay-lifeline-theme",v=localStorage.getItem(k),m=v==="light"||v==="dark"?v:"system",q=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches,t=m==="system"?(q?"dark":"light"):m,r=document.documentElement;r.dataset.themeMode=m;r.dataset.theme=t;r.style.colorScheme=t}());</script>
+    <title>Relay-Lifeline</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
