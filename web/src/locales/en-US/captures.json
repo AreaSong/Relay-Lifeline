@@ -30,6 +30,17 @@
   "attemptPart": "CPA attempt {{count}} (filtered)",
   "finalPart": "Final response (filtered)",
   "truncated": "body truncated",
-  "headers": "Headers"
-  ,"actions": "Actions"
+  "headers": "Headers",
+  "actions": "Actions",
+  "keys": {
+    "title": "Capture key ring",
+    "summary": "Only key IDs and record counts are shown; key material is never displayed",
+    "active": "Active key ID",
+    "configured": "Configured key IDs",
+    "records": "Record distribution",
+    "unresolved": "Unresolved records",
+    "rewrap": "Rewrap with active key",
+    "rewrapConfirm": "Rewrap every capture data key with the active key. Continue?",
+    "rewrapped": "Rewrapped {{count}} capture records"
+  }
 }

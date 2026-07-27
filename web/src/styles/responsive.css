@@ -103,13 +103,13 @@
   .settings-tabs button.active { border-bottom-color: var(--accent); }
   .form-grid { grid-template-columns: 1fr; }
   .field.wide { grid-column: auto; }
-  .settings-actions { position: sticky; z-index: 10; bottom: 76px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .settings-actions { position: static; margin-top: 12px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 
   .timeline-drawer, .capture-drawer { width: min(100%, 560px); padding: 18px; }
   .diagnostic-path { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .diagnostic-node:nth-child(2n)::after { display: none; }
   .logs-heading, .captures-heading { align-items: flex-start; flex-direction: column; padding-block: 12px; }
-  .log-filters, .capture-controls { grid-template-columns: 1fr; }
+  .log-filters, .capture-controls, .capture-key-grid { grid-template-columns: 1fr; }
   .runtime-log { max-height: none; }
   .log-entry { grid-template-columns: 60px 44px minmax(0, 1fr); }
   .capture-table table { min-width: 0; }

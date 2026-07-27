@@ -31,10 +31,13 @@ func TestDiagnosticsUseTCPWithoutCallingModelAPI(t *testing.T) {
 		}
 	}()
 	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	t.Setenv("RELAY_LIFELINE_SENSITIVE_KEY", "abcdefghijklmnopqrstuvwx")
+	t.Setenv("RELAY_LIFELINE_CAPTURE_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.Default()
 	cfg.Upstream.BaseURL = "http://" + listener.Addr().String()
 	cfg.Stream.TempDir = t.TempDir()
+	cfg.Capture.StorageDir = t.TempDir()
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -72,9 +75,12 @@ func TestRedactedConfigRemovesURLSecrets(t *testing.T) {
 
 func TestDiagnosticsCanRenderEnglish(t *testing.T) {
 	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	t.Setenv("RELAY_LIFELINE_SENSITIVE_KEY", "abcdefghijklmnopqrstuvwx")
+	t.Setenv("RELAY_LIFELINE_CAPTURE_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	cfg := config.Default()
 	cfg.Upstream.BaseURL = "http://127.0.0.1:1"
 	cfg.Stream.TempDir = t.TempDir()
+	cfg.Capture.StorageDir = t.TempDir()
 	report := New(config.NewStore("", cfg), "test", time.Now()).Run(context.Background(), "en-US", "zh-CN")
 	if len(report.Checks) == 0 || report.Checks[0].Name != "Lifeline service" || report.Checks[0].Message != "Service process is running" {
 		t.Fatalf("英文诊断异常: %+v", report.Checks)

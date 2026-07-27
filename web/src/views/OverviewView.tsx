@@ -8,7 +8,7 @@ import { RequestsTable } from "../components/RequestsTable";
 import { SignalTopology } from "../components/SignalTopology";
 import type { Alert, MetricsErrors, MetricsSnapshot, Status } from "../types";
 
-export function OverviewView({ status, metrics, errors, alerts, api, refresh, onOpen, onError, locale, dark, incident }: {
+export function OverviewView({ status, metrics, errors, alerts, api, refresh, onOpen, onError, locale, dark, incident, canOperate }: {
   status: Status;
   metrics: MetricsSnapshot | null;
   errors: MetricsErrors | null;
@@ -20,6 +20,7 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
   locale: string;
   dark: boolean;
   incident: boolean;
+  canOperate: boolean;
 }) {
   const { t } = useTranslation(["common", "overview"]);
   const nextRetryAt = useMemo(() => status.requests.map((request) => request.nextRetryAt).filter(Boolean).sort()[0], [status.requests]);
@@ -88,7 +89,7 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
 
     <div className="overview-lower">
       <section className="content-section"><div className="section-heading"><div><h2>{t("overview:recent.title")}</h2><p>{t("overview:recent.description")}</p></div><span className={`mode ${status.paused ? "paused" : ""}`}>{status.paused ? t("common:status.paused") : t("common:status.running")}</span></div>
-        <RequestsTable requests={status.requests.slice(0, 6)} api={api} refresh={refresh} onOpen={onOpen} onError={onError} />
+        <RequestsTable requests={status.requests.slice(0, 6)} api={api} refresh={refresh} onOpen={onOpen} onError={onError} canOperate={canOperate} />
       </section>
       <div className="overview-side"><section className="content-section"><div className="section-heading"><div><h2>{t("overview:alerts.title")}</h2><p>{t("overview:alerts.description")}</p></div></div><AlertsList alerts={alerts} /></section></div>
     </div>

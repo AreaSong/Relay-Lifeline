@@ -6,31 +6,54 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/areasong/relay-lifeline/internal/config"
 )
 
-func TestValidateAdminKey(t *testing.T) {
+func TestValidateManagementKeys(t *testing.T) {
 	tests := []struct {
 		name         string
 		adminEnabled bool
-		adminKey     string
+		operatorKey  string
+		viewerKey    string
+		sensitiveKey string
 		wantError    bool
 	}{
 		{name: "控制台关闭时允许空密钥", adminEnabled: false},
-		{name: "控制台开启时拒绝空密钥", adminEnabled: true, wantError: true},
-		{name: "控制台开启时拒绝过短密钥", adminEnabled: true, adminKey: "short-key", wantError: true},
-		{name: "控制台开启时接受二十四字符密钥", adminEnabled: true, adminKey: "123456789012345678901234"},
+		{name: "控制台开启时拒绝空运维密钥", adminEnabled: true, sensitiveKey: "abcdefghijklmnopqrstuvwx", wantError: true},
+		{name: "控制台开启时拒绝空敏感密钥", adminEnabled: true, operatorKey: "123456789012345678901234", wantError: true},
+		{name: "拒绝相同的运维和敏感密钥", adminEnabled: true, operatorKey: "123456789012345678901234", sensitiveKey: "123456789012345678901234", wantError: true},
+		{name: "接受独立分层密钥", adminEnabled: true, operatorKey: "123456789012345678901234", viewerKey: "viewer-key-12345678901234", sensitiveKey: "abcdefghijklmnopqrstuvwx"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateAdminKey(test.adminEnabled, test.adminKey)
+			err := validateManagementKeys(test.adminEnabled, test.operatorKey, test.viewerKey, test.sensitiveKey)
 			if (err != nil) != test.wantError {
 				t.Fatalf("validateAdminKey() error = %v, wantError = %v", err, test.wantError)
 			}
 		})
+	}
+}
+
+func TestReadinessHandlerDistinguishesReadyAndDraining(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
+	handler := readinessHandler(&ready)
+
+	available := httptest.NewRecorder()
+	handler.ServeHTTP(available, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if available.Code != http.StatusOK || !strings.Contains(available.Body.String(), "ready") {
+		t.Fatalf("就绪响应异常: %d %s", available.Code, available.Body.String())
+	}
+
+	ready.Store(false)
+	draining := httptest.NewRecorder()
+	handler.ServeHTTP(draining, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if draining.Code != http.StatusServiceUnavailable || !strings.Contains(draining.Body.String(), "draining") {
+		t.Fatalf("排空响应异常: %d %s", draining.Code, draining.Body.String())
 	}
 }
 

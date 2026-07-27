@@ -1,4 +1,4 @@
-import type { Alert, CapturePreview, CaptureRecord, CaptureStatus, Config, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RuntimeLogEntry, Status } from "./types";
+import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -17,10 +17,32 @@ export function errorMessage(reason: unknown, fallbackKey = "generic") {
   return i18n.t(`errors:${fallbackKey}`);
 }
 
+function expectObject<T>(value: unknown, label: string): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError("INVALID_API_RESPONSE", `${label}: expected object`);
+  return value as T;
+}
+
+function expectArray<T>(value: unknown, label: string): T[] {
+  if (!Array.isArray(value)) throw new ApiError("INVALID_API_RESPONSE", `${label}: expected array`);
+  return value as T[];
+}
+
+function expectObjectArrays<T>(value: unknown, label: string, fields: string[]): T {
+  const object = expectObject<Record<string, unknown>>(value, label);
+  fields.forEach((field) => expectArray(object[field], `${label}.${field}`));
+  return object as T;
+}
+
+function expectCaptureRecord(value: unknown, label: string): CaptureRecord {
+  const record = expectObject<Record<string, unknown>>(value, label);
+  expectArray(record.attempts, `${label}.attempts`);
+  return record as unknown as CaptureRecord;
+}
+
 export class ApiClient {
   constructor(private token: string, private locale = normalizeLocale(i18n.resolvedLanguage)) {}
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, validate: (value: unknown) => T = (value) => value as T): Promise<T> {
     const response = await fetch(`/admin/api${path}`, {
       ...init,
       headers: {
@@ -34,65 +56,86 @@ export class ApiClient {
     if (!response.ok) {
       throw new ApiError(payload.code || `HTTP_${response.status}`, payload.error || i18n.t("common:httpError", { status: response.status }), payload.details);
     }
-    return payload as T;
+    return validate(payload);
   }
 
   session() {
-    return this.request<{ authenticated: boolean }>("/session");
+    return this.request<SessionInfo>("/session", undefined, (value) => expectObjectArrays(value, "session", ["capabilities"]));
+  }
+
+  runtimeInfo() {
+    return this.request<RuntimeInfo>("/meta", undefined, (value) => expectObject(value, "meta"));
   }
 
   status() {
-    return this.request<Status>("/status");
+    return this.request<Status>("/status", undefined, (value) => expectObjectArrays(value, "status", ["requests"]));
   }
 
   config() {
-    return this.request<Config>("/config");
+    return this.request<Config>("/config", undefined, (value) => {
+      const config = expectObject<Config>(value, "config");
+      if (config.schemaVersion !== 1) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
+      return config;
+    });
   }
 
   alerts() {
-    return this.request<Alert[]>("/alerts");
+    return this.request<Alert[]>("/alerts", undefined, (value) => expectArray(value, "alerts"));
   }
 
   history() {
-    return this.request<HistoryRecord[]>("/history");
+    return this.request<HistoryRecord[]>("/history", undefined, (value) => expectArray(value, "history"));
   }
 
   metrics(window: MetricsWindow = "1h") {
-    return this.request<MetricsSnapshot>(`/metrics?window=${window}`);
+    return this.request<MetricsSnapshot>(`/metrics?window=${window}`, undefined, (value) => expectObjectArrays(value, "metrics", ["series"]));
   }
 
   metricErrors(window: MetricsWindow = "1h") {
-    return this.request<MetricsErrors>(`/metrics/errors?window=${window}`);
+    return this.request<MetricsErrors>(`/metrics/errors?window=${window}`, undefined, (value) => expectObjectArrays(value, "metricErrors", ["categories"]));
   }
 
   events(after = 0, limit = 200) {
-    return this.request<MonitoringEvents>(`/events?after=${after}&limit=${limit}`);
+    return this.request<MonitoringEvents>(`/events?after=${after}&limit=${limit}`, undefined, (value) => expectObjectArrays(value, "events", ["events"]));
   }
 
-  runtimeLogs(filters: { after?: number; level?: string; event?: string; requestId?: string } = {}) {
+  runtimeLogs(filters: { after?: number; limit?: number; tail?: boolean; level?: string; event?: string; requestId?: string } = {}) {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
-    return this.request<RuntimeLogEntry[]>(`/runtime-logs?${query}`);
+    return this.request<RuntimeLogPage>(`/runtime-logs?${query}`, undefined, (value) => expectObjectArrays(value, "runtimeLogs", ["entries"]));
   }
 
   captureStatus() {
-    return this.request<CaptureStatus>("/capture/status");
+    return this.request<CaptureStatus>("/capture/status", undefined, (value) => expectObject(value, "captureStatus"));
+  }
+
+  captureKeyStatus() {
+    return this.request<CaptureKeyStatus>("/capture/keys", undefined, (value) => expectObjectArrays(value, "captureKeys", ["configured"]));
+  }
+
+  rewrapCaptureKeys() {
+    return this.request<CaptureKeyRewrapResult>("/capture/keys/rewrap", { method: "POST" }, (value) => expectObject(value, "captureKeyRewrap"));
   }
 
   captures() {
-    return this.request<CaptureRecord[]>("/captures");
+    return this.request<CaptureRecord[]>("/captures", undefined, (value) => expectArray<unknown>(value, "captures").map((record, index) => expectCaptureRecord(record, `captures[${index}]`)));
   }
 
   startCapture(requestLimit: number, activationTimeout: string) {
-    return this.request<CaptureStatus>("/capture/start", { method: "POST", body: JSON.stringify({ requestLimit, activationTimeout }) });
+    return this.request<CaptureStatus>("/capture/start", { method: "POST", body: JSON.stringify({ requestLimit, activationTimeout }) }, (value) => expectObject(value, "captureStart"));
   }
 
   stopCapture() {
-    return this.request<CaptureStatus>("/capture/stop", { method: "POST" });
+    return this.request<CaptureStatus>("/capture/stop", { method: "POST" }, (value) => expectObject(value, "captureStop"));
   }
 
   capturePreview(id: string) {
-    return this.request<CapturePreview>(`/captures/${encodeURIComponent(id)}/preview`);
+    return this.request<CapturePreview>(`/captures/${encodeURIComponent(id)}/preview`, undefined, (value) => {
+      const preview = expectObject<Record<string, unknown>>(value, "capturePreview");
+      expectCaptureRecord(preview.record, "capturePreview.record");
+      expectArray(preview.parts, "capturePreview.parts");
+      return preview as unknown as CapturePreview;
+    });
   }
 
   deleteCapture(id: string) {
@@ -143,11 +186,15 @@ export class ApiClient {
     URL.revokeObjectURL(link.href);
   }
 
+  validateConfig(config: Config) {
+    return this.request<ConfigChangePlan>("/config/validate", { method: "POST", body: JSON.stringify(config) }, (value) => expectObjectArrays(value, "configPlan", ["changedSections", "hotReloadSections", "restartSections"]));
+  }
+
   saveConfig(config: Config) {
-    return this.request<{ saved: boolean; restartRequired: boolean }>("/config", {
+    return this.request<ConfigSaveResult>("/config", {
       method: "PUT",
       body: JSON.stringify(config),
-    });
+    }, (value) => expectObjectArrays(value, "configSave", ["changedSections", "hotReloadSections", "restartSections"]));
   }
 
   reloadConfig() {

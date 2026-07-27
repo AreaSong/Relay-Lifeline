@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,15 +10,16 @@ import (
 )
 
 type downstreamWriter struct {
-	mu          sync.Mutex
-	writer      http.ResponseWriter
-	streaming   bool
-	stop        chan struct{}
-	done        chan struct{}
-	onHeartbeat func()
+	mu           sync.Mutex
+	writer       http.ResponseWriter
+	streaming    bool
+	stop         chan struct{}
+	done         chan struct{}
+	onHeartbeat  func()
+	onDisconnect func(error)
 }
 
-func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.Duration, callbacks ...func()) *downstreamWriter {
+func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.Duration, onHeartbeat func(), onDisconnect func(error)) *downstreamWriter {
 	if streaming {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.Header().Set("Cache-Control", "no-cache")
@@ -27,12 +29,12 @@ func startDownstream(writer http.ResponseWriter, streaming bool, heartbeat time.
 	}
 	writer.Header().Set("X-Relay-Lifeline", "1")
 	writer.WriteHeader(http.StatusOK)
-	if flusher, ok := writer.(http.Flusher); ok {
-		flusher.Flush()
+	downstream := &downstreamWriter{
+		writer: writer, streaming: streaming, stop: make(chan struct{}), done: make(chan struct{}),
+		onHeartbeat: onHeartbeat, onDisconnect: onDisconnect,
 	}
-	downstream := &downstreamWriter{writer: writer, streaming: streaming, stop: make(chan struct{}), done: make(chan struct{})}
-	if len(callbacks) > 0 {
-		downstream.onHeartbeat = callbacks[0]
+	if err := flushResponse(writer); err != nil && downstream.onDisconnect != nil {
+		downstream.onDisconnect(err)
 	}
 	go downstream.heartbeat(heartbeat)
 	return downstream
@@ -48,15 +50,22 @@ func (d *downstreamWriter) heartbeat(interval time.Duration) {
 			return
 		case <-ticker.C:
 			d.mu.Lock()
+			var err error
 			if d.streaming {
-				_, _ = io.WriteString(d.writer, ": relay-lifeline keepalive\n\n")
+				_, err = io.WriteString(d.writer, ": relay-lifeline keepalive\n\n")
 			} else {
-				_, _ = io.WriteString(d.writer, "\n")
+				_, err = io.WriteString(d.writer, "\n")
 			}
-			if flusher, ok := d.writer.(http.Flusher); ok {
-				flusher.Flush()
+			if err == nil {
+				err = flushResponse(d.writer)
 			}
 			d.mu.Unlock()
+			if err != nil {
+				if d.onDisconnect != nil {
+					d.onDisconnect(err)
+				}
+				return
+			}
 			if d.onHeartbeat != nil {
 				d.onHeartbeat()
 			}
@@ -78,8 +87,8 @@ func (d *downstreamWriter) deliver(buffer *ReplayBuffer) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	_, err := buffer.WriteTo(d.writer)
-	if flusher, ok := d.writer.(http.Flusher); ok {
-		flusher.Flush()
+	if err == nil {
+		err = flushResponse(d.writer)
 	}
 	return err
 }
@@ -93,7 +102,13 @@ func (d *downstreamWriter) fail(message string) {
 	} else {
 		_, _ = fmt.Fprintf(d.writer, "{\"error\":{\"message\":%q,\"type\":\"relay_lifeline_error\"}}", message)
 	}
-	if flusher, ok := d.writer.(http.Flusher); ok {
-		flusher.Flush()
+	_ = flushResponse(d.writer)
+}
+
+func flushResponse(writer http.ResponseWriter) error {
+	err := http.NewResponseController(writer).Flush()
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
 	}
+	return err
 }

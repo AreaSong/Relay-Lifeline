@@ -1,9 +1,11 @@
 export type Duration = string;
 
 export interface Config {
+  schemaVersion: number;
   server: {
     listen: string;
     adminEnabled: boolean;
+    configBackupDir: string;
     readHeaderTimeout: Duration;
     shutdownTimeout: Duration;
     maxRequestBody: string;
@@ -12,6 +14,7 @@ export interface Config {
     baseUrl: string;
     connectTimeout: Duration;
     responseHeaderTimeout: Duration;
+    responseBodyIdleTimeout: Duration;
   };
   retry: {
     enabled: boolean;
@@ -81,6 +84,38 @@ export interface Config {
   };
 }
 
+export interface RuntimeInfo {
+  version: string;
+  revision: string;
+  builtAt: string;
+  goVersion: string;
+  platform: string;
+  imageRef?: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  adminApiVersion: string;
+  configSchemaVersion: number;
+}
+
+export interface SessionInfo {
+  authenticated: boolean;
+  role: "viewer" | "operator" | "sensitive";
+  capabilities: Array<"view" | "operate" | "sensitive">;
+}
+
+export interface ConfigChangePlan {
+  schemaVersion: number;
+  changedSections: string[];
+  hotReloadSections: string[];
+  restartSections: string[];
+  restartRequired: boolean;
+}
+
+export interface ConfigSaveResult extends ConfigChangePlan {
+  saved: boolean;
+  backupPath?: string;
+}
+
 export interface RequestInfo {
   id: string;
   method: string;
@@ -148,6 +183,8 @@ export interface HistoryRecord {
   lastErrorDetails?: Record<string, unknown>;
   lastErrorDetail?: ErrorDetail;
   events: TimelineEvent[];
+  eventsTruncated?: boolean;
+  droppedEvents?: number;
 }
 
 export interface Alert {
@@ -193,6 +230,14 @@ export interface RuntimeLogEntry {
   fields?: Record<string, unknown>;
 }
 
+export interface RuntimeLogPage {
+  entries: RuntimeLogEntry[];
+  nextAfter: number;
+  oldestAfter: number;
+  hasMore: boolean;
+  hasGap: boolean;
+}
+
 export interface CaptureStatus {
   available: boolean;
   unavailableReason?: string;
@@ -202,6 +247,19 @@ export interface CaptureStatus {
   storageBytes: number;
   maxTotalBytes: number;
   captureCount: number;
+}
+
+export interface CaptureKeyStatus {
+  activeId: string;
+  configured: string[];
+  recordsById: Record<string, number>;
+  unresolved: number;
+}
+
+export interface CaptureKeyRewrapResult {
+  activeId: string;
+  updated: number;
+  unchanged: number;
 }
 
 export interface CaptureBodyPart {
@@ -231,7 +289,7 @@ export interface CaptureRecord {
   completedAt?: string;
   expiresAt: string;
   request: CaptureBodyPart;
-  attempts: CaptureAttempt[] | null;
+  attempts: CaptureAttempt[];
   final?: CaptureBodyPart;
   capturedBytes: number;
   warnings?: string[];

@@ -2,7 +2,7 @@
 
 [English](localization.md)
 
-Relay-Lifeline 的 Web UI、管理 API、CLI、诊断、日志、Webhook、历史、时间线、告警和配置校验均支持 `zh-CN` 与 `en-US`。
+Transfer Lifeline 的 Web UI、管理 API、CLI、诊断、日志、Webhook、历史、时间线、告警和配置校验均支持 `zh-CN` 与 `en-US`。
 
 ## 语言来源
 

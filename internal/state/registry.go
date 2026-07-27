@@ -172,6 +172,24 @@ func (r *Registry) RetryNow(id string) bool {
 	return true
 }
 
+func (r *Registry) RetryWaiting() int {
+	r.mu.RLock()
+	ids := make([]string, 0)
+	for id, request := range r.requests {
+		if request.info.State == "waiting" {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.RUnlock()
+	retried := 0
+	for _, id := range ids {
+		if r.RetryNow(id) {
+			retried++
+		}
+	}
+	return retried
+}
+
 func (r *Registry) RecordEvent(id string, event timeline.Event) { r.timeline.Add(id, event) }
 
 func (r *Registry) Timeline(id string) (timeline.Record, bool) { return r.timeline.Request(id) }

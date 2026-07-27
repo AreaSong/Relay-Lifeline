@@ -2,7 +2,6 @@ package diagnostics
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
@@ -98,22 +98,21 @@ func (s *Service) checkConfigFile() Check {
 }
 
 func (s *Service) checkAdminKey() Check {
-	if len(os.Getenv("RELAY_LIFELINE_ADMIN_KEY")) < 24 {
+	operator := os.Getenv("RELAY_LIFELINE_ADMIN_KEY")
+	viewer := os.Getenv("RELAY_LIFELINE_VIEWER_KEY")
+	sensitive := os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY")
+	if len(operator) < 24 || len(sensitive) < 24 || viewer != "" && len(viewer) < 24 {
 		return failed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.invalid", nil)
 	}
-	return passed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.valid", nil)
+	if operator == sensitive || viewer != "" && (viewer == operator || viewer == sensitive) {
+		return failed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.not_distinct", nil)
+	}
+	return passed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.valid", map[string]any{"ViewerConfigured": viewer != ""})
 }
 
 func (s *Service) checkCapture(cfg config.Config) Check {
-	value := os.Getenv("RELAY_LIFELINE_CAPTURE_KEY")
-	if value == "" {
-		return warning("capture", "diagnostic.capture.name", "diagnostic.capture.not_configured", nil)
-	}
-	key, err := base64.RawStdEncoding.DecodeString(value)
-	if err != nil || len(key) != 32 {
-		key, err = base64.StdEncoding.DecodeString(value)
-	}
-	if err != nil || len(key) != 32 {
+	keyring, err := capture.KeyringFromEnvironment()
+	if err != nil {
 		return failed("capture", "diagnostic.capture.name", "diagnostic.capture.key_invalid", nil)
 	}
 	file, err := os.CreateTemp(cfg.Capture.StorageDir, ".capture-diagnostic-*")
@@ -128,7 +127,7 @@ func (s *Service) checkCapture(cfg config.Config) Check {
 	}
 	file.Close()
 	os.Remove(name)
-	return passed("capture", "diagnostic.capture.name", "diagnostic.capture.ready", nil)
+	return passed("capture", "diagnostic.capture.name", "diagnostic.capture.ready", map[string]any{"ActiveID": keyring.ActiveID, "KeyCount": len(keyring.Keys)})
 }
 
 func (s *Service) checkUpstream(ctx context.Context, cfg config.Config) Check {

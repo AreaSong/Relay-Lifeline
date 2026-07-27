@@ -2,6 +2,7 @@
   "tabs": { "general": "常规", "retry": "重试", "traffic": "流量", "safety": "安全", "capture": "捕获", "notifications": "通知", "appearance": "外观", "logging": "日志" },
   "sections": {
     "service": { "title": "服务与上游", "description": "监听地址及唯一 CPA 上游" },
+    "runtime": { "title": "运行身份", "description": "用于确认当前二进制、镜像和管理契约" },
     "localization": { "title": "本地化", "description": "默认、回退、日志和通知语言" },
     "retry": { "title": "重试策略", "description": "失败请求的等待与恢复规则" },
     "stream": { "title": "流式与缓存", "description": "SSE 保活及完整响应交付" },
@@ -14,7 +15,7 @@
     "appearance": { "title": "控制台外观", "description": "跟随操作系统，或显式使用浅色、深色工作区" }
   },
   "fields": {
-    "listen": "监听地址", "requestBodyLimit": "请求体上限", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时",
+    "listen": "监听地址", "requestBodyLimit": "请求体上限", "configBackupDir": "配置回滚目录", "configBackupDefault": "默认使用配置文件旁的 .relay-lifeline-backups", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时", "responseBodyIdleTimeout": "响应正文空闲超时",
     "defaultLocale": "默认语言", "fallbackLocale": "回退语言", "loggingLocale": "日志语言", "notificationLocale": "通知语言",
     "enableRetry": "启用重试", "errorScope": "错误范围", "allErrors": "所有错误", "transientErrors": "仅临时错误", "maxAttempts": "最大尝试次数", "minWait": "最小等待", "maxWait": "最大等待", "honorRetryAfter": "遵循 Retry-After",
     "heartbeat": "心跳间隔", "memoryLimit": "内存缓存上限", "tempDir": "临时目录", "systemDefault": "系统默认",
@@ -29,6 +30,8 @@
   "logLevels": { "debug": "调试", "info": "信息", "warn": "警告", "error": "错误" },
   "saved": "设置已保存并生效",
   "savedRestart": "设置已保存，部分配置重启后生效",
+  "savedBackup": "设置已保存，回滚副本位于 {{path}}",
+  "restartConfirm": "本次修改涉及 {{count}} 个需要重启的配置分区，确认保存吗？",
   "reloaded": "已从配置文件重新载入",
   "unsaved": "存在未保存的修改",
   "changeSummary": "已修改 {{count}} 个配置分区",
@@ -39,5 +42,6 @@
   "restartHint": "修改此字段后需要重启",
   "hotReload": "未标记字段无需重启即可生效",
   "restartApply": "已标记字段将在重启后生效",
+  "runtime": { "version": "版本", "revision": "源码 Commit", "builtAt": "构建时间", "startedAt": "启动时间", "platform": "运行平台", "contract": "契约版本", "image": "镜像引用" },
   "units": { "unit": "单位", "milliseconds": "毫秒", "seconds": "秒", "minutes": "分钟", "hours": "小时" }
 }

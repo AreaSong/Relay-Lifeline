@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/buildinfo"
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
@@ -27,16 +27,18 @@ type Handler struct {
 	store       *config.Store
 	registry    *state.Registry
 	controller  *state.Controller
-	adminKey    string
+	auth        authenticator
 	risk        *risk.Manager
 	diagnostics *diagnostics.Service
 	notifier    *notify.Notifier
 	captures    *capture.Manager
 	runLogs     *runlog.Store
 	monitor     *monitoring.Store
+	runtimeInfo func() buildinfo.Info
 }
 
-func (h *Handler) SetMonitoring(store *monitoring.Store) { h.monitor = store }
+func (h *Handler) SetMonitoring(store *monitoring.Store)         { h.monitor = store }
+func (h *Handler) SetRuntimeInfo(provider func() buildinfo.Info) { h.runtimeInfo = provider }
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
 	return NewWithServices(store, registry, controller, risk.New(), diagnostics.New(store, "dev", time.Now()), nil)
@@ -48,7 +50,7 @@ func NewWithServices(store *config.Store, registry *state.Registry, controller *
 
 func NewWithExtendedServices(store *config.Store, registry *state.Registry, controller *state.Controller, riskManager *risk.Manager, diagnosticService *diagnostics.Service, notifier *notify.Notifier, captures *capture.Manager, runLogs *runlog.Store) *Handler {
 	return &Handler{
-		store: store, registry: registry, controller: controller, adminKey: os.Getenv("RELAY_LIFELINE_ADMIN_KEY"),
+		store: store, registry: registry, controller: controller, auth: newAuthenticatorFromEnvironment(),
 		risk: riskManager, diagnostics: diagnosticService, notifier: notifier, captures: captures, runLogs: runLogs,
 	}
 }
@@ -57,15 +59,28 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	setSecurityHeaders(writer.Header())
 	locale, fallback := h.requestLocales(request)
 	writer.Header().Set("Content-Language", locale)
-	if !h.authorized(request) {
+	path := strings.TrimPrefix(request.URL.Path, "/admin/api")
+	role, authenticated := h.auth.authenticate(request)
+	if !authenticated {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
 		h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
 		return
 	}
-	path := strings.TrimPrefix(request.URL.Path, "/admin/api")
+	writer.Header().Set("X-Relay-Lifeline-Role", string(role))
+	if !role.allows(requiredRole(request, path)) {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authorization_failed", Outcome: "denied"})
+		h.writeError(writer, http.StatusForbidden, "INSUFFICIENT_PERMISSION", l10n.M("api.admin.permission_denied"), locale, fallback)
+		return
+	}
 	switch {
 	case request.Method == http.MethodGet && path == "/session":
-		writeJSON(writer, http.StatusOK, map[string]bool{"authenticated": true})
+		writeJSON(writer, http.StatusOK, sessionFor(role))
+	case request.Method == http.MethodGet && path == "/meta":
+		if h.runtimeInfo == nil {
+			writeJSON(writer, http.StatusOK, buildinfo.New("dev", "unknown", "unknown", "", time.Now()).Snapshot(config.CurrentSchemaVersion))
+			return
+		}
+		writeJSON(writer, http.StatusOK, h.runtimeInfo())
 	case request.Method == http.MethodGet && path == "/status":
 		writeJSON(writer, http.StatusOK, h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback))
 	case request.Method == http.MethodGet && path == "/metrics":
@@ -75,7 +90,13 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodGet && path == "/events":
 		h.securityEvents(writer, request)
 	case request.Method == http.MethodGet && path == "/config":
-		writeJSON(writer, http.StatusOK, h.store.Get())
+		if role == RoleViewer {
+			writeJSON(writer, http.StatusOK, diagnostics.RedactedConfig(h.store.Get()))
+		} else {
+			writeJSON(writer, http.StatusOK, h.store.Get())
+		}
+	case request.Method == http.MethodPost && path == "/config/validate":
+		h.validateConfig(writer, request)
 	case request.Method == http.MethodGet && path == "/alerts":
 		writeJSON(writer, http.StatusOK, risk.Localize(h.risk.Recent(100), locale, fallback))
 	case request.Method == http.MethodGet && path == "/history":
@@ -90,6 +111,10 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.startCapture(writer, request, locale, fallback)
 	case request.Method == http.MethodPost && path == "/capture/stop":
 		h.stopCapture(writer, locale, fallback)
+	case request.Method == http.MethodGet && path == "/capture/keys":
+		h.captureKeyStatus(writer, locale, fallback)
+	case request.Method == http.MethodPost && path == "/capture/keys/rewrap":
+		h.rewrapCaptureKeys(writer, locale, fallback)
 	case request.Method == http.MethodGet && path == "/captures":
 		h.listCaptures(writer, locale, fallback)
 	case request.Method == http.MethodDelete && path == "/captures/expired":
@@ -137,12 +162,57 @@ type captureActivation struct {
 }
 
 func (h *Handler) runtimeLogs(writer http.ResponseWriter, request *http.Request) {
+	locale, fallback := h.requestLocales(request)
 	if h.runLogs == nil {
-		writeJSON(writer, http.StatusOK, []runlog.Entry{})
+		writeJSON(writer, http.StatusOK, runlog.Page{Entries: []runlog.Entry{}})
 		return
 	}
-	after, _ := strconv.ParseUint(request.URL.Query().Get("after"), 10, 64)
-	writeJSON(writer, http.StatusOK, h.runLogs.List(after, request.URL.Query().Get("level"), request.URL.Query().Get("event"), request.URL.Query().Get("requestId")))
+	after, limit, ok := h.logPageParameters(writer, request, locale, fallback)
+	if !ok {
+		return
+	}
+	query := request.URL.Query()
+	if query.Get("tail") == "true" {
+		writeJSON(writer, http.StatusOK, h.runLogs.Tail(limit, query.Get("level"), query.Get("event"), query.Get("requestId")))
+		return
+	}
+	writeJSON(writer, http.StatusOK, h.runLogs.Page(after, limit, query.Get("level"), query.Get("event"), query.Get("requestId")))
+}
+
+func (h *Handler) logPageParameters(writer http.ResponseWriter, request *http.Request, locale, fallback string) (uint64, int, bool) {
+	query := request.URL.Query()
+	after := uint64(0)
+	if raw := query.Get("after"); raw != "" {
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_CURSOR", l10n.M("api.logs.cursor_invalid"), locale, fallback)
+			return 0, 0, false
+		}
+		after = parsed
+	}
+	limit := 200
+	if raw := query.Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_LIMIT", l10n.M("api.logs.limit_invalid"), locale, fallback)
+			return 0, 0, false
+		}
+		limit = parsed
+	}
+	level := query.Get("level")
+	if level != "" && level != "debug" && level != "info" && level != "warn" && level != "error" {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_LEVEL", l10n.M("api.logs.level_invalid"), locale, fallback)
+		return 0, 0, false
+	}
+	if len(query.Get("event")) > 128 || len(query.Get("requestId")) > 128 {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_FILTER", l10n.M("api.logs.filter_invalid"), locale, fallback)
+		return 0, 0, false
+	}
+	if tail := query.Get("tail"); tail != "" && tail != "true" && tail != "false" {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_TAIL", l10n.M("api.logs.tail_invalid"), locale, fallback)
+		return 0, 0, false
+	}
+	return after, limit, true
 }
 
 func (h *Handler) metrics(writer http.ResponseWriter, request *http.Request) {
@@ -210,7 +280,12 @@ func (h *Handler) securityEvents(writer http.ResponseWriter, request *http.Reque
 
 func (h *Handler) exportRuntimeLogs(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Content-Disposition", "attachment; filename=relay-lifeline-runtime-logs.json")
-	h.runtimeLogs(writer, request)
+	if h.runLogs == nil {
+		writeJSON(writer, http.StatusOK, []runlog.Entry{})
+		return
+	}
+	query := request.URL.Query()
+	writeJSON(writer, http.StatusOK, h.runLogs.List(0, query.Get("level"), query.Get("event"), query.Get("requestId")))
 }
 
 func (h *Handler) captureStatus(writer http.ResponseWriter, locale, fallback string) {
@@ -251,6 +326,29 @@ func (h *Handler) stopCapture(writer http.ResponseWriter, locale, fallback strin
 	h.captures.Stop()
 	h.audit("capture.stopped", "诊断捕获已停止", nil)
 	writeJSON(writer, http.StatusOK, h.captures.Status())
+}
+
+func (h *Handler) captureKeyStatus(writer http.ResponseWriter, locale, fallback string) {
+	if h.captures == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "CAPTURE_UNAVAILABLE", l10n.M("api.capture.unavailable"), locale, fallback)
+		return
+	}
+	writeJSON(writer, http.StatusOK, h.captures.KeyStatus())
+}
+
+func (h *Handler) rewrapCaptureKeys(writer http.ResponseWriter, locale, fallback string) {
+	if h.captures == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "CAPTURE_UNAVAILABLE", l10n.M("api.capture.unavailable"), locale, fallback)
+		return
+	}
+	result, err := h.captures.RewrapAll()
+	if err != nil {
+		h.audit("capture.keys_rewrap_failed", "捕获密钥重包裹失败", nil)
+		h.writeError(writer, http.StatusInternalServerError, "CAPTURE_KEY_REWRAP_FAILED", l10n.M("api.capture.key_rewrap_failed"), locale, fallback)
+		return
+	}
+	h.audit("capture.keys_rewrapped", "捕获密钥已重包裹", map[string]any{"activeId": result.ActiveID, "updated": result.Updated})
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func (h *Handler) listCaptures(writer http.ResponseWriter, locale, fallback string) {
@@ -342,12 +440,15 @@ func (h *Handler) captureError(writer http.ResponseWriter, err error, locale, fa
 }
 
 type diagnosticBundle struct {
-	GeneratedAt time.Time          `json:"generatedAt"`
-	Report      diagnostics.Report `json:"report"`
-	Config      config.Config      `json:"config"`
-	Status      state.Snapshot     `json:"status"`
-	History     []timeline.Record  `json:"history"`
-	Alerts      []risk.Alert       `json:"alerts"`
+	GeneratedAt time.Time           `json:"generatedAt"`
+	Report      diagnostics.Report  `json:"report"`
+	Config      config.Config       `json:"config"`
+	Status      state.Snapshot      `json:"status"`
+	History     []timeline.Record   `json:"history"`
+	Alerts      []risk.Alert        `json:"alerts"`
+	RuntimeLogs []runlog.Entry      `json:"runtimeLogs"`
+	Metrics     *monitoring.Metrics `json:"metrics,omitempty"`
+	Errors      *monitoring.Errors  `json:"errors,omitempty"`
 }
 
 func (h *Handler) requestTimeline(writer http.ResponseWriter, path, locale, fallback string) {
@@ -375,10 +476,24 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 	if len(history) > 50 {
 		history = history[:50]
 	}
+	logs := []runlog.Entry{}
+	if h.runLogs != nil {
+		logs = h.runLogs.List(0, "", "", "")
+		if len(logs) > 200 {
+			logs = logs[len(logs)-200:]
+		}
+	}
+	var metrics *monitoring.Metrics
+	var metricErrors *monitoring.Errors
+	if h.monitor != nil {
+		snapshot := h.monitor.Metrics(time.Hour)
+		errors := h.monitor.ErrorsFor(time.Hour)
+		metrics, metricErrors = &snapshot, &errors
+	}
 	writer.Header().Set("Content-Disposition", "attachment; filename=relay-lifeline-diagnostics.json")
 	writeJSON(writer, http.StatusOK, diagnosticBundle{
 		GeneratedAt: time.Now(), Report: report, Config: diagnostics.RedactedConfig(h.store.Get()),
-		Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback), History: timeline.LocalizeRecords(timeline.WithoutErrorDetails(history), locale, fallback), Alerts: risk.Localize(h.risk.Recent(50), locale, fallback),
+		Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback), History: timeline.LocalizeRecords(timeline.WithoutErrorDetails(history), locale, fallback), Alerts: risk.Localize(h.risk.Recent(50), locale, fallback), RuntimeLogs: logs, Metrics: metrics, Errors: metricErrors,
 	})
 }
 
@@ -400,23 +515,41 @@ func (h *Handler) recordDiagnosticAlerts(report diagnostics.Report) {
 	}
 }
 
-func (h *Handler) authorized(request *http.Request) bool {
-	if h.adminKey == "" {
-		return false
-	}
-	authorization := request.Header.Get("Authorization")
-	if !strings.HasPrefix(authorization, "Bearer ") {
-		return false
-	}
-	provided := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
-	if len(provided) != len(h.adminKey) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(h.adminKey)) == 1
-}
-
 func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request) {
 	locale, fallback := h.requestLocales(request)
+	cfg, ok := h.decodeConfig(writer, request, locale, fallback)
+	if !ok {
+		return
+	}
+	plan := config.PlanChanges(h.store.Get(), cfg)
+	result, err := h.store.UpdateWithResult(cfg, true)
+	if err != nil {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
+		h.writeConfigError(writer, err, locale, fallback)
+		return
+	}
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "succeeded", RestartRequired: monitoring.Bool(plan.RestartRequired)})
+	writeJSON(writer, http.StatusOK, struct {
+		Saved      bool   `json:"saved"`
+		BackupPath string `json:"backupPath,omitempty"`
+		config.ChangePlan
+	}{Saved: true, BackupPath: result.BackupPath, ChangePlan: plan})
+}
+
+func (h *Handler) validateConfig(writer http.ResponseWriter, request *http.Request) {
+	locale, fallback := h.requestLocales(request)
+	cfg, ok := h.decodeConfig(writer, request, locale, fallback)
+	if !ok {
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		h.writeConfigError(writer, err, locale, fallback)
+		return
+	}
+	writeJSON(writer, http.StatusOK, config.PlanChanges(h.store.Get(), cfg))
+}
+
+func (h *Handler) decodeConfig(writer http.ResponseWriter, request *http.Request, locale, fallback string) (config.Config, bool) {
 	reader := io.LimitReader(request.Body, 1<<20)
 	decoder := json.NewDecoder(reader)
 	decoder.DisallowUnknownFields()
@@ -424,22 +557,19 @@ func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request
 	if err := decoder.Decode(&cfg); err != nil {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
 		h.writeError(writer, http.StatusBadRequest, "INVALID_CONFIG_JSON", l10n.M("api.config.invalid_json"), locale, fallback)
-		return
+		return config.Config{}, false
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
 		h.writeError(writer, http.StatusBadRequest, "TRAILING_CONFIG_JSON", l10n.M("api.config.trailing_json"), locale, fallback)
-		return
+		return config.Config{}, false
 	}
-	before := h.store.Get()
-	if err := h.store.Update(cfg, true); err != nil {
-		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
+	migrated, err := config.Migrate(cfg)
+	if err != nil {
 		h.writeConfigError(writer, err, locale, fallback)
-		return
+		return config.Config{}, false
 	}
-	restartRequired := before.Server.Listen != cfg.Server.Listen || before.Server.AdminEnabled != cfg.Server.AdminEnabled || before.Upstream != cfg.Upstream || before.Server.ReadHeaderTimeout != cfg.Server.ReadHeaderTimeout || before.Server.ShutdownTimeout != cfg.Server.ShutdownTimeout || before.Logging.Level != cfg.Logging.Level || before.Capture.StorageDir != cfg.Capture.StorageDir
-	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "succeeded", RestartRequired: monitoring.Bool(restartRequired)})
-	writeJSON(writer, http.StatusOK, map[string]bool{"saved": true, "restartRequired": restartRequired})
+	return migrated, true
 }
 
 func (h *Handler) recordSecurityEvent(event monitoring.SecurityEvent) {
@@ -483,6 +613,7 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 
 func setSecurityHeaders(headers http.Header) {
 	headers.Set("Cache-Control", "no-store")
+	headers.Set("X-Relay-Lifeline-API-Version", buildinfo.AdminAPIVersion)
 	headers.Set("X-Content-Type-Options", "nosniff")
 	headers.Set("X-Frame-Options", "DENY")
 	headers.Set("Referrer-Policy", "no-referrer")

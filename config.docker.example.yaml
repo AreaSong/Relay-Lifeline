@@ -1,14 +1,18 @@
+schema-version: 1
+
 server:
   listen: "0.0.0.0:8318"
   admin-enabled: true
+  config-backup-dir: "/var/lib/relay-lifeline/captures/config-backups"
   read-header-timeout: "10s"
-  shutdown-timeout: "15s"
+  shutdown-timeout: "3m"
   max-request-body: "32MiB"
 
 upstream:
   base-url: "http://host.docker.internal:8317"
   connect-timeout: "10s"
   response-header-timeout: "30s"
+  response-body-idle-timeout: "90s"
 
 retry:
   enabled: true

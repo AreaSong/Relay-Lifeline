@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -18,7 +19,7 @@ func TestLoadMergesDefaultsAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.Listen != "127.0.0.1:8318" || cfg.Retry.MinInterval.Duration != time.Second {
+	if cfg.Server.Listen != "127.0.0.1:8318" || cfg.Retry.MinInterval.Duration != time.Second || cfg.Upstream.ResponseBodyIdleTimeout.Duration != 90*time.Second {
 		t.Fatalf("配置合并异常: %+v", cfg)
 	}
 	if cfg.History.MaxItems != 500 || cfg.Observability.ErrorDetails != "safe" || cfg.Observability.MaxErrorDetail != 2<<10 || cfg.Risk.WarningAttempts != 10 || cfg.Notifications.DeliveryAttempts != 3 {
@@ -130,5 +131,78 @@ func TestSaveFallsBackWhenDirectoryIsReadOnly(t *testing.T) {
 	loaded, err := Load(path)
 	if err != nil || loaded.Retry.Mode != "all-errors" {
 		t.Fatalf("回退写入失败: %v", err)
+	}
+}
+
+func TestMigrateAddsCurrentSchemaAndRejectsFutureSchema(t *testing.T) {
+	cfg := Default()
+	cfg.SchemaVersion = 0
+	migrated, err := Migrate(cfg)
+	if err != nil || migrated.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("旧配置迁移失败: version=%d err=%v", migrated.SchemaVersion, err)
+	}
+
+	cfg.SchemaVersion = CurrentSchemaVersion + 1
+	if _, err := Migrate(cfg); err == nil {
+		t.Fatal("应拒绝未来版本的配置 schema")
+	}
+}
+
+func TestPlanChangesSeparatesHotReloadAndRestartSections(t *testing.T) {
+	before := Default()
+	after := before
+	after.Retry.MaxAttempts = 3
+	after.Server.MaxRequestBody = 64 << 20
+	plan := PlanChanges(before, after)
+	if plan.RestartRequired || !slices.Equal(plan.ChangedSections, []string{"server", "retry"}) || !slices.Equal(plan.HotReloadSections, []string{"server", "retry"}) {
+		t.Fatalf("热更新分类异常: %+v", plan)
+	}
+
+	after.Upstream.BaseURL = "http://127.0.0.1:8317"
+	after.Capture.StorageDir = filepath.Join(t.TempDir(), "captures")
+	plan = PlanChanges(before, after)
+	if !plan.RestartRequired || !slices.Contains(plan.RestartSections, "upstream") || !slices.Contains(plan.RestartSections, "capture") {
+		t.Fatalf("重启分类异常: %+v", plan)
+	}
+}
+
+func TestStoreBacksUpConfigurationWithRestrictedPermissionsAndRetention(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "config.yaml")
+	backupDirectory := filepath.Join(directory, "backups")
+	cfg := Default()
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(path, cfg)
+	for iteration := 0; iteration < 11; iteration++ {
+		cfg.Retry.MaxAttempts = iteration + 1
+		cfg.Server.ConfigBackupDir = backupDirectory
+		result, updateErr := store.UpdateWithResult(cfg, true)
+		if updateErr != nil {
+			t.Fatal(updateErr)
+		}
+		if iteration == 0 {
+			backup, readErr := os.ReadFile(result.BackupPath)
+			if readErr != nil || !slices.Equal(backup, original) {
+				t.Fatalf("首个备份内容异常: %v", readErr)
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(backupDirectory)
+	if err != nil || len(entries) != 10 {
+		t.Fatalf("备份轮换异常: count=%d err=%v", len(entries), err)
+	}
+	for _, entry := range entries {
+		info, statErr := entry.Info()
+		if statErr != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("备份权限异常: %s mode=%v err=%v", entry.Name(), info.Mode().Perm(), statErr)
+		}
 	}
 }

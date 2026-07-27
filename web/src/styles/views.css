@@ -167,6 +167,11 @@ tbody tr:hover { background: color-mix(in srgb, var(--surface-muted) 58%, transp
 .settings-diff { margin: 16px 0 0; padding: 12px 14px; color: var(--text-soft); background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; }
 .settings-diff.dirty { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); }
 .settings-diff strong { display: block; margin-bottom: 6px; color: var(--text); }
+.runtime-info { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0 0 18px; overflow: hidden; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.runtime-info div { min-width: 0; padding: 12px 14px; background: var(--surface-raised); }
+.runtime-info dt { margin-bottom: 5px; color: var(--text-soft); font-size: 11px; }
+.runtime-info dd { margin: 0; overflow-wrap: anywhere; color: var(--text); font-size: 13px; }
+.runtime-info code { font-size: 11px; }
 
 .timeline-drawer, .capture-drawer { color: var(--text); background: var(--surface); box-shadow: var(--shadow-float); }
 .drawer-backdrop { z-index: 50; background: rgba(5, 8, 6, .46); backdrop-filter: blur(4px); }
@@ -189,5 +194,9 @@ tbody tr:hover { background: color-mix(in srgb, var(--surface-muted) 58%, transp
 .capture-usage progress::-webkit-progress-bar { background: var(--surface-muted); }
 .capture-usage progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; }
 .capture-usage progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
+.capture-key-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.capture-key-grid > div { min-width: 0; padding: 12px 14px; background: var(--surface-raised); }
+.capture-key-grid span { display: block; margin-bottom: 5px; color: var(--text-soft); font-size: 10px; }
+.capture-key-grid strong { display: block; overflow-wrap: anywhere; color: var(--text); font: 12px var(--font-mono); }
 
 [data-tooltip]::after { color: var(--scene-text); background: var(--scene-raised); border: 1px solid var(--scene-line); box-shadow: var(--shadow-float); }

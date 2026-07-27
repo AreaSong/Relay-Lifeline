@@ -3,11 +3,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ThemeSelector } from "../components/ThemeSelector";
 import type { ThemeMode } from "../theme";
-import type { Config } from "../types";
+import type { Config, RuntimeInfo } from "../types";
 
 type Tab = "general" | "retry" | "traffic" | "safety" | "capture" | "notifications" | "appearance" | "logging";
 type Locale = "zh-CN" | "en-US";
-const configTabs: Record<keyof Config, Tab> = {
+type EditableConfigKey = Exclude<keyof Config, "schemaVersion">;
+const configTabs: Record<EditableConfigKey, Tab> = {
   server: "general", upstream: "general", localization: "general", retry: "retry", stream: "retry",
   queue: "traffic", history: "traffic", observability: "safety", risk: "safety", capture: "capture",
   notifications: "notifications", logging: "logging",
@@ -92,19 +93,20 @@ interface Props {
   discard: () => void;
   dirty: boolean;
   baseline: Config;
+  runtimeInfo: RuntimeInfo | null;
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
 }
 
-export function SettingsView({ config, setConfig, save, reload, discard, dirty, baseline, themeMode, setThemeMode }: Props) {
+export function SettingsView({ config, setConfig, save, reload, discard, dirty, baseline, runtimeInfo, themeMode, setThemeMode }: Props) {
   const { t } = useTranslation(["settings", "common"]);
   const [tab, setTab] = useState<Tab>("general");
-  const patch = <K extends keyof Config>(key: K, value: Partial<Config[K]>) => setConfig({ ...config, [key]: { ...config[key], ...value } });
+  const patch = <K extends EditableConfigKey>(key: K, value: Partial<Config[K]>) => setConfig({ ...config, [key]: { ...config[key], ...value } });
   const toggleEvent = (eventType: string, enabled: boolean) => patch("notifications", {
     eventTypes: enabled ? Array.from(new Set([...config.notifications.eventTypes, eventType])) : config.notifications.eventTypes.filter((value) => value !== eventType),
   });
   const tabs: Tab[] = ["general", "retry", "traffic", "safety", "capture", "notifications", "appearance", "logging"];
-  const changedSections = Array.from(new Set((Object.keys(config) as Array<keyof Config>)
+  const changedSections = Array.from(new Set((Object.keys(configTabs) as EditableConfigKey[])
     .filter((key) => JSON.stringify(config[key]) !== JSON.stringify(baseline[key]))
     .map((key) => configTabs[key])));
   const restartHint = <small className="field-hint">{t("settings:restartHint")}</small>;
@@ -116,12 +118,17 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
       <div className="settings-apply-legend"><span><Zap size={14} />{t("settings:hotReload")}</span><span><Power size={14} />{t("settings:restartApply")}</span></div>
       {tab === "general" && <>
         <section><div className="section-heading"><div><h2>{t("settings:sections.service.title")}</h2><p>{t("settings:sections.service.description")}</p></div></div><div className="form-grid">
-          <label className="field"><span>{t("settings:fields.listen")}</span><input required value={config.server.listen} onChange={(event) => patch("server", { listen: event.target.value })} />{restartHint}</label>
-          <ByteSizeField label={t("settings:fields.requestBodyLimit")} value={config.server.maxRequestBody} onChange={(maxRequestBody) => patch("server", { maxRequestBody })} />
-          <label className="field wide"><span>{t("settings:fields.upstreamBaseUrl")}</span><input required type="url" value={config.upstream.baseUrl} onChange={(event) => patch("upstream", { baseUrl: event.target.value })} />{restartHint}</label>
+	          <label className="field"><span>{t("settings:fields.listen")}</span><input required value={config.server.listen} onChange={(event) => patch("server", { listen: event.target.value })} />{restartHint}</label>
+	          <ByteSizeField label={t("settings:fields.requestBodyLimit")} value={config.server.maxRequestBody} onChange={(maxRequestBody) => patch("server", { maxRequestBody })} />
+	          <label className="field wide"><span>{t("settings:fields.configBackupDir")}</span><input value={config.server.configBackupDir} onChange={(event) => patch("server", { configBackupDir: event.target.value })} placeholder={t("settings:fields.configBackupDefault")} /></label>
+	          <label className="field wide"><span>{t("settings:fields.upstreamBaseUrl")}</span><input required type="url" value={config.upstream.baseUrl} onChange={(event) => patch("upstream", { baseUrl: event.target.value })} />{restartHint}</label>
           <DurationField restart label={t("settings:fields.connectTimeout")} value={config.upstream.connectTimeout} onChange={(connectTimeout) => patch("upstream", { connectTimeout })} />
           <DurationField restart label={t("settings:fields.responseHeaderTimeout")} value={config.upstream.responseHeaderTimeout} onChange={(responseHeaderTimeout) => patch("upstream", { responseHeaderTimeout })} />
-        </div></section>
+	          <DurationField restart label={t("settings:fields.responseBodyIdleTimeout")} value={config.upstream.responseBodyIdleTimeout} onChange={(responseBodyIdleTimeout) => patch("upstream", { responseBodyIdleTimeout })} />
+	        </div></section>
+	        <section><div className="section-heading"><div><h2>{t("settings:sections.runtime.title")}</h2><p>{t("settings:sections.runtime.description")}</p></div></div>
+	          <dl className="runtime-info"><div><dt>{t("settings:runtime.version")}</dt><dd>{runtimeInfo?.version || t("common:notAvailable")}</dd></div><div><dt>{t("settings:runtime.revision")}</dt><dd><code>{runtimeInfo?.revision || t("common:notAvailable")}</code></dd></div><div><dt>{t("settings:runtime.builtAt")}</dt><dd>{runtimeInfo?.builtAt || t("common:notAvailable")}</dd></div><div><dt>{t("settings:runtime.startedAt")}</dt><dd>{runtimeInfo ? new Date(runtimeInfo.startedAt).toLocaleString() : t("common:notAvailable")}</dd></div><div><dt>{t("settings:runtime.platform")}</dt><dd>{runtimeInfo ? `${runtimeInfo.platform} · ${runtimeInfo.goVersion}` : t("common:notAvailable")}</dd></div><div><dt>{t("settings:runtime.contract")}</dt><dd>{runtimeInfo ? `API v${runtimeInfo.adminApiVersion} · Config v${runtimeInfo.configSchemaVersion}` : `Config v${config.schemaVersion}`}</dd></div>{runtimeInfo?.imageRef && <div><dt>{t("settings:runtime.image")}</dt><dd><code>{runtimeInfo.imageRef}</code></dd></div>}</dl>
+	        </section>
         <section><div className="section-heading"><div><h2>{t("settings:sections.localization.title")}</h2><p>{t("settings:sections.localization.description")}</p></div></div><div className="form-grid">
           <LocaleField label={t("settings:fields.defaultLocale")} value={config.localization.defaultLocale} onChange={(defaultLocale) => patch("localization", { defaultLocale })} />
           <LocaleField label={t("settings:fields.fallbackLocale")} value={config.localization.fallbackLocale} onChange={(fallbackLocale) => patch("localization", { fallbackLocale })} />

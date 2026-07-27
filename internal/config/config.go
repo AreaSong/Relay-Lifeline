@@ -17,6 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const CurrentSchemaVersion = 1
+
 type Duration struct {
 	time.Duration
 }
@@ -80,6 +82,7 @@ func (b *ByteSize) UnmarshalJSON(data []byte) error {
 }
 
 type Config struct {
+	SchemaVersion int                 `yaml:"schema-version" json:"schemaVersion"`
 	Server        ServerConfig        `yaml:"server" json:"server"`
 	Upstream      UpstreamConfig      `yaml:"upstream" json:"upstream"`
 	Retry         RetryConfig         `yaml:"retry" json:"retry"`
@@ -97,15 +100,17 @@ type Config struct {
 type ServerConfig struct {
 	Listen            string   `yaml:"listen" json:"listen"`
 	AdminEnabled      bool     `yaml:"admin-enabled" json:"adminEnabled"`
+	ConfigBackupDir   string   `yaml:"config-backup-dir" json:"configBackupDir"`
 	ReadHeaderTimeout Duration `yaml:"read-header-timeout" json:"readHeaderTimeout"`
 	ShutdownTimeout   Duration `yaml:"shutdown-timeout" json:"shutdownTimeout"`
 	MaxRequestBody    ByteSize `yaml:"max-request-body" json:"maxRequestBody"`
 }
 
 type UpstreamConfig struct {
-	BaseURL               string   `yaml:"base-url" json:"baseUrl"`
-	ConnectTimeout        Duration `yaml:"connect-timeout" json:"connectTimeout"`
-	ResponseHeaderTimeout Duration `yaml:"response-header-timeout" json:"responseHeaderTimeout"`
+	BaseURL                 string   `yaml:"base-url" json:"baseUrl"`
+	ConnectTimeout          Duration `yaml:"connect-timeout" json:"connectTimeout"`
+	ResponseHeaderTimeout   Duration `yaml:"response-header-timeout" json:"responseHeaderTimeout"`
+	ResponseBodyIdleTimeout Duration `yaml:"response-body-idle-timeout" json:"responseBodyIdleTimeout"`
 }
 
 type RetryConfig struct {
@@ -186,16 +191,18 @@ type LoggingConfig struct {
 
 func Default() Config {
 	return Config{
+		SchemaVersion: CurrentSchemaVersion,
 		Server: ServerConfig{
 			Listen: "127.0.0.1:8318", AdminEnabled: true,
 			ReadHeaderTimeout: duration(10 * time.Second),
-			ShutdownTimeout:   duration(15 * time.Second),
+			ShutdownTimeout:   duration(3 * time.Minute),
 			MaxRequestBody:    ByteSize(32 << 20),
 		},
 		Upstream: UpstreamConfig{
-			BaseURL:               "http://cli-proxy-api:8317",
-			ConnectTimeout:        duration(10 * time.Second),
-			ResponseHeaderTimeout: duration(30 * time.Second),
+			BaseURL:                 "http://cli-proxy-api:8317",
+			ConnectTimeout:          duration(10 * time.Second),
+			ResponseHeaderTimeout:   duration(30 * time.Second),
+			ResponseBodyIdleTimeout: duration(90 * time.Second),
 		},
 		Retry: RetryConfig{
 			Enabled: true, Mode: "all-errors",
@@ -253,6 +260,9 @@ func Load(path string) (Config, error) {
 
 func (c Config) Validate() error {
 	var problems []error
+	if c.SchemaVersion != CurrentSchemaVersion {
+		problems = append(problems, l10n.E("config.schema.unsupported", nil, map[string]any{"Version": c.SchemaVersion, "Current": CurrentSchemaVersion}))
+	}
 	if strings.TrimSpace(c.Server.Listen) == "" {
 		problems = append(problems, l10n.E("config.server.listen_required", nil))
 	}
@@ -262,7 +272,7 @@ func (c Config) Validate() error {
 	} else if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		problems = append(problems, l10n.E("config.upstream.scheme_invalid", nil))
 	}
-	if c.Upstream.ConnectTimeout.Duration <= 0 || c.Upstream.ResponseHeaderTimeout.Duration <= 0 {
+	if c.Upstream.ConnectTimeout.Duration <= 0 || c.Upstream.ResponseHeaderTimeout.Duration <= 0 || c.Upstream.ResponseBodyIdleTimeout.Duration <= 0 {
 		problems = append(problems, l10n.E("config.upstream.timeout_invalid", nil))
 	}
 	if c.Retry.Mode != "all-errors" && c.Retry.Mode != "transient-errors" {
@@ -279,6 +289,9 @@ func (c Config) Validate() error {
 	}
 	if c.Server.MaxRequestBody < 1<<20 {
 		problems = append(problems, l10n.E("config.server.body_limit", nil))
+	}
+	if c.Server.ConfigBackupDir != "" && !filepath.IsAbs(c.Server.ConfigBackupDir) {
+		problems = append(problems, l10n.E("config.server.backup_dir", nil))
 	}
 	if c.Queue.MaxActive < 1 || c.Queue.MaxWaiting < 0 || c.Queue.RecoverySpacing.Duration < 0 {
 		problems = append(problems, l10n.E("config.queue.invalid", nil))
@@ -351,6 +364,61 @@ func (c Config) Validate() error {
 	return errors.Join(problems...)
 }
 
+func Migrate(cfg Config) (Config, error) {
+	if cfg.SchemaVersion == 0 {
+		cfg.SchemaVersion = CurrentSchemaVersion
+	}
+	if cfg.SchemaVersion != CurrentSchemaVersion {
+		return Config{}, l10n.E("config.schema.unsupported", nil, map[string]any{"Version": cfg.SchemaVersion, "Current": CurrentSchemaVersion})
+	}
+	return cfg, nil
+}
+
+type ChangePlan struct {
+	SchemaVersion     int      `json:"schemaVersion"`
+	ChangedSections   []string `json:"changedSections"`
+	HotReloadSections []string `json:"hotReloadSections"`
+	RestartSections   []string `json:"restartSections"`
+	RestartRequired   bool     `json:"restartRequired"`
+}
+
+func PlanChanges(before, after Config) ChangePlan {
+	changed := make([]string, 0)
+	hot := make([]string, 0)
+	restart := make([]string, 0)
+	appendSection := func(name string, differs, needsRestart bool) {
+		if !differs {
+			return
+		}
+		changed = append(changed, name)
+		if needsRestart {
+			restart = append(restart, name)
+		} else {
+			hot = append(hot, name)
+		}
+	}
+	serverRestart := before.Server.Listen != after.Server.Listen || before.Server.AdminEnabled != after.Server.AdminEnabled || before.Server.ReadHeaderTimeout != after.Server.ReadHeaderTimeout || before.Server.ShutdownTimeout != after.Server.ShutdownTimeout
+	appendSection("server", before.Server != after.Server, serverRestart)
+	appendSection("upstream", before.Upstream != after.Upstream, true)
+	appendSection("retry", before.Retry != after.Retry, false)
+	appendSection("stream", before.Stream != after.Stream, false)
+	appendSection("queue", before.Queue != after.Queue, false)
+	appendSection("history", before.History != after.History, false)
+	appendSection("observability", before.Observability != after.Observability, false)
+	appendSection("capture", before.Capture != after.Capture, before.Capture.StorageDir != after.Capture.StorageDir)
+	appendSection("risk", before.Risk != after.Risk, false)
+	appendSection("localization", before.Localization != after.Localization, false)
+	appendSection("notifications", !notificationEqual(before.Notifications, after.Notifications), false)
+	appendSection("logging", before.Logging != after.Logging, before.Logging.Level != after.Logging.Level)
+	return ChangePlan{SchemaVersion: CurrentSchemaVersion, ChangedSections: changed, HotReloadSections: hot, RestartSections: restart, RestartRequired: len(restart) > 0}
+}
+
+func notificationEqual(left, right NotificationConfig) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	return bytes.Equal(leftJSON, rightJSON)
+}
+
 func (c Config) Save(path string) error {
 	if err := c.Validate(); err != nil {
 		return err
@@ -411,9 +479,10 @@ func writeBoundFile(path string, data []byte, cause error) error {
 }
 
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	cfg  Config
+	mu         sync.RWMutex
+	path       string
+	cfg        Config
+	lastBackup string
 }
 
 func NewStore(path string, cfg Config) *Store { return &Store{path: path, cfg: cfg} }
@@ -431,18 +500,45 @@ func (s *Store) Get() Config {
 }
 
 func (s *Store) Update(cfg Config, persist bool) error {
-	if err := cfg.Validate(); err != nil {
-		return err
+	_, err := s.UpdateWithResult(cfg, persist)
+	return err
+}
+
+type UpdateResult struct {
+	BackupPath string
+}
+
+func (s *Store) UpdateWithResult(cfg Config, persist bool) (UpdateResult, error) {
+	migrated, err := Migrate(cfg)
+	if err != nil {
+		return UpdateResult{}, err
 	}
+	cfg = migrated
+	if err := cfg.Validate(); err != nil {
+		return UpdateResult{}, err
+	}
+	result := UpdateResult{}
 	if persist {
+		backupPath, err := backupCurrentConfig(s.path, cfg.Server.ConfigBackupDir)
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		result.BackupPath = backupPath
 		if err := cfg.Save(s.path); err != nil {
-			return err
+			return UpdateResult{}, err
 		}
 	}
 	s.mu.Lock()
 	s.cfg = cfg
+	s.lastBackup = result.BackupPath
 	s.mu.Unlock()
-	return nil
+	return result, nil
+}
+
+func (s *Store) LastBackup() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastBackup
 }
 
 func (s *Store) Reload() error {
@@ -451,6 +547,57 @@ func (s *Store) Reload() error {
 		return err
 	}
 	return s.Update(cfg, false)
+}
+
+func backupCurrentConfig(path, configuredDirectory string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", l10n.E("config.read_failed", err, map[string]any{"Error": err.Error()})
+	}
+	directory := configuredDirectory
+	if directory == "" {
+		directory = filepath.Join(filepath.Dir(path), ".relay-lifeline-backups")
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return "", l10n.E("config.backup.failed", err, map[string]any{"Error": err.Error()})
+	}
+	backupPath := filepath.Join(directory, "config-"+time.Now().UTC().Format("20060102T150405.000000000Z")+".yaml")
+	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+		return "", l10n.E("config.backup.failed", err, map[string]any{"Error": err.Error()})
+	}
+	if err := os.Chmod(backupPath, 0o600); err != nil {
+		return "", l10n.E("config.backup.failed", err, map[string]any{"Error": err.Error()})
+	}
+	if err := pruneConfigBackups(directory, 10); err != nil {
+		return "", err
+	}
+	return backupPath, nil
+}
+
+func pruneConfigBackups(directory string, keep int) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return l10n.E("config.backup.failed", err, map[string]any{"Error": err.Error()})
+	}
+	var backups []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "config-") && strings.HasSuffix(entry.Name(), ".yaml") {
+			backups = append(backups, entry.Name())
+		}
+	}
+	for len(backups) > keep {
+		if err := os.Remove(filepath.Join(directory, backups[0])); err != nil {
+			return l10n.E("config.backup.failed", err, map[string]any{"Error": err.Error()})
+		}
+		backups = backups[1:]
+	}
+	return nil
 }
 
 func ParseByteSize(raw string) (int64, error) {

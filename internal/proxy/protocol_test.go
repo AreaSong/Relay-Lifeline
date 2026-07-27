@@ -73,10 +73,13 @@ func TestRequestWantsStream(t *testing.T) {
 
 func TestRetryPolicyCoversAllErrors(t *testing.T) {
 	cfg := config.Default()
-	result := attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}, validation: Validation{Message: l10n.M("proxy.http_error", map[string]any{"Status": 400})}}
-	if !shouldRetry(cfg, result) {
-		t.Fatal("all-errors 应重试 400")
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		result := attemptResult{response: &http.Response{StatusCode: status}, validation: Validation{Message: l10n.M("proxy.http_error", map[string]any{"Status": status})}}
+		if !shouldRetry(cfg, result) {
+			t.Fatalf("all-errors 应重试 %d", status)
+		}
 	}
+	result := attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}, validation: Validation{Message: l10n.M("proxy.http_error", map[string]any{"Status": 400})}}
 	cfg.Retry.Mode = "transient-errors"
 	if shouldRetry(cfg, result) {
 		t.Fatal("transient-errors 不应重试 400")
@@ -84,6 +87,10 @@ func TestRetryPolicyCoversAllErrors(t *testing.T) {
 	result.response.StatusCode = http.StatusTooManyRequests
 	if !shouldRetry(cfg, result) {
 		t.Fatal("transient-errors 应重试 429")
+	}
+	result = attemptResult{err: context.DeadlineExceeded, validation: Validation{Message: l10n.M("proxy.connection_timeout")}}
+	if !shouldRetry(cfg, result) {
+		t.Fatal("transient-errors 应重试传输超时")
 	}
 }
 

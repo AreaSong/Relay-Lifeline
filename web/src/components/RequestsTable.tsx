@@ -10,9 +10,10 @@ interface Props {
   refresh: () => Promise<void>;
   onOpen: (id: string) => void;
   onError: (message: string) => void;
+  canOperate: boolean;
 }
 
-export function RequestsTable({ requests, api, refresh, onOpen, onError }: Props) {
+export function RequestsTable({ requests, api, refresh, onOpen, onError, canOperate }: Props) {
   const { t, i18n } = useTranslation(["common", "requests"]);
   async function act(action: () => Promise<unknown>) {
     try {
@@ -32,8 +33,8 @@ export function RequestsTable({ requests, api, refresh, onOpen, onError }: Props
     <td data-label={t("requests:columns.nextRetry")}>{request.nextRetryAt ? new Date(request.nextRetryAt).toLocaleTimeString(i18n.resolvedLanguage) : t("common:notAvailable")}</td>
     <td data-label={t("requests:columns.actions")}><div className="row-actions">
       <button className="icon-button" data-tooltip={t("common:actions.openTimeline")} aria-label={t("common:actions.openTimeline")} onClick={() => onOpen(request.id)}><ListTree size={17} /></button>
-      <button className="icon-button" data-tooltip={t("common:actions.retry")} aria-label={t("common:actions.retry")} onClick={() => act(() => api.retry(request.id))}><TimerReset size={17} /></button>
-      <button className="icon-button danger" data-tooltip={t("common:actions.cancel")} aria-label={t("common:actions.cancel")} onClick={() => act(() => api.cancel(request.id))}><Square size={16} /></button>
+      {canOperate && <button className="icon-button" data-tooltip={t("common:actions.retry")} aria-label={t("common:actions.retry")} onClick={() => act(() => api.retry(request.id))}><TimerReset size={17} /></button>}
+      {canOperate && <button className="icon-button danger" data-tooltip={t("common:actions.cancel")} aria-label={t("common:actions.cancel")} onClick={() => act(() => api.cancel(request.id))}><Square size={16} /></button>}
     </div></td>
   </tr>)}</tbody></table></div>;
 }

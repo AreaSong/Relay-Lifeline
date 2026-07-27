@@ -19,7 +19,7 @@ export class ViewErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("Relay-Lifeline view rendering failed", error, info);
+    console.error("Transfer Lifeline view rendering failed", error, info);
   }
 
   render() {

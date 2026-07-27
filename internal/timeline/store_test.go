@@ -68,3 +68,18 @@ func TestTimelineNeverStoresBusinessPayload(t *testing.T) {
 		t.Fatalf("时间线异常: %+v", record)
 	}
 }
+
+func TestTimelineCapPreservesReceivedEventAndReportsTruncation(t *testing.T) {
+	store := New(func() Limits { return Limits{MaxItems: 10, Retention: time.Hour} })
+	store.Start("request", "POST", "/v1/responses")
+	for attempt := 1; attempt <= maxEventsPerRequest+9; attempt++ {
+		store.Add("request", Event{Type: "attempt_started", Attempt: attempt})
+	}
+	record, ok := store.Request("request")
+	if !ok || len(record.Events) != maxEventsPerRequest || record.Events[0].Type != "received" {
+		t.Fatalf("时间线容量或首事件异常: %+v", record)
+	}
+	if !record.EventsTruncated || record.DroppedEvents != 10 {
+		t.Fatalf("时间线截断信息异常: %+v", record)
+	}
+}

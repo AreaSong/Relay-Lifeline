@@ -45,6 +45,7 @@ type Record struct {
 	CompletedAt   time.Time `json:"completedAt,omitempty"`
 	ExpiresAt     time.Time `json:"expiresAt"`
 	WrappedKey    string    `json:"wrappedKey,omitempty"`
+	KeyID         string    `json:"keyId,omitempty"`
 	Request       BodyPart  `json:"request"`
 	Attempts      []Attempt `json:"attempts"`
 	Final         *BodyPart `json:"final,omitempty"`

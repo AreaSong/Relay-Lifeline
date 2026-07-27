@@ -15,7 +15,7 @@ import { normalizeLocale } from "./i18n";
 import { useTheme } from "./theme";
 import type {
   Alert, Config, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot,
-  MetricsWindow, MonitoringEvent, Status,
+  MetricsWindow, MonitoringEvent, RuntimeInfo, SessionInfo, Status,
 } from "./types";
 import { CapturesView } from "./views/CapturesView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
@@ -61,9 +61,9 @@ function Login({ onLogin, themeMode, setThemeMode }: {
     waiting: t("overview:signal.waiting"), nextRetry: t("overview:signal.nextRetry"), retryNow: t("overview:signal.retryNow"), staticFallback: t("overview:signal.staticFallback"),
   };
   return <main className="login-shell">
-    <section className="login-visual"><div className="login-wordmark"><span className="rail-brand"><HeartPulse size={19} /></span><span>Relay-Lifeline</span></div>
+    <section className="login-visual"><div className="login-wordmark"><span className="rail-brand"><HeartPulse size={19} /></span><span>Transfer Lifeline</span></div>
       <div className="login-topology"><SignalTopology upstreamState="unknown" active={0} waiting={0} labels={labels} locale={i18n.resolvedLanguage} /></div>
-      <div className="login-statement"><h1>Relay-Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
+      <div className="login-statement"><h1>Transfer Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
     </section>
     <section className="login-access"><div className="login-language"><LanguageSelector /><ThemeSelector mode={themeMode} onChange={setThemeMode} compact /></div>
       <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
@@ -81,10 +81,12 @@ export function App() {
   const locale = normalizeLocale(i18n.resolvedLanguage);
   const theme = useTheme();
   const [token, setToken] = useState(() => sessionStorage.getItem("relay-lifeline-token") || "");
+  const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<View>(currentView);
   const [status, setStatus] = useState<Status | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+  const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [timeline, setTimeline] = useState<HistoryRecord | null>(null);
@@ -99,6 +101,9 @@ export function App() {
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
   const api = useMemo(() => new ApiClient(token, locale), [token, locale]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
+  const canOperate = session?.capabilities.includes("operate") || false;
+  const canSensitive = session?.capabilities.includes("sensitive") || false;
+  const visibleNavigation = useMemo(() => navigation.filter(({ view: itemView }) => canOperate || itemView !== "settings"), [canOperate]);
 
   const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
     setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
@@ -114,7 +119,7 @@ export function App() {
     setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events);
   }, [api, metricsWindow]);
 
-  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
+  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Transfer Lifeline`; }, [locale, t, view]);
   useEffect(() => {
     const changed = () => setView(currentView());
     window.addEventListener("hashchange", changed);
@@ -123,12 +128,17 @@ export function App() {
   useEffect(() => {
     if (!token) return;
     Promise.all([
-      refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory),
+      api.session().then(setSession), refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory), api.runtimeInfo().then(setRuntimeInfo),
     ]).catch((reason) => showMessage(errorMessage(reason), "error"));
     setTimeline(null); setDiagnostics(null);
     const statusTimer = window.setInterval(() => refresh().catch(() => undefined), 2000);
     return () => window.clearInterval(statusTimer);
   }, [api, refresh, showMessage, token]);
+  useEffect(() => {
+    if (session && !canOperate && view === "settings") {
+      setView("overview"); window.location.hash = "/overview";
+    }
+  }, [canOperate, session, view]);
   useEffect(() => {
     if (!token) return;
     void refreshMonitoring().catch((reason) => showMessage(errorMessage(reason), "error"));
@@ -148,14 +158,15 @@ export function App() {
   }, [mobileTools]);
 
   async function login(value: string) {
-    await new ApiClient(value, locale).session();
-    sessionStorage.setItem("relay-lifeline-token", value); setToken(value);
+    const nextSession = await new ApiClient(value, locale).session();
+    sessionStorage.setItem("relay-lifeline-token", value); setSession(nextSession); setToken(value);
   }
   function logout() {
     sessionStorage.removeItem("relay-lifeline-token");
-    setToken(""); setStatus(null); setConfig(null); setSavedConfig(null); setTimeline(null); setMetrics(null); setEvents([]);
+    setToken(""); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null); setTimeline(null); setMetrics(null); setEvents([]);
   }
   async function selectView(next: View) {
+    if (next === "settings" && !canOperate) return;
     if (view === "settings" && next !== "settings" && dirty && !window.confirm(t("settings:leaveConfirm"))) return;
     setView(next); setMobileTools(false); setTimeline(null);
     window.location.hash = `/${next}`;
@@ -171,7 +182,14 @@ export function App() {
   }
   async function save() {
     if (!config) return;
-    try { const result = await api.saveConfig(config); setSavedConfig(config); showMessage(result.restartRequired ? t("settings:savedRestart") : t("settings:saved")); await refreshMonitoring(); }
+    try {
+      const plan = await api.validateConfig(config);
+      if (plan.restartRequired && !window.confirm(t("settings:restartConfirm", { count: plan.restartSections.length }))) return;
+      const result = await api.saveConfig(config);
+      setSavedConfig(config);
+      showMessage(result.backupPath ? t("settings:savedBackup", { path: result.backupPath }) : result.restartRequired ? t("settings:savedRestart") : t("settings:saved"));
+      await refreshMonitoring();
+    }
     catch (reason) { showMessage(errorMessage(reason, "save"), "error"); }
   }
   async function reload() {
@@ -190,33 +208,33 @@ export function App() {
   }
 
   if (!token) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} />;
-  if (!status || !config || !savedConfig) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
+  if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
   const incident = status.upstream.state === "degraded" && (status.waiting + status.queued > 0 || (status.upstream.lastChecked ? Date.now() - new Date(status.upstream.lastChecked).getTime() >= 10_000 : false));
   return <div className={`app-shell${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
-    <aside className="app-rail" aria-label={t("common:brandSubtitle")}><button className="rail-brand" aria-label="Relay-Lifeline" data-tooltip="Relay-Lifeline" onClick={() => selectView("overview")}><HeartPulse size={21} /></button>
-      <nav>{navigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={t(`common:nav.${itemView}`)} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /></button>)}</nav>
+    <aside className="app-rail" aria-label={t("common:brandSubtitle")}><button className="rail-brand" aria-label="Transfer Lifeline" data-tooltip="Transfer Lifeline" onClick={() => selectView("overview")}><HeartPulse size={21} /></button>
+      <nav>{visibleNavigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={t(`common:nav.${itemView}`)} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /></button>)}</nav>
       <div className="rail-footer"><ThemeSelector mode={theme.mode} onChange={theme.setMode} compact /><LanguageSelector compact /><button className="rail-action" aria-label={t("common:actions.logout")} data-tooltip={t("common:actions.logout")} onClick={logout}><LogOut size={17} /></button></div>
     </aside>
 
-    <main className="workspace"><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Relay-Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
-      <div className="desktop-heading"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span></div></div>
-      <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button><button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button></div>
+    <main className="workspace"><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Transfer Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
+      <div className="desktop-heading"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div>
+      <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button>{canOperate && <button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button>}</div>
     </header>
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
-        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} locale={locale} dark={theme.resolved === "dark"} incident={incident} />}
-        {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} />}
+        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} locale={locale} dark={theme.resolved === "dark"} incident={incident} canOperate={canOperate} />}
+        {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} canOperate={canOperate} />}
         {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
         {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
-        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} />}
-        {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} />}
-        {view === "settings" && <SettingsView config={config} baseline={savedConfig} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
+        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} />}
+        {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
+        {view === "settings" && canOperate && <SettingsView config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
       </ViewErrorBoundary>
     </main>
 
-    <nav className="mobile-bottom-nav" aria-label={t("common:brandSubtitle")}>{mobileViews.map((itemView) => { const Icon = navigation.find((item) => item.view === itemView)!.icon; return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>
+    <nav className="mobile-bottom-nav" aria-label={t("common:brandSubtitle")}>{mobileViews.filter((itemView) => canOperate || itemView !== "settings").map((itemView) => { const Icon = navigation.find((item) => item.view === itemView)!.icon; return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>
     <div className="mobile-tools" hidden={!mobileTools}><div className="mobile-tools-row"><button className="button" onClick={() => selectView("logs")}><ScrollText size={17} />{t("common:nav.logs")}</button><button className="button" onClick={() => selectView("captures")}><FileLock2 size={17} />{t("common:nav.captures")}</button></div><ThemeSelector mode={theme.mode} onChange={theme.setMode} /><div className="mobile-tools-row"><LanguageSelector /><button className="button" onClick={logout}><LogOut size={17} />{t("common:actions.logout")}</button></div></div>
     {timeline && <TimelinePanel record={timeline} onClose={() => setTimeline(null)} />}
   </div>;

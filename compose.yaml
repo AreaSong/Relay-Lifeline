@@ -4,9 +4,12 @@ services:
       context: .
       args:
         VERSION: ${RELAY_LIFELINE_VERSION:-dev}
-    image: ghcr.io/areasong/relay-lifeline:${RELAY_LIFELINE_VERSION:-latest}
+        REVISION: ${RELAY_LIFELINE_REVISION:-unknown}
+        BUILD_TIME: ${RELAY_LIFELINE_BUILD_TIME:-unknown}
+    image: ghcr.io/areasong/transfer-lifeline:${RELAY_LIFELINE_VERSION:-latest}
     container_name: relay-lifeline
     restart: unless-stopped
+    stop_grace_period: 3m10s
     user: "${RELAY_LIFELINE_UID:-1000}:${RELAY_LIFELINE_GID:-1000}"
     ports:
       - "127.0.0.1:8318:8318"
@@ -14,7 +17,12 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       RELAY_LIFELINE_ADMIN_KEY: ${RELAY_LIFELINE_ADMIN_KEY:?请设置管理密钥}
-      RELAY_LIFELINE_CAPTURE_KEY: ${RELAY_LIFELINE_CAPTURE_KEY:?请设置独立的 32 字节 Base64 捕获密钥}
+      RELAY_LIFELINE_VIEWER_KEY: ${RELAY_LIFELINE_VIEWER_KEY:-}
+      RELAY_LIFELINE_SENSITIVE_KEY: ${RELAY_LIFELINE_SENSITIVE_KEY:?请设置独立的敏感数据密钥}
+      RELAY_LIFELINE_CAPTURE_KEY: ${RELAY_LIFELINE_CAPTURE_KEY:-}
+      RELAY_LIFELINE_CAPTURE_ACTIVE_KEY_ID: ${RELAY_LIFELINE_CAPTURE_ACTIVE_KEY_ID:-}
+      RELAY_LIFELINE_CAPTURE_KEYRING: ${RELAY_LIFELINE_CAPTURE_KEYRING:-}
+      RELAY_LIFELINE_IMAGE_REF: ghcr.io/areasong/transfer-lifeline:${RELAY_LIFELINE_VERSION:-latest}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ${RELAY_LIFELINE_CONFIG:-./config.docker.yaml}:/etc/relay-lifeline/config.yaml:rw

@@ -10,13 +10,14 @@ function sparkline(values: number[]) {
   return values.map((value, index) => `${values.length <= 1 ? 0 : index / (values.length - 1) * 120},${28 - value / maximum * 24}`).join(" ");
 }
 
-export function RequestsView({ status, metrics, api, refresh, onOpen, onError }: {
+export function RequestsView({ status, metrics, api, refresh, onOpen, onError, canOperate }: {
   status: Status;
   metrics: MetricsSnapshot | null;
   api: ApiClient;
   refresh: () => Promise<void>;
   onOpen: (id: string) => void;
   onError: (message: string) => void;
+  canOperate: boolean;
 }) {
   const { t } = useTranslation(["common", "overview", "requests"]);
   const [query, setQuery] = useState("");
@@ -46,7 +47,7 @@ export function RequestsView({ status, metrics, api, refresh, onOpen, onError }:
           </select></label>
         </div>
       </div>
-      <RequestsTable requests={requests} api={api} refresh={refresh} onOpen={onOpen} onError={onError} />
+      <RequestsTable requests={requests} api={api} refresh={refresh} onOpen={onOpen} onError={onError} canOperate={canOperate} />
     </section>
   </div>;
 }

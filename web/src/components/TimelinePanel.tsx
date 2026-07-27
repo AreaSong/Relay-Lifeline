@@ -63,6 +63,7 @@ export function TimelinePanel({ record, onClose }: { record: HistoryRecord; onCl
         <button className="icon-button" aria-label={t("common:actions.close")} data-tooltip={t("common:actions.close")} onClick={onClose}><X size={18} /></button>
       </div>
       <div className="timeline-summary"><span>{t("requests:timeline.attempts")} <strong>{record.attempt}</strong></span><span>{t("requests:timeline.duration")} <strong>{formatDuration(record.startedAt, record.completedAt)}</strong></span></div>
+      {record.eventsTruncated && <div className="warning-banner page-banner" role="status">{t("requests:timeline.truncated", { count: record.droppedEvents || 0 })}</div>}
       <div className="timeline-list">{record.events.map((event, index) => <div className={`timeline-event ${event.type}`} key={`${event.time}-${index}`}>
         <span className="event-icon"><EventIcon type={event.type} /></span>
         <div><div className="event-heading"><strong>{event.message}</strong><time>{formatTime(event.time)}</time></div><div className="event-meta"><EventMeta event={event} /></div>{event.errorDetail && <SafeErrorDetail detail={event.errorDetail} />}</div>

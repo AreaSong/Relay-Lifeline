@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/buildinfo"
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
@@ -203,6 +204,7 @@ func TestAdminPersistsValidConfig(t *testing.T) {
 
 func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
 	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	t.Setenv("RELAY_LIFELINE_SENSITIVE_KEY", "abcdefghijklmnopqrstuvwx")
 	cfg := config.Default()
 	cfg.Capture.StorageDir = t.TempDir()
 	cfg.Capture.MaxBodySize = 1 << 20
@@ -233,17 +235,32 @@ func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
 	if err := captures.Finish("request-capture", "successful", 1); err != nil {
 		t.Fatal(err)
 	}
+	keyStatus := authenticatedRequest(handler, http.MethodGet, "/admin/api/capture/keys")
+	if keyStatus.Code != http.StatusOK || !strings.Contains(keyStatus.Body.String(), `"activeId":"legacy"`) || !strings.Contains(keyStatus.Body.String(), `"legacy":1`) {
+		t.Fatalf("捕获密钥状态异常: %d %s", keyStatus.Code, keyStatus.Body.String())
+	}
+	rewrap := authenticatedRequest(handler, http.MethodPost, "/admin/api/capture/keys/rewrap")
+	if rewrap.Code != http.StatusOK || !strings.Contains(rewrap.Body.String(), `"unchanged":1`) {
+		t.Fatalf("捕获密钥重包裹接口异常: %d %s", rewrap.Code, rewrap.Body.String())
+	}
 
 	preview := authenticatedRequest(handler, http.MethodGet, "/admin/api/captures/"+id+"/preview")
 	if preview.Code != http.StatusOK || strings.Contains(preview.Body.String(), "secret") || !strings.Contains(preview.Body.String(), "[REDACTED]") {
 		t.Fatalf("过滤预览异常: %d %s", preview.Code, preview.Body.String())
 	}
 	rawWithoutConfirmation := authenticatedRequest(handler, http.MethodGet, "/admin/api/captures/"+id+"/download?mode=raw")
-	if rawWithoutConfirmation.Code != http.StatusPreconditionRequired {
-		t.Fatalf("原文下载未要求确认: %d", rawWithoutConfirmation.Code)
+	if rawWithoutConfirmation.Code != http.StatusForbidden {
+		t.Fatalf("Operator 不应下载原文: %d", rawWithoutConfirmation.Code)
+	}
+	sensitiveWithoutConfirmation := httptest.NewRequest(http.MethodGet, "/admin/api/captures/"+id+"/download?mode=raw", nil)
+	sensitiveWithoutConfirmation.Header.Set("Authorization", "Bearer abcdefghijklmnopqrstuvwx")
+	sensitiveRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(sensitiveRecorder, sensitiveWithoutConfirmation)
+	if sensitiveRecorder.Code != http.StatusPreconditionRequired {
+		t.Fatalf("Sensitive Data 原文下载未要求确认: %d", sensitiveRecorder.Code)
 	}
 	rawRequest := httptest.NewRequest(http.MethodGet, "/admin/api/captures/"+id+"/download?mode=raw", nil)
-	rawRequest.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	rawRequest.Header.Set("Authorization", "Bearer abcdefghijklmnopqrstuvwx")
 	rawRequest.Header.Set("X-Relay-Lifeline-Confirm", "download-sensitive")
 	rawRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(rawRecorder, rawRequest)
@@ -253,6 +270,44 @@ func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
 	logResponse := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs")
 	if logResponse.Code != http.StatusOK || !strings.Contains(logResponse.Body.String(), "capture.downloaded") {
 		t.Fatalf("审计日志缺失: %d %s", logResponse.Code, logResponse.Body.String())
+	}
+}
+
+func TestManagementRolesSeparateReadOperateAndSensitiveAccess(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	t.Setenv("RELAY_LIFELINE_VIEWER_KEY", "viewer-key-12345678901234")
+	t.Setenv("RELAY_LIFELINE_SENSITIVE_KEY", "abcdefghijklmnopqrstuvwx")
+	cfg := config.Default()
+	cfg.Notifications.WebhookURL = "https://example.test/private-hook"
+	handler := New(config.NewStore("", cfg), state.NewRegistry(), state.NewController())
+
+	viewerSession := httptest.NewRequest(http.MethodGet, "/admin/api/session", nil)
+	viewerSession.Header.Set("Authorization", "Bearer viewer-key-12345678901234")
+	viewerRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(viewerRecorder, viewerSession)
+	if viewerRecorder.Code != http.StatusOK || !strings.Contains(viewerRecorder.Body.String(), `"role":"viewer"`) || strings.Contains(viewerRecorder.Body.String(), "operate") {
+		t.Fatalf("Viewer 会话能力异常: %d %s", viewerRecorder.Code, viewerRecorder.Body.String())
+	}
+
+	viewerPause := httptest.NewRequest(http.MethodPost, "/admin/api/control/pause", nil)
+	viewerPause.Header.Set("Authorization", "Bearer viewer-key-12345678901234")
+	pauseRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(pauseRecorder, viewerPause)
+	if pauseRecorder.Code != http.StatusForbidden || !strings.Contains(pauseRecorder.Body.String(), "INSUFFICIENT_PERMISSION") {
+		t.Fatalf("Viewer 写操作未拒绝: %d %s", pauseRecorder.Code, pauseRecorder.Body.String())
+	}
+
+	viewerConfig := httptest.NewRequest(http.MethodGet, "/admin/api/config", nil)
+	viewerConfig.Header.Set("Authorization", "Bearer viewer-key-12345678901234")
+	configRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(configRecorder, viewerConfig)
+	if configRecorder.Code != http.StatusOK || strings.Contains(configRecorder.Body.String(), "private-hook") {
+		t.Fatalf("Viewer 配置未脱敏: %d %s", configRecorder.Code, configRecorder.Body.String())
+	}
+
+	operatorSession := authenticatedRequest(handler, http.MethodGet, "/admin/api/session")
+	if operatorSession.Code != http.StatusOK || !strings.Contains(operatorSession.Body.String(), `"role":"operator"`) || !strings.Contains(operatorSession.Body.String(), "operate") || strings.Contains(operatorSession.Body.String(), "sensitive") {
+		t.Fatalf("Operator 会话能力异常: %d %s", operatorSession.Code, operatorSession.Body.String())
 	}
 }
 
@@ -325,5 +380,75 @@ func TestAdminMonitoringAPIsAndSecurityEventCursor(t *testing.T) {
 	next := authenticatedRequest(handler, http.MethodGet, "/admin/api/events?after=2&limit=10")
 	if next.Code != http.StatusOK || !strings.Contains(next.Body.String(), "admin.resume") || !strings.Contains(next.Body.String(), "config.save") || !strings.Contains(next.Body.String(), "config.reload") {
 		t.Fatalf("安全事件续页异常: %d %s", next.Code, next.Body.String())
+	}
+}
+
+func TestRuntimeLogPagingValidationAndDiagnosticEvidence(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	cfg := config.Default()
+	store := config.NewStore("", cfg)
+	logs := runlog.New(func() runlog.Limits { return runlog.Limits{MaxItems: 3, Retention: time.Hour} })
+	for index := 0; index < 5; index++ {
+		logs.Add(runlog.Entry{Level: "info", Event: "request.received"})
+	}
+	registry := state.NewRegistry()
+	handler := NewWithExtendedServices(store, registry, state.NewController(), risk.New(), diagnostics.New(store, "test", time.Now()), nil, nil, logs)
+	monitor := monitoring.New()
+	monitor.RecordReceived()
+	handler.SetMonitoring(monitor)
+
+	tail := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs?tail=true&limit=2")
+	if tail.Code != http.StatusOK {
+		t.Fatalf("日志尾页接口异常: %d %s", tail.Code, tail.Body.String())
+	}
+	var page runlog.Page
+	if err := json.NewDecoder(tail.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 2 || page.Entries[0].ID != 4 || page.NextAfter != 5 || !page.HasGap {
+		t.Fatalf("日志尾页契约异常: %+v", page)
+	}
+	invalid := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs?after=not-a-cursor")
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "INVALID_LOG_CURSOR") {
+		t.Fatalf("非法日志游标未拒绝: %d %s", invalid.Code, invalid.Body.String())
+	}
+
+	bundle := authenticatedRequest(handler, http.MethodGet, "/admin/api/diagnostics/export")
+	if bundle.Code != http.StatusOK || !strings.Contains(bundle.Body.String(), `"runtimeLogs":[`) || !strings.Contains(bundle.Body.String(), `"metrics":{`) || !strings.Contains(bundle.Body.String(), `"errors":{`) {
+		t.Fatalf("诊断证据不完整: %d %s", bundle.Code, bundle.Body.String())
+	}
+}
+
+func TestAdminMetaValidateAndAPIVersionContract(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	cfg := config.Default()
+	store := config.NewStore("", cfg)
+	handler := New(store, state.NewRegistry(), state.NewController())
+	startedAt := time.Now().Add(-time.Minute)
+	handler.SetRuntimeInfo(func() buildinfo.Info {
+		return buildinfo.New("v0.4.0", "abc123", "2026-07-27T00:00:00Z", "relay-lifeline:test", startedAt).Snapshot(config.CurrentSchemaVersion)
+	})
+
+	meta := authenticatedRequest(handler, http.MethodGet, "/admin/api/meta")
+	if meta.Code != http.StatusOK || meta.Header().Get("X-Relay-Lifeline-API-Version") != buildinfo.AdminAPIVersion {
+		t.Fatalf("运行信息契约异常: status=%d version=%q body=%s", meta.Code, meta.Header().Get("X-Relay-Lifeline-API-Version"), meta.Body.String())
+	}
+	var info buildinfo.Info
+	if err := json.NewDecoder(meta.Body).Decode(&info); err != nil || info.Version != "v0.4.0" || info.Revision != "abc123" || info.ConfigSchemaVersion != config.CurrentSchemaVersion {
+		t.Fatalf("运行信息响应异常: %+v err=%v", info, err)
+	}
+
+	changed := cfg
+	changed.Retry.MaxAttempts = 5
+	payload, _ := json.Marshal(changed)
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/config/validate", bytes.NewReader(payload))
+	request.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"changedSections":["retry"]`) || !strings.Contains(recorder.Body.String(), `"restartRequired":false`) {
+		t.Fatalf("配置预检响应异常: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if store.Get().Retry.MaxAttempts != cfg.Retry.MaxAttempts {
+		t.Fatal("配置预检不应修改运行配置")
 	}
 }

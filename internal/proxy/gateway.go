@@ -68,6 +68,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	streaming := requestWantsStream(body, request.Header)
 	ctx, cancel := context.WithCancel(request.Context())
+	watchDownstreamClose(ctx, writer, cancel)
 	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
 	started := time.Now()
 	outcome := "failed"
@@ -108,6 +109,8 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration, func() {
 		g.addRunLog("debug", "downstream.heartbeat", "已发送下游保活心跳", requestID, 0, 0, nil)
+	}, func(error) {
+		cancel()
 	})
 	defer downstream.stopHeartbeat()
 	g.addRunLog("info", "queue.entered", "请求进入并发队列", requestID, 0, 0, nil)
@@ -147,6 +150,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		g.addRunLog("info", "upstream.attempt_started", "开始上游请求", requestID, attempt, 0, nil)
 		attemptStarted := time.Now()
 		result := runAttempt(ctx, g.client, cfg, request, body, streaming)
+		finalAttempt = attempt
 		if g.captures != nil {
 			var captureBody io.Reader
 			if result.buffer != nil {
@@ -172,7 +176,6 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			}
 			result.buffer.Close()
 			outcome = "successful"
-			finalAttempt = attempt
 			elapsed := time.Since(started)
 			if hadFailure && g.monitor != nil {
 				g.monitor.RecordRecovery(elapsed, attempt)
@@ -234,6 +237,21 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "retry_resumed", Attempt: attempt + 1, MessageCode: resumeReason})
 		g.addRunLog("info", "retry.resumed", "重试等待结束", requestID, attempt+1, 0, map[string]any{"reasonCode": resumeReason})
 	}
+}
+
+func watchDownstreamClose(ctx context.Context, writer http.ResponseWriter, cancel context.CancelFunc) {
+	notifier, ok := writer.(http.CloseNotifier)
+	if !ok {
+		return
+	}
+	closed := notifier.CloseNotify()
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-closed:
+			cancel()
+		}
+	}()
 }
 
 func (g *Gateway) addRunLog(level, event, message, requestID string, attempt, statusCode int, fields map[string]any) {
@@ -380,5 +398,5 @@ func (g *Gateway) logText(cfg config.Config, messageID string) string {
 }
 
 func (g *Gateway) String() string {
-	return fmt.Sprintf("Relay-Lifeline -> %s", g.store.Get().Upstream.BaseURL)
+	return fmt.Sprintf("Transfer Lifeline -> %s", g.store.Get().Upstream.BaseURL)
 }

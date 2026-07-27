@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 func TestControllerPauseAndResume(t *testing.T) {
@@ -46,5 +48,27 @@ func TestRegistryRetryAndCancel(t *testing.T) {
 	case <-ctx.Done():
 	case <-time.After(time.Second):
 		t.Fatal("上下文未取消")
+	}
+}
+
+func TestRetryWaitingOnlySignalsWaitingRequests(t *testing.T) {
+	registry := NewRegistry()
+	waitingID, waitingRetry := registry.Add("POST", "/v1/responses", func() {})
+	requestingID, requestingRetry := registry.Add("POST", "/v1/responses", func() {})
+	registry.UpdateMessage(waitingID, "waiting", 1, l10n.Message{}, time.Now().Add(time.Minute))
+	registry.UpdateMessage(requestingID, "requesting", 1, l10n.Message{}, time.Time{})
+
+	if count := registry.RetryWaiting(); count != 1 {
+		t.Fatalf("排空唤醒数量 = %d，期望 1", count)
+	}
+	select {
+	case <-waitingRetry:
+	default:
+		t.Fatal("等待请求未收到立即重试信号")
+	}
+	select {
+	case <-requestingRetry:
+		t.Fatal("请求中的任务不应收到等待唤醒信号")
+	default:
 	}
 }

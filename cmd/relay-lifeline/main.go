@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/admin"
+	"github.com/areasong/relay-lifeline/internal/buildinfo"
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
@@ -27,7 +29,11 @@ import (
 	"github.com/areasong/relay-lifeline/internal/webui"
 )
 
-var version = "dev"
+var (
+	version  = "dev"
+	revision = "unknown"
+	builtAt  = "unknown"
+)
 
 func main() {
 	preLocale, localeFromEnvironment := environmentLocale(os.Getenv("LANG"))
@@ -37,7 +43,7 @@ func main() {
 	localeFlag := flag.String("locale", preLocale, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.locale")))
 	flag.Parse()
 	if *showVersion {
-		fmt.Println(version)
+		fmt.Printf("%s revision=%s built=%s\n", version, revision, builtAt)
 		return
 	}
 
@@ -51,12 +57,13 @@ func main() {
 	if localeExplicit || localeFromEnvironment {
 		cliLocale = l10n.Normalize(*localeFlag)
 	}
-	if err := validateAdminKey(cfg.Server.AdminEnabled, os.Getenv("RELAY_LIFELINE_ADMIN_KEY")); err != nil {
+	if err := validateManagementKeys(cfg.Server.AdminEnabled, os.Getenv("RELAY_LIFELINE_ADMIN_KEY"), os.Getenv("RELAY_LIFELINE_VIEWER_KEY"), os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY")); err != nil {
 		fmt.Fprintln(os.Stderr, l10n.Default.Error(cliLocale, cfg.Localization.FallbackLocale, err))
 		os.Exit(1)
 	}
 	logger := newLogger(cfg.Logging.Level)
 	startedAt := time.Now()
+	runtimeInfo := buildinfo.New(version, revision, builtAt, os.Getenv("RELAY_LIFELINE_IMAGE_REF"), startedAt)
 	store := config.NewStore(*configPath, cfg)
 	timelineStore := timeline.New(func() timeline.Limits {
 		current := store.Get().History
@@ -70,7 +77,7 @@ func main() {
 		current := store.Get().Capture
 		return runlog.Limits{MaxItems: current.LogMaxItems, Retention: current.LogRetention.Duration}
 	})
-	captureManager := capture.New(func() config.CaptureConfig { return store.Get().Capture }, os.Getenv("RELAY_LIFELINE_CAPTURE_KEY"))
+	captureManager := capture.NewFromEnvironment(func() config.CaptureConfig { return store.Get().Capture })
 	captureManager.SetEventSink(func(event, message string, fields map[string]any) {
 		runLogStore.Add(runlog.Entry{Level: "info", Event: event, Message: message, Fields: fields})
 	})
@@ -83,16 +90,16 @@ func main() {
 	diagnosticService := diagnostics.New(store, version, startedAt)
 	adminHandler := admin.NewWithExtendedServices(store, registry, controller, riskManager, diagnosticService, notifier, captureManager, runLogStore)
 	adminHandler.SetMonitoring(monitoringStore)
+	adminHandler.SetRuntimeInfo(func() buildinfo.Info { return runtimeInfo.Snapshot(config.CurrentSchemaVersion) })
 
 	mux := http.NewServeMux()
+	var ready atomic.Bool
+	ready.Store(true)
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("/readyz", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"status":"ready"}`))
-	})
+	mux.Handle("/readyz", readinessHandler(&ready))
 	mux.HandleFunc("/favicon.ico", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
@@ -111,8 +118,12 @@ func main() {
 	defer stop()
 	go captureManager.StartCleaner(ctx)
 	go reloadOnSignal(store, logger)
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
+		ready.Store(false)
+		registry.RetryWaiting()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), store.Get().Server.ShutdownTimeout.Duration)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -125,11 +136,38 @@ func main() {
 		logger.Error(logText(store.Get(), "log.service_exit_failed"), "event", "service.exit_failed", "error", err)
 		os.Exit(1)
 	}
+	if ctx.Err() != nil {
+		<-shutdownDone
+	}
 }
 
-func validateAdminKey(adminEnabled bool, adminKey string) error {
-	if adminEnabled && len(adminKey) < 24 {
+func readinessHandler(ready *atomic.Bool) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if !ready.Load() {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = writer.Write([]byte(`{"status":"draining"}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"status":"ready"}`))
+	})
+}
+
+func validateManagementKeys(adminEnabled bool, operatorKey, viewerKey, sensitiveKey string) error {
+	if !adminEnabled {
+		return nil
+	}
+	if len(operatorKey) < 24 {
 		return l10n.E("cli.admin_key_short", nil)
+	}
+	if viewerKey != "" && len(viewerKey) < 24 {
+		return l10n.E("cli.viewer_key_short", nil)
+	}
+	if len(sensitiveKey) < 24 {
+		return l10n.E("cli.sensitive_key_short", nil)
+	}
+	if operatorKey == sensitiveKey || viewerKey != "" && (viewerKey == operatorKey || viewerKey == sensitiveKey) {
+		return l10n.E("cli.management_keys_distinct", nil)
 	}
 	return nil
 }

@@ -1,8 +1,8 @@
-# Relay-Lifeline（中转生命线）
+# Transfer Lifeline（中转生命线）
 
-[GitHub](https://github.com/AreaSong/Relay-Lifeline) | [English](README.md)
+[GitHub](https://github.com/AreaSong/transfer-lifeline) | [English](README.md)
 
-Relay-Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网关。它位于 Codex、IDE 或其他 AI 客户端与现有中转站之间；上游返回任意错误时，它保持客户端连接，按配置等待后重新提交同一个请求。
+Transfer Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网关。它位于 Codex、IDE 或其他 AI 客户端与现有中转站之间；上游返回任意错误时，它保持客户端连接，按配置等待后重新提交同一个请求。
 
 本项目与 CLIProxyAPI（CPA）及任何模型提供商均无官方关联。
 
@@ -10,7 +10,7 @@ Relay-Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网关
 AI 客户端
    │  沿用原 API Key，只修改 base_url
    ▼
-Relay-Lifeline :8318
+Transfer Lifeline :8318
    │  Authorization 原样透传
    ▼
 CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
@@ -18,7 +18,7 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 由中转站管理的账号、路由和模型提供商
 ```
 
-公开项目名称统一为 **Relay-Lifeline**；二进制、镜像、环境变量和兼容 Header 使用与之对应的 `relay-lifeline` 技术标识。
+公开项目名称统一为 **Transfer Lifeline**，官方镜像使用 `ghcr.io/areasong/transfer-lifeline`。为保证已有部署无损升级，二进制名、Go module、`RELAY_LIFELINE_*` 环境变量、`X-Relay-Lifeline-*` Header 和磁盘路径继续保留 `relay-lifeline` 兼容技术标识。
 
 ## 核心能力
 
@@ -41,7 +41,7 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - UI、日志和通知语言独立配置并可热更新。
 - 独立管理密钥和默认仅本机监听。
 
-Relay-Lifeline 始终只连接一个中转站。账号池、供应商选择、模型映射、权重和多个中转站之间的故障切换仍由 CPA 或指定上游负责。
+Transfer Lifeline 始终只连接一个中转站。账号池、供应商选择、模型映射、权重和多个中转站之间的故障切换仍由 CPA 或指定上游负责。
 
 ## 快速启动
 
@@ -50,7 +50,7 @@ cp config.docker.example.yaml config.docker.yaml
 cp .env.example .env
 ```
 
-在 `.env` 中设置足够长的随机 `RELAY_LIFELINE_ADMIN_KEY`，并生成独立的 32 字节捕获密钥：
+在 `.env` 中设置彼此不同且至少 24 字符的 `RELAY_LIFELINE_ADMIN_KEY`（Operator）和 `RELAY_LIFELINE_SENSITIVE_KEY`（Sensitive Data）。可选的 `RELAY_LIFELINE_VIEWER_KEY` 提供只读访问。再生成独立的 32 字节捕获密钥：
 
 ```bash
 openssl rand -base64 32
@@ -85,6 +85,7 @@ wire_api = "responses"
 ```yaml
 upstream:
   base-url: "http://cli-proxy-api:8317"
+  response-body-idle-timeout: "90s"
 ```
 
 ## 重试语义
@@ -105,9 +106,13 @@ retry:
 
 网关先缓存并校验上游响应，再向客户端交付，因此流中断时不会暴露半截正文。流式请求等待期间默认每 15 秒发送 SSE 注释；非流式 JSON 使用空白保活，不改变最终 JSON 值。
 
+客户端传入的 `Idempotency-Key` 会在每次尝试中保持不变；Transfer Lifeline 不擅自生成该键，避免上游把第一次错误缓存到同一个键。断联检测同时使用下游请求 Context、连接关闭通知和心跳写入/Flush 错误，客户端离开后会取消活动中的上游调用。
+
 ## 管理控制台
 
-控制台使用独立的 `RELAY_LIFELINE_ADMIN_KEY`，可以：
+控制台使用分层管理密钥：Viewer 只能读取脱敏状态和内容，Operator 可以执行运维操作，Sensitive Data 在 Operator 权限之上允许下载完整原文。现有 `RELAY_LIFELINE_ADMIN_KEY` 对应 Operator。
+
+控制台可以：
 
 - 查看活动请求、尝试次数、下次重试和安全失败详情。
 - 查看请求时间线和有界内存历史。
@@ -116,7 +121,8 @@ retry:
 - 执行不调用模型的一键诊断并导出脱敏 JSON 包。
 - 暂停或恢复全部请求、立即重试或取消指定请求。
 - 修改重试、流、队列、历史、风险、通知、日志和语言设置。
-- 原子保存配置或从磁盘重新加载。
+- 保存前无落盘校验配置，明确显示热更新与需重启区段，再原子保存或从磁盘重新加载。
+- 查看运行版本、revision、构建时间、镜像引用、运行时长、管理 API 版本和配置 schema 版本。
 - 查看实时结构化日志；按级别、事件或请求 ID 筛选并下载。
 - 临时捕获接下来的指定数量请求，查看过滤正文，或下载过滤/完整原文 ZIP。
 
@@ -131,8 +137,13 @@ Signal Continuity 只展示网关实际观测到的状态，不会额外发送�
 - `GET /admin/api/metrics?window=15m|1h|6h|24h`：返回汇总、分钟序列、当前负载和恢复直方图，默认窗口为 `1h`。
 - `GET /admin/api/metrics/errors?window=15m|1h|6h|24h`：返回稳定错误分类分布，默认窗口为 `24h`。
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>`：读取有界运行事件环。响应包含 `nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，客户端可据此续读或发现旧事件已被覆盖。
+- `GET /admin/api/runtime-logs?tail=true&limit=<1-500>`：读取最新结构化日志；也可使用 `after` 游标续读。响应包含 `entries`、`nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，筛选值和级别均有严格边界。
+
+诊断导出额外包含最近 200 条结构化运行日志、最近一小时指标和错误分类，不包含请求/响应正文或安全错误详情。单请求时间线最多保留 100 条事件；超限时保留首事件和最近事件，并通过 `eventsTruncated`、`droppedEvents` 明确报告省略数量。
 
 这些接口与其他管理 API 使用相同的管理密钥和本地化规则。
+
+每个管理响应都包含兼容 Header `X-Relay-Lifeline-API-Version`。`GET /admin/api/meta` 返回当前构建身份。配置文件使用 `schema-version: 1`；v0.4 以前未声明 schema 的配置会迁移到版本 1，未知的未来版本会被拒绝。`POST /admin/api/config/validate` 返回准确的变更计划，不修改内存或磁盘配置。
 
 ## 双语配置
 
@@ -167,7 +178,8 @@ notifications:
 - 临时捕获默认不活动；正文使用分块 AES-256-GCM 加密，认证 Header 永不落盘。
 - 完整原文不能在线预览，只能在明确确认后流式解密到下载 ZIP，磁盘不生成明文 ZIP。
 - 捕获默认保留 72 小时；空间或最低磁盘阈值不足时停止保存正文，不阻塞代理请求。
-- `RELAY_LIFELINE_CAPTURE_KEY` 必须独立持久保存。第一版不维护历史密钥环，轮换前必须下载或清空旧捕获。
+- 成功响应和达到终止条件的失败响应都会标记为最终响应；服务重启时尚未完成的捕获会落为“服务重启中断”，不会永久停留在活动状态。
+- 捕获支持活动 Key ID 和历史 Key Ring。`RELAY_LIFELINE_CAPTURE_KEY` 是兼容旧部署的 `legacy` 密钥；使用 `RELAY_LIFELINE_CAPTURE_ACTIVE_KEY_ID` 与 JSON 对象 `RELAY_LIFELINE_CAPTURE_KEYRING` 配置新密钥。先同时保留新旧密钥并重启，在捕获页执行“重包裹到活动密钥”，确认旧 Key ID 记录数为零且未解析记录为零后，才能移除旧密钥。
 
 不要把管理端直接暴露到公网。需要远程访问时，应增加 TLS、访问控制和可信网络边界。
 
@@ -188,11 +200,13 @@ make docker-build
 
 部分新版 macOS/Xcode 环境运行 Go 1.22 测试二进制时需要外部链接。如果内部链接器报告缺少 `LC_UUID`，执行 `go test -ldflags=-linkmode=external ./...`。
 
-更多信息见[架构说明](docs/architecture.zh-CN.md)、[贡献指南](CONTRIBUTING.zh-CN.md)和[安全策略](SECURITY.zh-CN.md)。
+更多信息见[运维手册](docs/operations.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md)、[贡献指南](CONTRIBUTING.zh-CN.md)和[安全策略](SECURITY.zh-CN.md)。
 
 ## 回滚
 
-Relay-Lifeline 不修改上游账号或 API Key。将客户端 `base_url` 改回 CPA 或原中转站即可立即绕过网关。升级已部署实例前，应保留旧镜像和旧配置文件。
+Transfer Lifeline 不修改上游账号或 API Key。将客户端 `base_url` 改回 CPA 或原中转站即可立即绕过网关。每次持久化配置前，当前文件都会以 `0600` 权限复制到 `server.config-backup-dir`；未配置时使用配置文件旁的 `.relay-lifeline-backups`，只保留最新 10 份。升级已部署实例时还应保留旧镜像。
+
+Docker 构建接受 `VERSION`、`REVISION`、`BUILD_TIME` 参数；运行镜像引用通过 `RELAY_LIFELINE_IMAGE_REF` 传入，使设置页和 `/admin/api/meta` 能准确标识待回滚的部署版本。
 
 ## 已知风险
 
@@ -200,4 +214,4 @@ Relay-Lifeline 不修改上游账号或 API Key。将客户端 `base_url` 改回
 
 ## 许可证
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)

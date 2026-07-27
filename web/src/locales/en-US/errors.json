@@ -4,6 +4,8 @@
   "reload": "Unable to reload settings",
   "api": {
     "INVALID_ADMIN_KEY": "Invalid admin key",
+    "INSUFFICIENT_PERMISSION": "The current management role cannot perform this operation",
+    "CAPTURE_KEY_REWRAP_FAILED": "Capture key rewrap failed",
     "ENDPOINT_NOT_FOUND": "Endpoint not found",
     "INVALID_CONFIG_JSON": "Invalid configuration JSON",
     "TRAILING_CONFIG_JSON": "Configuration JSON contains trailing content",

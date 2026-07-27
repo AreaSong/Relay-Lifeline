@@ -30,6 +30,7 @@ jobs:
       - run: go test ./...
         env:
           CGO_ENABLED: "0"
+      - run: make race
       - run: go vet ./...
         env:
           CGO_ENABLED: "0"

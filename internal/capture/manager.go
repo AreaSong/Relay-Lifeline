@@ -25,7 +25,7 @@ import (
 type Manager struct {
 	mu          sync.Mutex
 	config      func() config.CaptureConfig
-	masterKey   []byte
+	keyring     Keyring
 	root        string
 	unavailable string
 	active      bool
@@ -39,13 +39,22 @@ type Manager struct {
 }
 
 func New(provider func() config.CaptureConfig, encodedMasterKey string) *Manager {
+	keyring, err := ParseKeyring("", encodedMasterKey, "")
+	return NewWithKeyring(provider, keyring, err)
+}
+
+func NewFromEnvironment(provider func() config.CaptureConfig) *Manager {
+	keyring, err := KeyringFromEnvironment()
+	return NewWithKeyring(provider, keyring, err)
+}
+
+func NewWithKeyring(provider func() config.CaptureConfig, keyring Keyring, keyringErr error) *Manager {
 	manager := &Manager{config: provider, root: provider().StorageDir, records: make(map[string]Record), byRequest: make(map[string]string), disabled: make(map[string]bool), now: time.Now}
-	key, err := parseMasterKey(encodedMasterKey)
-	if err != nil {
-		manager.unavailable = err.Error()
+	if keyringErr != nil {
+		manager.unavailable = keyringErr.Error()
 		return manager
 	}
-	manager.masterKey = key
+	manager.keyring = keyring
 	if err := manager.initialize(); err != nil {
 		manager.unavailable = err.Error()
 		return manager
@@ -148,14 +157,14 @@ func (m *Manager) BeginRequest(requestID, method, path string, headers http.Head
 	if err != nil {
 		return "", err
 	}
-	wrapped, err := wrapKey(m.masterKey, dataKey)
+	wrapped, err := wrapKey(m.keyring.Keys[m.keyring.ActiveID], dataKey)
 	if err != nil {
 		return "", err
 	}
 	now := m.now()
 	record := Record{
 		ID: id, RequestID: requestID, Method: method, Path: sanitizePath(path), State: "active",
-		StartedAt: now, ExpiresAt: now.Add(m.config().Retention.Duration), WrappedKey: wrapped,
+		StartedAt: now, ExpiresAt: now.Add(m.config().Retention.Duration), WrappedKey: wrapped, KeyID: m.keyring.ActiveID,
 		Request:  BodyPart{Headers: safeHeaders(headers), ContentType: headers.Get("Content-Type")},
 		Attempts: make([]Attempt, 0),
 	}
@@ -196,7 +205,7 @@ func (m *Manager) RecordAttempt(requestID string, number, statusCode int, header
 		attempt.Error = string(redactText([]byte(attemptErr.Error())))
 	}
 	if body != nil && !m.disabled[requestID] && number <= m.config().MaxAttemptsPerRequest {
-		key, err := unwrapKey(m.masterKey, record.WrappedKey)
+		key, _, err := m.dataKeyLocked(record)
 		if err != nil {
 			return err
 		}
@@ -258,6 +267,64 @@ func (m *Manager) Get(id string) (Record, bool) {
 	return publicRecord(record), ok
 }
 
+func (m *Manager) KeyStatus() KeyStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := KeyStatus{ActiveID: m.keyring.ActiveID, Configured: m.keyring.IDs(), RecordsByID: make(map[string]int)}
+	for _, record := range m.records {
+		if record.KeyID == "" {
+			status.Unresolved++
+			continue
+		}
+		status.RecordsByID[record.KeyID]++
+	}
+	return status
+}
+
+func (m *Manager) RewrapAll() (RewrapResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := RewrapResult{ActiveID: m.keyring.ActiveID}
+	updated := make(map[string]Record)
+	originals := make(map[string]Record)
+	for id, record := range m.records {
+		if record.KeyID == m.keyring.ActiveID {
+			result.Unchanged++
+			continue
+		}
+		dataKey, _, err := m.dataKeyLocked(record)
+		if err != nil {
+			return RewrapResult{}, fmt.Errorf("capture %s cannot be unwrapped: %w", id, err)
+		}
+		wrapped, err := wrapKey(m.keyring.Keys[m.keyring.ActiveID], dataKey)
+		if err != nil {
+			return RewrapResult{}, err
+		}
+		originals[id] = record
+		record.WrappedKey = wrapped
+		record.KeyID = m.keyring.ActiveID
+		updated[id] = record
+	}
+	persisted := make([]string, 0, len(updated))
+	for id, record := range updated {
+		if err := m.persistLocked(record); err != nil {
+			var rollbackErrors []error
+			for _, persistedID := range persisted {
+				if rollbackErr := m.persistLocked(originals[persistedID]); rollbackErr != nil {
+					rollbackErrors = append(rollbackErrors, rollbackErr)
+				}
+			}
+			return RewrapResult{}, errors.Join(append([]error{err}, rollbackErrors...)...)
+		}
+		persisted = append(persisted, id)
+	}
+	for id, record := range updated {
+		m.records[id] = record
+	}
+	result.Updated = len(updated)
+	return result, nil
+}
+
 func (m *Manager) Delete(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -317,6 +384,31 @@ func (m *Manager) initialize() error {
 		}
 		var record Record
 		if json.Unmarshal(data, &record) == nil && record.ID == entry.Name() {
+			if record.KeyID == "" {
+				if _, resolvedID, resolveErr := m.dataKeyLocked(record); resolveErr == nil {
+					record.KeyID = resolvedID
+					if persistErr := m.persistLocked(record); persistErr != nil {
+						return persistErr
+					}
+				}
+			}
+			if record.State == "active" {
+				record.State = "interrupted"
+				record.CompletedAt = m.now()
+				record.Warnings = appendUnique(record.Warnings, "service restarted before request completed")
+				if record.Final == nil {
+					for index := len(record.Attempts) - 1; index >= 0; index-- {
+						if record.Attempts[index].Response != nil {
+							part := *record.Attempts[index].Response
+							record.Final = &part
+							break
+						}
+					}
+				}
+				if persistErr := m.persistLocked(record); persistErr != nil {
+					return persistErr
+				}
+			}
 			m.records[record.ID] = record
 		}
 	}
@@ -436,6 +528,23 @@ func (m *Manager) emitLocked(event, message string, fields map[string]any) {
 
 func (m *Manager) recordDir(id string) string { return filepath.Join(m.root, id) }
 
+func (m *Manager) dataKeyLocked(record Record) ([]byte, string, error) {
+	if record.KeyID != "" {
+		key, exists := m.keyring.Keys[record.KeyID]
+		if !exists {
+			return nil, "", fmt.Errorf("capture key %q is not configured", record.KeyID)
+		}
+		dataKey, err := unwrapKey(key, record.WrappedKey)
+		return dataKey, record.KeyID, err
+	}
+	for _, id := range m.keyring.IDs() {
+		if dataKey, err := unwrapKey(m.keyring.Keys[id], record.WrappedKey); err == nil {
+			return dataKey, id, nil
+		}
+	}
+	return nil, "", errors.New("no configured capture key can unwrap the record")
+}
+
 func randomID() (string, error) {
 	data := make([]byte, 16)
 	if _, err := rand.Read(data); err != nil {
@@ -451,7 +560,11 @@ func safeHeaders(source http.Header) http.Header {
 		if lower == "authorization" || lower == "proxy-authorization" || lower == "cookie" || lower == "set-cookie" || lower == "key" || strings.Contains(lower, "auth") || strings.Contains(lower, "api-key") || strings.HasSuffix(lower, "-key") || strings.HasSuffix(lower, "_key") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
 			continue
 		}
-		result[key] = append([]string(nil), values...)
+		filtered := make([]string, len(values))
+		for index, value := range values {
+			filtered[index] = string(redactText([]byte(value)))
+		}
+		result[key] = filtered
 	}
 	return result
 }

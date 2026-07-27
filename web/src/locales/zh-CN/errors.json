@@ -4,6 +4,8 @@
   "reload": "载入失败",
   "api": {
     "INVALID_ADMIN_KEY": "管理密钥无效",
+    "INSUFFICIENT_PERMISSION": "当前管理角色没有执行此操作的权限",
+    "CAPTURE_KEY_REWRAP_FAILED": "捕获密钥重包裹失败",
     "ENDPOINT_NOT_FOUND": "接口不存在",
     "INVALID_CONFIG_JSON": "配置 JSON 无效",
     "TRAILING_CONFIG_JSON": "配置 JSON 包含多余内容",

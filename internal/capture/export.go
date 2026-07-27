@@ -23,7 +23,7 @@ func (m *Manager) Preview(id string) (Preview, error) {
 	}
 	record = cloneRecord(record)
 	root := m.root
-	key, err := unwrapKey(m.masterKey, record.WrappedKey)
+	key, _, err := m.dataKeyLocked(record)
 	m.mu.Unlock()
 	if err != nil {
 		return Preview{}, err
@@ -66,7 +66,7 @@ func (m *Manager) Export(id, mode string, timeline any, destination io.Writer) (
 	}
 	record = cloneRecord(record)
 	root := m.root
-	key, err := unwrapKey(m.masterKey, record.WrappedKey)
+	key, _, err := m.dataKeyLocked(record)
 	m.mu.Unlock()
 	if err != nil {
 		return err

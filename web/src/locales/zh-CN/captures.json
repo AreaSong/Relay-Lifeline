@@ -30,6 +30,17 @@
   "attemptPart": "第 {{count}} 次 CPA 响应（已过滤）",
   "finalPart": "最终响应（已过滤）",
   "truncated": "正文已截断",
-  "headers": "响应头"
-  ,"actions": "操作"
+  "headers": "响应头",
+  "actions": "操作",
+  "keys": {
+    "title": "捕获密钥环",
+    "summary": "仅显示 Key ID 和记录数量，不显示密钥内容",
+    "active": "活动 Key ID",
+    "configured": "已配置 Key ID",
+    "records": "记录分布",
+    "unresolved": "未解析记录",
+    "rewrap": "重包裹到活动密钥",
+    "rewrapConfirm": "将所有捕获的数据密钥重包裹到当前活动密钥。确认继续吗？",
+    "rewrapped": "已重包裹 {{count}} 条捕获记录"
+  }
 }

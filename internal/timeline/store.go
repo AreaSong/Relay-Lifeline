@@ -50,6 +50,8 @@ type Record struct {
 	LastErrorDetails map[string]any `json:"lastErrorDetails,omitempty"`
 	LastErrorDetail  *ErrorDetail   `json:"lastErrorDetail,omitempty"`
 	Events           []Event        `json:"events"`
+	EventsTruncated  bool           `json:"eventsTruncated,omitempty"`
+	DroppedEvents    int            `json:"droppedEvents,omitempty"`
 }
 
 type Store struct {
@@ -85,7 +87,10 @@ func (s *Store) Add(id string, event Event) {
 	}
 	record.Events = append(record.Events, event)
 	if len(record.Events) > maxEventsPerRequest {
-		record.Events = append([]Event(nil), record.Events[len(record.Events)-maxEventsPerRequest:]...)
+		// The first event anchors the timeline; discard the oldest detail event instead.
+		record.Events = append(record.Events[:1], record.Events[2:]...)
+		record.EventsTruncated = true
+		record.DroppedEvents++
 	}
 	if event.Attempt > record.Attempt {
 		record.Attempt = event.Attempt

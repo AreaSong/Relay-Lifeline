@@ -81,7 +81,8 @@ func filterJSON(value any, key string) any {
 
 func sensitiveName(value string) bool {
 	lower := strings.ToLower(value)
-	return lower == "authorization" || lower == "cookie" || lower == "key" || strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "access_key")
+	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(lower)
+	return normalized == "authorization" || normalized == "cookie" || normalized == "key" || strings.Contains(normalized, "password") || strings.Contains(normalized, "secret") || strings.Contains(normalized, "token") || strings.Contains(normalized, "apikey") || strings.Contains(normalized, "accesskey") || strings.Contains(normalized, "privatekey") || strings.Contains(normalized, "credential")
 }
 
 func redactText(data []byte) []byte {

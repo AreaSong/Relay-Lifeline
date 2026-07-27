@@ -10,5 +10,6 @@
   "requestId": "Request ID",
   "all": "All levels",
   "empty": "No runtime logs match the current filters",
+  "truncated": "Showing the latest {{count}} matching entries. Earlier entries were paged or removed by retention; download the complete retained log for more.",
   "levels": { "debug": "Debug", "info": "Info", "warn": "Warning", "error": "Error" }
 }

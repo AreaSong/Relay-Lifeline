@@ -2,6 +2,7 @@
   "tabs": { "general": "General", "retry": "Retry", "traffic": "Traffic", "safety": "Safety", "capture": "Capture", "notifications": "Notifications", "appearance": "Appearance", "logging": "Logging" },
   "sections": {
     "service": { "title": "Service and upstream", "description": "Listener and the single CPA upstream" },
+    "runtime": { "title": "Runtime identity", "description": "Identifies the active binary, image, and management contract" },
     "localization": { "title": "Localization", "description": "Default, fallback, log, and notification languages" },
     "retry": { "title": "Retry policy", "description": "Wait and recovery rules for failed requests" },
     "stream": { "title": "Streaming and cache", "description": "SSE keepalive and complete response delivery" },
@@ -14,7 +15,7 @@
     "appearance": { "title": "Console appearance", "description": "Follow the operating system or use an explicit light or dark workspace" }
   },
   "fields": {
-    "listen": "Listen address", "requestBodyLimit": "Request body limit", "upstreamBaseUrl": "Upstream Base URL", "connectTimeout": "Connect timeout", "responseHeaderTimeout": "Response header timeout",
+    "listen": "Listen address", "requestBodyLimit": "Request body limit", "configBackupDir": "Configuration rollback directory", "configBackupDefault": "Defaults to .relay-lifeline-backups beside the config file", "upstreamBaseUrl": "Upstream Base URL", "connectTimeout": "Connect timeout", "responseHeaderTimeout": "Response header timeout", "responseBodyIdleTimeout": "Response body idle timeout",
     "defaultLocale": "Default locale", "fallbackLocale": "Fallback locale", "loggingLocale": "Log locale", "notificationLocale": "Notification locale",
     "enableRetry": "Enable retries", "errorScope": "Error scope", "allErrors": "All errors", "transientErrors": "Transient errors only", "maxAttempts": "Maximum attempts", "minWait": "Minimum wait", "maxWait": "Maximum wait", "honorRetryAfter": "Honor Retry-After",
     "heartbeat": "Heartbeat interval", "memoryLimit": "Memory cache limit", "tempDir": "Temporary directory", "systemDefault": "System default",
@@ -29,6 +30,8 @@
   "logLevels": { "debug": "Debug", "info": "Info", "warn": "Warning", "error": "Error" },
   "saved": "Settings saved and applied",
   "savedRestart": "Settings saved; some changes require a restart",
+  "savedBackup": "Settings saved; rollback copy created at {{path}}",
+  "restartConfirm": "This change affects {{count}} configuration sections that require a restart. Save it?",
   "reloaded": "Reloaded from the configuration file",
   "unsaved": "Unsaved changes",
   "changeSummary": "{{count}} configuration sections changed",
@@ -39,5 +42,6 @@
   "restartHint": "Changes to this field require a restart",
   "hotReload": "Unmarked fields apply without restarting",
   "restartApply": "Marked fields apply after restart",
+  "runtime": { "version": "Version", "revision": "Source commit", "builtAt": "Build time", "startedAt": "Started at", "platform": "Runtime platform", "contract": "Contract versions", "image": "Image reference" },
   "units": { "unit": "Unit", "milliseconds": "Milliseconds", "seconds": "Seconds", "minutes": "Minutes", "hours": "Hours" }
 }

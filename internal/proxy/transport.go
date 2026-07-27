@@ -23,6 +23,8 @@ type attemptResult struct {
 	err        error
 }
 
+var errResponseBodyIdleTimeout = errors.New("upstream response body idle timeout")
+
 func newHTTPClient(cfg config.Config) *http.Client {
 	dialer := &net.Dialer{Timeout: cfg.Upstream.ConnectTimeout.Duration, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
@@ -50,10 +52,67 @@ func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, sou
 	}
 	defer response.Body.Close()
 	buffer := NewReplayBuffer(int64(cfg.Stream.MemoryLimit), cfg.Stream.TempDir)
-	if _, err := io.Copy(buffer, response.Body); err != nil {
-		return attemptResult{response: response, buffer: buffer, err: err, validation: Validation{Message: l10n.M("proxy.response_interrupted")}}
+	if err := copyResponseBody(ctx, buffer, response.Body, cfg.Upstream.ResponseBodyIdleTimeout.Duration); err != nil {
+		message := l10n.M("proxy.response_interrupted")
+		if errors.Is(err, errResponseBodyIdleTimeout) {
+			message = l10n.M("proxy.response_body_timeout")
+		}
+		return attemptResult{response: response, buffer: buffer, err: err, validation: Validation{Message: message}}
 	}
 	return attemptResult{response: response, buffer: buffer, validation: validateResponse(response, buffer, streaming)}
+}
+
+type activityWriter struct {
+	io.Writer
+	activity chan<- struct{}
+}
+
+func (w activityWriter) Write(data []byte) (int, error) {
+	n, err := w.Writer.Write(data)
+	if n > 0 {
+		select {
+		case w.activity <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func copyResponseBody(ctx context.Context, destination io.Writer, body io.ReadCloser, idleTimeout time.Duration) error {
+	activity := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(activityWriter{Writer: destination, activity: activity}, body)
+		done <- err
+	}()
+	timer := time.NewTimer(idleTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-activity:
+			resetTimer(timer, idleTimeout)
+		case <-timer.C:
+			_ = body.Close()
+			<-done
+			return errResponseBodyIdleTimeout
+		case <-ctx.Done():
+			_ = body.Close()
+			<-done
+			return ctx.Err()
+		}
+	}
+}
+
+func resetTimer(timer *time.Timer, duration time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(duration)
 }
 
 func buildTargetURL(baseURL string, incoming *url.URL) (string, error) {
