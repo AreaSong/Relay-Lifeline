@@ -40,7 +40,19 @@ function expectCaptureRecord(value: unknown, label: string): CaptureRecord {
 }
 
 export class ApiClient {
-  constructor(private token: string, private locale = normalizeLocale(i18n.resolvedLanguage)) {}
+  private unauthorizedNotified = false;
+
+  constructor(
+    private token: string,
+    private locale = normalizeLocale(i18n.resolvedLanguage),
+    private onUnauthorized?: (token: string) => void,
+  ) {}
+
+  private notifyUnauthorized(status: number) {
+    if (status !== 401 || this.unauthorizedNotified) return;
+    this.unauthorizedNotified = true;
+    this.onUnauthorized?.(this.token);
+  }
 
   private async request<T>(path: string, init?: RequestInit, validate: (value: unknown) => T = (value) => value as T): Promise<T> {
     const response = await fetch(`/admin/api${path}`, {
@@ -54,6 +66,7 @@ export class ApiClient {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      this.notifyUnauthorized(response.status);
       throw new ApiError(payload.code || `HTTP_${response.status}`, payload.error || i18n.t("common:httpError", { status: response.status }), payload.details);
     }
     return validate(payload);
@@ -158,6 +171,7 @@ export class ApiClient {
     const response = await fetch("/admin/api/diagnostics/export", {
       headers: { Authorization: `Bearer ${this.token}`, "Accept-Language": this.locale },
     });
+    this.notifyUnauthorized(response.status);
     if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
     const blob = await response.blob();
     const link = document.createElement("a");
@@ -177,6 +191,7 @@ export class ApiClient {
 
   private async download(path: string, filename: string, extraHeaders?: Record<string, string>) {
     const response = await fetch(`/admin/api${path}`, { headers: { Authorization: `Bearer ${this.token}`, "Accept-Language": this.locale, ...extraHeaders } });
+    this.notifyUnauthorized(response.status);
     if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
     const blob = await response.blob();
     const link = document.createElement("a");

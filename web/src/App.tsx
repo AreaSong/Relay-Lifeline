@@ -39,10 +39,11 @@ function currentView(): View {
   return allViews.includes(candidate) ? candidate : "overview";
 }
 
-function Login({ onLogin, themeMode, setThemeMode }: {
+function Login({ onLogin, themeMode, setThemeMode, expired }: {
   onLogin: (token: string) => Promise<void>;
   themeMode: ReturnType<typeof useTheme>["mode"];
   setThemeMode: ReturnType<typeof useTheme>["setMode"];
+  expired?: boolean;
 }) {
   const { t, i18n } = useTranslation(["auth", "common", "overview"]);
   const [token, setToken] = useState("");
@@ -68,8 +69,8 @@ function Login({ onLogin, themeMode, setThemeMode }: {
     <section className="login-access"><div className="login-language"><LanguageSelector /><ThemeSelector mode={themeMode} onChange={setThemeMode} compact /></div>
       <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
         <input className="sr-only" type="text" name="username" value="relay-lifeline-admin" autoComplete="username" tabIndex={-1} aria-hidden="true" readOnly />
-        <label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => setToken(event.target.value)} autoComplete="current-password" autoFocus required /></label>
-        {error && <div className="error-banner" role="alert">{error}</div>}
+        <label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => { setToken(event.target.value); setError(""); }} autoComplete="current-password" autoFocus required /></label>
+        {(error || expired) && <div className="error-banner" role="alert">{error || t("auth:sessionExpired")}</div>}
         <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
       </form>
     </section>
@@ -81,6 +82,7 @@ export function App() {
   const locale = normalizeLocale(i18n.resolvedLanguage);
   const theme = useTheme();
   const [token, setToken] = useState(() => sessionStorage.getItem("relay-lifeline-token") || "");
+  const [authExpired, setAuthExpired] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<View>(currentView);
   const [status, setStatus] = useState<Status | null>(null);
@@ -99,7 +101,13 @@ export function App() {
   const [mobileTools, setMobileTools] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
-  const api = useMemo(() => new ApiClient(token, locale), [token, locale]);
+  const resetAuthentication = useCallback((expired: boolean, expectedToken?: string) => {
+    if (expectedToken !== undefined && sessionStorage.getItem("relay-lifeline-token") !== expectedToken) return;
+    sessionStorage.removeItem("relay-lifeline-token");
+    setToken(""); setAuthExpired(expired); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
+    setAlerts([]); setHistory([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage("");
+  }, []);
+  const api = useMemo(() => new ApiClient(token, locale, (failedToken) => resetAuthentication(true, failedToken)), [locale, resetAuthentication, token]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const canOperate = session?.capabilities.includes("operate") || false;
   const canSensitive = session?.capabilities.includes("sensitive") || false;
@@ -127,24 +135,33 @@ export function App() {
   }, []);
   useEffect(() => {
     if (!token) return;
-    Promise.all([
-      api.session().then(setSession), refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory), api.runtimeInfo().then(setRuntimeInfo),
-    ]).catch((reason) => showMessage(errorMessage(reason), "error"));
+    let disposed = false;
+    void api.session().then(async (nextSession) => {
+      if (disposed) return;
+      setSession(nextSession);
+      await Promise.all([
+        refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory), api.runtimeInfo().then(setRuntimeInfo),
+      ]);
+    }).catch((reason) => { if (!disposed) showMessage(errorMessage(reason), "error"); });
     setTimeline(null); setDiagnostics(null);
+    return () => { disposed = true; };
+  }, [api, refresh, showMessage, token]);
+  useEffect(() => {
+    if (!token || !session) return;
     const statusTimer = window.setInterval(() => refresh().catch(() => undefined), 2000);
     return () => window.clearInterval(statusTimer);
-  }, [api, refresh, showMessage, token]);
+  }, [refresh, session, token]);
   useEffect(() => {
     if (session && !canOperate && view === "settings") {
       setView("overview"); window.location.hash = "/overview";
     }
   }, [canOperate, session, view]);
   useEffect(() => {
-    if (!token) return;
+    if (!token || !session) return;
     void refreshMonitoring().catch((reason) => showMessage(errorMessage(reason), "error"));
     const metricsTimer = window.setInterval(() => refreshMonitoring().catch(() => undefined), 10_000);
     return () => window.clearInterval(metricsTimer);
-  }, [refreshMonitoring, showMessage, token]);
+  }, [refreshMonitoring, session, showMessage, token]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", warn);
@@ -159,11 +176,10 @@ export function App() {
 
   async function login(value: string) {
     const nextSession = await new ApiClient(value, locale).session();
-    sessionStorage.setItem("relay-lifeline-token", value); setSession(nextSession); setToken(value);
+    sessionStorage.setItem("relay-lifeline-token", value); setAuthExpired(false); setSession(nextSession); setToken(value);
   }
   function logout() {
-    sessionStorage.removeItem("relay-lifeline-token");
-    setToken(""); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null); setTimeline(null); setMetrics(null); setEvents([]);
+    resetAuthentication(false);
   }
   async function selectView(next: View) {
     if (next === "settings" && !canOperate) return;
@@ -207,7 +223,7 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
 
-  if (!token) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} />;
+  if (!token) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} expired={authExpired} />;
   if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";

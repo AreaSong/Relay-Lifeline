@@ -2,6 +2,14 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [1.0.1] - 2026-07-27
+
+### Fixed
+
+- Clear an expired or rotated management key after any management API `401` response and return to the sign-in screen instead of polling indefinitely.
+- Ignore delayed unauthorized responses from an older session after a new management key has already been accepted.
+- Show an explicit bilingual sign-in message when the saved management key is no longer valid.
+
 ## [1.0.0] - 2026-07-27
 
 ### Added
@@ -26,4 +34,3 @@ All notable changes are documented here. This project follows Semantic Versionin
 - Authorization and authentication headers are never persisted in capture storage.
 - Raw capture access requires Sensitive Data permission and explicit confirmation.
 - Capture bodies use chunked AES-256-GCM with a distinct wrapped data key per record.
-
