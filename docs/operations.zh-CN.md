@@ -80,6 +80,19 @@ queue:
   max-active: 8
   max-waiting: 100
   recovery-spacing: "2s"
+
+persistence:
+  enabled: true
+  directory: "/var/lib/relay-lifeline/events"
+  retention: "336h"
+  sync-writes: true
+
+lifecycle:
+  track-uncertain-delivery: true
+  preserve-idempotency-key: true
+  generate-idempotency-key: false
+  max-request-duration: "0s"
+  client-disconnect-policy: "cancel"
 ```
 
 `response-body-idle-timeout` 从最后一段上游正文数据开始计时。超过阈值会关闭该次响应并进入重试，防止已收到响应头但正文永久停顿。
@@ -122,6 +135,8 @@ queued -> requesting -> waiting -> requesting -> completed
 - `requesting`：当前正在请求上游。
 - `queued`：活动并发已满，尚未取得上游名额。
 - `interrupted`：服务重启时未完成的捕获记录，正文证据仍可检查。
+- `uncertain`：请求可能已写入上游，但响应头尚未返回；再次尝试存在重复调用风险。
+- `orphaned`：进程重启前未完成的旧请求，仅保留历史，不会脱离原客户端自动重放。
 
 处理顺序：
 
@@ -138,6 +153,9 @@ docker compose ps
 docker compose logs --tail=200 relay-lifeline
 curl -fsS http://127.0.0.1:8318/healthz
 curl -fsS http://127.0.0.1:8318/readyz
+relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
+relay-lifeline -config /etc/relay-lifeline/config.yaml -doctor
+relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
 ```
 
 ## 重启与排空
@@ -175,8 +193,8 @@ curl -fsS http://127.0.0.1:8318/healthz
 
 ## 数据与保留
 
-- 历史、指标、运行事件和运行日志位于内存，服务重启后清空。
+- 请求与事故时间线位于 `/var/lib/relay-lifeline/events` 持久卷，按保留期每小时原子压实，服务重启后恢复；未完成请求只恢复为 `orphaned`，不会自动重放。
+- 指标、运行事件和实时运行日志位于内存，服务重启后清空。
 - 加密捕获位于持久卷，默认保留 72 小时。
 - 临时响应缓存权限为 `0600`，交付或失败后删除。
 - 诊断包不含正文；完整原文只通过显式确认的流式 ZIP 下载。
-

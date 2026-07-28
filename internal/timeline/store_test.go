@@ -1,9 +1,11 @@
 package timeline
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
@@ -81,5 +83,85 @@ func TestTimelineCapPreservesReceivedEventAndReportsTruncation(t *testing.T) {
 	}
 	if !record.EventsTruncated || record.DroppedEvents != 10 {
 		t.Fatalf("时间线截断信息异常: %+v", record)
+	}
+}
+
+func TestPersistentTimelineReplaysCompletedHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requests.jsonl")
+	eventJournal, err := journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := func() Limits { return Limits{MaxItems: 10, Retention: time.Hour} }
+	store, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Start("request", "POST", "/v1/responses")
+	store.Add("request", Event{Type: "attempt_started", Attempt: 1})
+	store.Finish("request", "successful")
+	if err := eventJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	eventJournal, err = journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventJournal.Close()
+	replayed, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := replayed.Request("request")
+	if !ok || record.State != "successful" || record.Attempt != 1 || len(record.Events) != 2 {
+		t.Fatalf("持久化时间线回放异常: %+v", record)
+	}
+}
+
+func TestPersistentTimelineMarksInterruptedRequestOrphaned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requests.jsonl")
+	eventJournal, err := journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := func() Limits { return Limits{MaxItems: 10, Retention: time.Hour} }
+	store, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Start("interrupted", "POST", "/v1/responses")
+	if err := eventJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	eventJournal, err = journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok := recovered.Request("interrupted")
+	if !ok || record.State != "orphaned" || record.CompletedAt.IsZero() {
+		t.Fatalf("中断请求未标记为 orphaned: %+v", record)
+	}
+	if err := eventJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	eventJournal, err = journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventJournal.Close()
+	replayed, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, ok = replayed.Request("interrupted")
+	if !ok || record.State != "orphaned" {
+		t.Fatalf("orphaned 终态未持久化: %+v", record)
 	}
 }

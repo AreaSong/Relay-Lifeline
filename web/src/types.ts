@@ -82,6 +82,35 @@ export interface Config {
     logResponseBody: boolean;
     logAuthorization: boolean;
   };
+  persistence: {
+    enabled: boolean;
+    directory: string;
+    retention: Duration;
+    syncWrites: boolean;
+  };
+  incidents: {
+    enabled: boolean;
+    correlationWindow: Duration;
+    recoveryStableWindow: Duration;
+    retention: Duration;
+    maxItems: number;
+  };
+  lifecycle: {
+    trackUncertainDelivery: boolean;
+    preserveIdempotencyKey: boolean;
+    generateIdempotencyKey: boolean;
+    maxRequestDuration: Duration;
+    clientDisconnectPolicy: "cancel" | "finish-attempt";
+  };
+  managementSecurity: {
+    loginFailuresPerMinute: number;
+    loginCooldown: Duration;
+    sessionIdleTimeout: Duration;
+  };
+  metricsExport: {
+    enabled: boolean;
+    path: string;
+  };
 }
 
 export interface RuntimeInfo {
@@ -101,6 +130,7 @@ export interface SessionInfo {
   authenticated: boolean;
   role: "viewer" | "operator" | "sensitive";
   capabilities: Array<"view" | "operate" | "sensitive">;
+  csrfToken?: string;
 }
 
 export interface ConfigChangePlan {
@@ -158,6 +188,7 @@ export interface TimelineEvent {
   messageDetails?: Record<string, unknown>;
   errorDetail?: ErrorDetail;
   waitMilliseconds?: number;
+  attemptPhase?: "prepare" | "connect" | "request_write" | "response_headers" | "response_body" | "protocol" | "delivery" | string;
 }
 
 export interface ErrorDetail {
@@ -197,6 +228,26 @@ export interface Alert {
   messageDetails?: Record<string, unknown>;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface Incident {
+  id: string;
+  state: "open" | "recovering" | "resolved";
+  startedAt: string;
+  lastFailureAt: string;
+  recoveryStartedAt?: string;
+  resolvedAt?: string;
+  affectedRequests: string[];
+  failedAttempts: number;
+  categories: Record<string, number>;
+  statusCodes: Record<string, number>;
+}
+
+export interface RealtimeSnapshot {
+  status: Status;
+  alerts: Alert[];
+  incidents: Incident[];
+  metrics?: MetricsSnapshot;
 }
 
 export interface DiagnosticCheck {

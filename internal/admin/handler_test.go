@@ -1,9 +1,12 @@
 package admin
 
 import (
+	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +21,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
@@ -80,8 +84,12 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 	store := config.NewStore(path, cfg)
 	registry := state.NewRegistry()
 	id, _ := registry.Add("POST", "/v1/responses", func() {})
+	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
 	registry.RecordEvent(id, timeline.Event{Type: "attempt_failed", Attempt: 1, StatusCode: 503, Message: "HTTP 503", ErrorDetail: &timeline.ErrorDetail{Message: "diagnostic-only-secret", Parsed: true}})
-	registry.Remove(id, "successful")
+	registry.UpdateMessage(id, lifecycle.StateBuffering, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateDelivering, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateCompleted, 1, l10n.Message{}, time.Time{})
+	registry.Remove(id, lifecycle.StateSuccessful)
 	handler := NewWithServices(store, registry, state.NewController(), risk.New(), diagnostics.New(store, "test", time.Now()), nil)
 
 	history := authenticatedRequest(handler, http.MethodGet, "/admin/api/history")
@@ -96,12 +104,15 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 		t.Fatal("时间线未返回安全错误详情")
 	}
 	bundle := authenticatedRequest(handler, http.MethodGet, "/admin/api/diagnostics/export")
-	if bundle.Code != http.StatusOK || !strings.Contains(bundle.Header().Get("Content-Disposition"), "diagnostics.json") {
+	if bundle.Code != http.StatusOK || !strings.Contains(bundle.Header().Get("Content-Disposition"), "diagnostics.zip") {
 		t.Fatalf("诊断包接口异常: %d %s", bundle.Code, bundle.Body.String())
 	}
+	files := diagnosticFiles(t, bundle.Body.Bytes())
 	for _, secret := range []string{"upstream-secret", "hidden", "webhook-secret", "diagnostic-only-secret"} {
-		if strings.Contains(bundle.Body.String(), secret) {
-			t.Fatalf("诊断包泄露敏感值 %q", secret)
+		for name, body := range files {
+			if strings.Contains(body, secret) {
+				t.Fatalf("诊断包文件 %s 泄露敏感值 %q", name, secret)
+			}
 		}
 	}
 }
@@ -127,8 +138,9 @@ func TestAdminLocalizesErrorsAndStoredHistoryPerRequest(t *testing.T) {
 	store := config.NewStore("", cfg)
 	registry := state.NewRegistry()
 	id, _ := registry.Add("POST", "/v1/responses", func() {})
+	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
 	registry.RecordEvent(id, timeline.Event{Type: "attempt_failed", Attempt: 1, MessageCode: "proxy.connection_failed"})
-	registry.Remove(id, "failed")
+	registry.Remove(id, lifecycle.StateFailed)
 	handler := New(store, registry, state.NewController())
 
 	unauthorizedRequest := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
@@ -414,9 +426,32 @@ func TestRuntimeLogPagingValidationAndDiagnosticEvidence(t *testing.T) {
 	}
 
 	bundle := authenticatedRequest(handler, http.MethodGet, "/admin/api/diagnostics/export")
-	if bundle.Code != http.StatusOK || !strings.Contains(bundle.Body.String(), `"runtimeLogs":[`) || !strings.Contains(bundle.Body.String(), `"metrics":{`) || !strings.Contains(bundle.Body.String(), `"errors":{`) {
+	files := diagnosticFiles(t, bundle.Body.Bytes())
+	if bundle.Code != http.StatusOK || !strings.Contains(files["runtime-logs.json"], `"event": "request.received"`) || !strings.Contains(files["metrics.json"], `"requests": 1`) || files["metric-errors.json"] == "" {
 		t.Fatalf("诊断证据不完整: %d %s", bundle.Code, bundle.Body.String())
 	}
+}
+
+func diagnosticFiles(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("诊断 ZIP 无效: %v", err)
+	}
+	result := make(map[string]string, len(archive.File))
+	for _, file := range archive.File {
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result[file.Name] = string(body)
+	}
+	return result
 }
 
 func TestAdminMetaValidateAndAPIVersionContract(t *testing.T) {
@@ -450,5 +485,121 @@ func TestAdminMetaValidateAndAPIVersionContract(t *testing.T) {
 	}
 	if store.Get().Retry.MaxAttempts != cfg.Retry.MaxAttempts {
 		t.Fatal("配置预检不应修改运行配置")
+	}
+}
+
+func TestManagementSessionCookieCSRFAndRevocation(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	store := config.NewStore("", config.Default())
+	handler := New(store, state.NewRegistry(), state.NewController())
+	login := httptest.NewRequest(http.MethodPost, "/admin/api/session/login", strings.NewReader(`{"key":"123456789012345678901234"}`))
+	login.RemoteAddr = "127.0.0.1:12345"
+	loginRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(loginRecorder, login)
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("会话登录失败: %d %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var info sessionInfo
+	if err := json.NewDecoder(loginRecorder.Body).Decode(&info); err != nil || info.CSRFToken == "" {
+		t.Fatalf("登录响应缺少 CSRF: %+v err=%v", info, err)
+	}
+	cookies := loginRecorder.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatalf("会话 Cookie 防护异常: %+v", cookies)
+	}
+
+	status := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
+	status.AddCookie(cookies[0])
+	statusRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(statusRecorder, status)
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("Cookie 会话读取失败: %d", statusRecorder.Code)
+	}
+
+	pause := httptest.NewRequest(http.MethodPost, "/admin/api/control/pause", nil)
+	pause.AddCookie(cookies[0])
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, pause)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("缺少 CSRF 未拒绝: %d %s", denied.Code, denied.Body.String())
+	}
+
+	logout := httptest.NewRequest(http.MethodPost, "/admin/api/session/logout", nil)
+	logout.AddCookie(cookies[0])
+	logout.Header.Set("X-CSRF-Token", info.CSRFToken)
+	logoutRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(logoutRecorder, logout)
+	cleared := logoutRecorder.Result().Cookies()
+	if logoutRecorder.Code != http.StatusOK || len(cleared) != 1 || cleared[0].MaxAge >= 0 {
+		t.Fatalf("注销未撤销 Cookie: %d %+v", logoutRecorder.Code, cleared)
+	}
+
+	afterLogout := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
+	afterLogout.AddCookie(cookies[0])
+	afterRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(afterRecorder, afterLogout)
+	if afterRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("注销后会话仍有效: %d", afterRecorder.Code)
+	}
+}
+
+func TestManagementLoginRateLimit(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	store := config.NewStore("", config.Default())
+	handler := New(store, state.NewRegistry(), state.NewController())
+	for attempt := 1; attempt <= store.Get().ManagementSecurity.LoginFailuresPerMinute; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, "/admin/api/session/login", strings.NewReader(`{"key":"wrong"}`))
+		request.RemoteAddr = "192.0.2.10:12345"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次失败响应异常: %d", attempt, recorder.Code)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/admin/api/session/login", strings.NewReader(`{"key":"123456789012345678901234"}`))
+	request.RemoteAddr = "192.0.2.10:54321"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("冷却期间未限速: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestManagementSSEStreamsControlSnapshot(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	store := config.NewStore("", config.Default())
+	handler := New(store, state.NewRegistry(), state.NewController())
+	handler.SetMonitoring(monitoring.New())
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodGet, "/admin/api/stream", nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	recorder := &sseTestRecorder{ResponseRecorder: httptest.NewRecorder(), flushed: make(chan struct{}, 1)}
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-recorder.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("SSE 首个快照超时")
+	}
+	cancel()
+	<-done
+	if !strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(recorder.Body.String(), `"status"`) || !strings.Contains(recorder.Body.String(), `"incidents":[]`) {
+		t.Fatalf("SSE 快照异常: headers=%v body=%s", recorder.Header(), recorder.Body.String())
+	}
+}
+
+type sseTestRecorder struct {
+	*httptest.ResponseRecorder
+	flushed chan struct{}
+}
+
+func (r *sseTestRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	select {
+	case r.flushed <- struct{}{}:
+	default:
 	}
 }

@@ -1,4 +1,4 @@
-import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
+import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -41,26 +41,27 @@ function expectCaptureRecord(value: unknown, label: string): CaptureRecord {
 
 export class ApiClient {
   private unauthorizedNotified = false;
+  private csrfToken = "";
 
   constructor(
-    private token: string,
     private locale = normalizeLocale(i18n.resolvedLanguage),
-    private onUnauthorized?: (token: string) => void,
+    private onUnauthorized?: () => void,
   ) {}
 
   private notifyUnauthorized(status: number) {
     if (status !== 401 || this.unauthorizedNotified) return;
     this.unauthorizedNotified = true;
-    this.onUnauthorized?.(this.token);
+    this.onUnauthorized?.();
   }
 
   private async request<T>(path: string, init?: RequestInit, validate: (value: unknown) => T = (value) => value as T): Promise<T> {
     const response = await fetch(`/admin/api${path}`, {
       ...init,
+      credentials: "same-origin",
       headers: {
-        Authorization: `Bearer ${this.token}`,
         "Accept-Language": this.locale,
         "Content-Type": "application/json",
+        ...(init?.method && init.method !== "GET" ? { "X-CSRF-Token": this.csrfToken } : {}),
         ...init?.headers,
       },
     });
@@ -73,7 +74,22 @@ export class ApiClient {
   }
 
   session() {
-    return this.request<SessionInfo>("/session", undefined, (value) => expectObjectArrays(value, "session", ["capabilities"]));
+    return this.request<SessionInfo>("/session", undefined, (value) => {
+      const session = expectObjectArrays<SessionInfo>(value, "session", ["capabilities"]);
+      this.csrfToken = session.csrfToken || "";
+      return session;
+    });
+  }
+
+  async login(key: string) {
+    const session = await this.request<SessionInfo>("/session/login", { method: "POST", body: JSON.stringify({ key }) }, (value) => expectObjectArrays(value, "session", ["capabilities"]));
+    this.csrfToken = session.csrfToken || "";
+    this.unauthorizedNotified = false;
+    return session;
+  }
+
+  logout() {
+    return this.request<{ loggedOut: boolean }>("/session/logout", { method: "POST" });
   }
 
   runtimeInfo() {
@@ -87,13 +103,27 @@ export class ApiClient {
   config() {
     return this.request<Config>("/config", undefined, (value) => {
       const config = expectObject<Config>(value, "config");
-      if (config.schemaVersion !== 1) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
+      if (config.schemaVersion !== 2) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
       return config;
     });
   }
 
   alerts() {
     return this.request<Alert[]>("/alerts", undefined, (value) => expectArray(value, "alerts"));
+  }
+
+  incidents() {
+    return this.request<Incident[]>("/incidents", undefined, (value) => expectArray(value, "incidents"));
+  }
+
+  subscribe(onSnapshot: (snapshot: RealtimeSnapshot) => void, onError: () => void) {
+    const source = new EventSource(`/admin/api/stream?locale=${encodeURIComponent(this.locale)}`);
+    source.addEventListener("snapshot", (event) => {
+      try { onSnapshot(expectObject<RealtimeSnapshot>(JSON.parse((event as MessageEvent).data), "streamSnapshot")); }
+      catch { onError(); }
+    });
+    source.onerror = onError;
+    return () => source.close();
   }
 
   history() {
@@ -169,14 +199,15 @@ export class ApiClient {
 
   async downloadDiagnostics() {
     const response = await fetch("/admin/api/diagnostics/export", {
-      headers: { Authorization: `Bearer ${this.token}`, "Accept-Language": this.locale },
+      credentials: "same-origin",
+      headers: { "Accept-Language": this.locale },
     });
     this.notifyUnauthorized(response.status);
     if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
     const blob = await response.blob();
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "relay-lifeline-diagnostics.json";
+    link.download = "relay-lifeline-diagnostics.zip";
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -190,7 +221,7 @@ export class ApiClient {
   }
 
   private async download(path: string, filename: string, extraHeaders?: Record<string, string>) {
-    const response = await fetch(`/admin/api${path}`, { headers: { Authorization: `Bearer ${this.token}`, "Accept-Language": this.locale, ...extraHeaders } });
+    const response = await fetch(`/admin/api${path}`, { credentials: "same-origin", headers: { "Accept-Language": this.locale, ...extraHeaders } });
     this.notifyUnauthorized(response.status);
     if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
     const blob = await response.blob();

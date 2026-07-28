@@ -27,6 +27,7 @@ services:
     volumes:
       - ${RELAY_LIFELINE_CONFIG:-./config.docker.yaml}:/etc/relay-lifeline/config.yaml:rw
       - ${RELAY_LIFELINE_CAPTURE_DIR:-./data/captures}:/var/lib/relay-lifeline/captures:rw
+      - ${RELAY_LIFELINE_EVENT_DIR:-./data/events}:/var/lib/relay-lifeline/events:rw
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8318/healthz"]
       interval: 15s

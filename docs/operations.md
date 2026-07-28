@@ -102,5 +102,4 @@ Before upgrading, retain the old image and its matching configuration. After dep
 
 To roll back, first point clients directly at CPA if immediate bypass is needed. Restore both the old image and its matching config, recreate the container, then verify health, version, diagnostics, and capture readability. An old binary may reject fields introduced by a newer config.
 
-Configuration writes retain the newest ten mode-`0600` backups. Encrypted captures persist across restarts and expire after 72 hours by default; in-memory history, metrics, events, and runtime logs reset on restart.
-
+Configuration writes retain the newest ten mode-`0600` backups. Encrypted captures persist across restarts and expire after 72 hours by default. Request and incident journals persist under `/var/lib/relay-lifeline/events`, are compacted hourly according to their retention settings, and must use a persistent volume. Metrics, operational events, and live runtime logs reset on restart.

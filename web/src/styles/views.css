@@ -96,6 +96,23 @@
 .overview-side { min-width: 0; display: grid; align-content: start; gap: 24px; }
 .overview-side .alert-list { max-height: 390px; overflow-y: auto; }
 
+.incident-list { display: grid; gap: 10px; }
+.incident-row { padding: 14px; border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: var(--radius-sm); background: var(--surface); }
+.incident-row.state-recovering { border-left-color: var(--warning); }
+.incident-row.state-resolved { border-left-color: var(--success); }
+.incident-row__heading { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.incident-row__heading div { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
+.incident-row__heading code, .incident-row__heading time { color: var(--text-soft); font-size: 12px; }
+.incident-row dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
+.incident-row dl div { min-width: 0; }
+.incident-row dt { color: var(--text-soft); font-size: 11px; }
+.incident-row dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 13px; }
+@media (max-width: 700px) {
+  .incident-row__heading { grid-template-columns: auto 1fr; }
+  .incident-row__heading time { grid-column: 2; }
+  .incident-row dl { grid-template-columns: 1fr; }
+}
+
 .request-toolbar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--border); }
 .request-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(220px, 1.5fr); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .request-summary > div { min-width: 0; padding: 14px 18px; border-right: 1px solid var(--border); }

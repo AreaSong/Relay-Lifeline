@@ -1,0 +1,8 @@
+{
+  "title": "事故中心",
+  "description": "聚合同一轮上游故障、恢复观察和稳定关闭记录",
+  "count": "{{count}} 个事故",
+  "empty": "当前没有事故记录",
+  "state": { "open": "故障持续中", "recovering": "恢复观察中", "resolved": "已稳定恢复" },
+  "failedAttempts": "失败尝试", "affectedRequests": "影响请求", "lastFailure": "最近失败", "categories": "错误分类", "statusCodes": "HTTP 状态", "resolvedAt": "稳定恢复"
+}

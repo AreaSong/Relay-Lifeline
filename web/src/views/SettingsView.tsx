@@ -5,13 +5,14 @@ import { ThemeSelector } from "../components/ThemeSelector";
 import type { ThemeMode } from "../theme";
 import type { Config, RuntimeInfo } from "../types";
 
-type Tab = "general" | "retry" | "traffic" | "safety" | "capture" | "notifications" | "appearance" | "logging";
+type Tab = "general" | "retry" | "traffic" | "continuity" | "safety" | "capture" | "notifications" | "appearance" | "logging";
 type Locale = "zh-CN" | "en-US";
 type EditableConfigKey = Exclude<keyof Config, "schemaVersion">;
 const configTabs: Record<EditableConfigKey, Tab> = {
   server: "general", upstream: "general", localization: "general", retry: "retry", stream: "retry",
   queue: "traffic", history: "traffic", observability: "safety", risk: "safety", capture: "capture",
-  notifications: "notifications", logging: "logging",
+  notifications: "notifications", logging: "logging", persistence: "continuity", incidents: "continuity",
+  lifecycle: "continuity", managementSecurity: "continuity", metricsExport: "continuity",
 };
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
@@ -105,7 +106,7 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
   const toggleEvent = (eventType: string, enabled: boolean) => patch("notifications", {
     eventTypes: enabled ? Array.from(new Set([...config.notifications.eventTypes, eventType])) : config.notifications.eventTypes.filter((value) => value !== eventType),
   });
-  const tabs: Tab[] = ["general", "retry", "traffic", "safety", "capture", "notifications", "appearance", "logging"];
+  const tabs: Tab[] = ["general", "retry", "traffic", "continuity", "safety", "capture", "notifications", "appearance", "logging"];
   const changedSections = Array.from(new Set((Object.keys(configTabs) as EditableConfigKey[])
     .filter((key) => JSON.stringify(config[key]) !== JSON.stringify(baseline[key]))
     .map((key) => configTabs[key])));
@@ -154,6 +155,34 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
         <label className="field"><span>{t("settings:fields.historyLimit")}</span><input type="number" min="1" value={config.history.maxItems} onChange={(event) => patch("history", { maxItems: Number(event.target.value) })} /></label>
         <DurationField label={t("settings:fields.historyRetention")} value={config.history.retention} onChange={(retention) => patch("history", { retention })} />
       </div></section>}
+	  {tab === "continuity" && <>
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.persistence.title")}</h2><p>{t("settings:sections.persistence.description")}</p></div><Toggle label={t("settings:fields.persistenceEnabled")} checked={config.persistence.enabled} onChange={(enabled) => patch("persistence", { enabled })} /></div><div className="form-grid">
+	      <label className="field wide"><span>{t("settings:fields.persistenceDirectory")}</span><input value={config.persistence.directory} onChange={(event) => patch("persistence", { directory: event.target.value })} />{restartHint}</label>
+	      <DurationField restart label={t("settings:fields.persistenceRetention")} value={config.persistence.retention} onChange={(retention) => patch("persistence", { retention })} />
+	      <Toggle label={t("settings:fields.syncWrites")} checked={config.persistence.syncWrites} onChange={(syncWrites) => patch("persistence", { syncWrites })} />
+	    </div></section>
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.lifecycle.title")}</h2><p>{t("settings:sections.lifecycle.description")}</p></div></div><div className="form-grid">
+	      <Toggle label={t("settings:fields.trackUncertainDelivery")} checked={config.lifecycle.trackUncertainDelivery} onChange={(trackUncertainDelivery) => patch("lifecycle", { trackUncertainDelivery })} />
+	      <Toggle label={t("settings:fields.preserveIdempotencyKey")} checked={config.lifecycle.preserveIdempotencyKey} onChange={(preserveIdempotencyKey) => patch("lifecycle", { preserveIdempotencyKey })} />
+	      <Toggle label={t("settings:fields.generateIdempotencyKey")} checked={config.lifecycle.generateIdempotencyKey} onChange={(generateIdempotencyKey) => patch("lifecycle", { generateIdempotencyKey })} />
+	      <DurationField label={t("settings:fields.maxRequestDuration")} value={config.lifecycle.maxRequestDuration} onChange={(maxRequestDuration) => patch("lifecycle", { maxRequestDuration })} />
+	      <label className="field"><span>{t("settings:fields.clientDisconnectPolicy")}</span><select value={config.lifecycle.clientDisconnectPolicy} onChange={(event) => patch("lifecycle", { clientDisconnectPolicy: event.target.value as Config["lifecycle"]["clientDisconnectPolicy"] })}><option value="cancel">{t("settings:fields.cancel")}</option><option value="finish-attempt">{t("settings:fields.finishAttempt")}</option></select></label>
+	    </div></section>
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.incidents.title")}</h2><p>{t("settings:sections.incidents.description")}</p></div><Toggle label={t("settings:fields.incidentsEnabled")} checked={config.incidents.enabled} onChange={(enabled) => patch("incidents", { enabled })} /></div><div className="form-grid">
+	      <DurationField label={t("settings:fields.correlationWindow")} value={config.incidents.correlationWindow} onChange={(correlationWindow) => patch("incidents", { correlationWindow })} />
+	      <DurationField label={t("settings:fields.recoveryStableWindow")} value={config.incidents.recoveryStableWindow} onChange={(recoveryStableWindow) => patch("incidents", { recoveryStableWindow })} />
+	      <DurationField label={t("settings:fields.incidentRetention")} value={config.incidents.retention} onChange={(retention) => patch("incidents", { retention })} />
+	      <label className="field"><span>{t("settings:fields.incidentLimit")}</span><input type="number" min="1" max="100000" value={config.incidents.maxItems} onChange={(event) => patch("incidents", { maxItems: Number(event.target.value) })} /></label>
+	    </div></section>
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.managementSecurity.title")}</h2><p>{t("settings:sections.managementSecurity.description")}</p></div></div><div className="form-grid">
+	      <label className="field"><span>{t("settings:fields.loginFailuresPerMinute")}</span><input type="number" min="1" max="100" value={config.managementSecurity.loginFailuresPerMinute} onChange={(event) => patch("managementSecurity", { loginFailuresPerMinute: Number(event.target.value) })} /></label>
+	      <DurationField label={t("settings:fields.loginCooldown")} value={config.managementSecurity.loginCooldown} onChange={(loginCooldown) => patch("managementSecurity", { loginCooldown })} />
+	      <DurationField label={t("settings:fields.sessionIdleTimeout")} value={config.managementSecurity.sessionIdleTimeout} onChange={(sessionIdleTimeout) => patch("managementSecurity", { sessionIdleTimeout })} />
+	    </div></section>
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.metrics.title")}</h2><p>{t("settings:sections.metrics.description")}</p></div><Toggle label={t("settings:fields.metricsEnabled")} checked={config.metricsExport.enabled} onChange={(enabled) => patch("metricsExport", { enabled })} /></div><div className="form-grid">
+	      <label className="field"><span>{t("settings:fields.metricsPath")}</span><input value={config.metricsExport.path} onChange={(event) => patch("metricsExport", { path: event.target.value })} />{restartHint}</label>
+	    </div></section>
+	  </>}
 	  {tab === "safety" && <>
         <section><div className="section-heading"><div><h2>{t("settings:sections.observability.title")}</h2><p>{t("settings:sections.observability.description")}</p></div></div><div className="form-grid">
           <label className="field"><span>{t("settings:fields.collectionMode")}</span><select value={config.observability.errorDetails} onChange={(event) => patch("observability", { errorDetails: event.target.value as Config["observability"]["errorDetails"] })}><option value="safe">{t("settings:fields.safeExtraction")}</option><option value="off">{t("settings:fields.off")}</option></select></label>

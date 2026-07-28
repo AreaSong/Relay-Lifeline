@@ -1,13 +1,22 @@
 package timeline
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
 const maxEventsPerRequest = 100
+
+const (
+	journalStart  = "timeline.start"
+	journalEvent  = "timeline.event"
+	journalFinish = "timeline.finish"
+)
 
 type Limits struct {
 	MaxItems  int
@@ -35,6 +44,7 @@ type Event struct {
 	MessageDetails   map[string]any `json:"messageDetails,omitempty"`
 	ErrorDetail      *ErrorDetail   `json:"errorDetail,omitempty"`
 	WaitMilliseconds int64          `json:"waitMilliseconds,omitempty"`
+	AttemptPhase     string         `json:"attemptPhase,omitempty"`
 }
 
 type Record struct {
@@ -60,10 +70,28 @@ type Store struct {
 	history []Record
 	limits  func() Limits
 	now     func() time.Time
+	journal *journal.Store
 }
 
 func New(limits func() Limits) *Store {
 	return &Store{active: make(map[string]*Record), limits: limits, now: time.Now}
+}
+
+// NewPersistent replays the verified journal and marks requests interrupted by
+// the previous process as orphaned. Orphaned requests are never retried.
+func NewPersistent(limits func() Limits, eventJournal *journal.Store) (*Store, error) {
+	store := New(limits)
+	store.journal = eventJournal
+	if eventJournal == nil {
+		return store, nil
+	}
+	if err := store.replay(eventJournal.Entries()); err != nil {
+		return nil, err
+	}
+	if err := store.orphanInterrupted(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func (s *Store) Start(id, method, path string) {
@@ -71,6 +99,7 @@ func (s *Store) Start(id, method, path string) {
 	record := &Record{ID: id, Method: method, Path: path, State: "queued", StartedAt: now}
 	record.Events = []Event{{Time: now, Type: "received", MessageCode: "timeline.received"}}
 	s.mu.Lock()
+	s.appendJournal(id, journalStart, record)
 	s.active[id] = record
 	s.mu.Unlock()
 }
@@ -85,6 +114,92 @@ func (s *Store) Add(id string, event Event) {
 	if event.Time.IsZero() {
 		event.Time = s.now()
 	}
+	s.appendJournal(id, journalEvent, event)
+	applyEvent(record, event)
+}
+
+func (s *Store) Finish(id, outcome string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.active[id]
+	if !ok {
+		return
+	}
+	completedAt := s.now()
+	s.appendJournal(id, journalFinish, finishPayload{Outcome: outcome, CompletedAt: completedAt})
+	delete(s.active, id)
+	record.State = outcome
+	record.CompletedAt = completedAt
+	s.history = append([]Record{cloneRecord(*record)}, s.history...)
+	s.pruneLocked()
+}
+
+func (s *Store) replay(entries []journal.Entry) error {
+	for _, entry := range entries {
+		switch entry.Type {
+		case journalStart:
+			var record Record
+			if err := json.Unmarshal(entry.Payload, &record); err != nil {
+				return replayError(entry, err)
+			}
+			if record.ID == "" || record.ID != entry.EntityID {
+				return replayError(entry, fmt.Errorf("request ID mismatch"))
+			}
+			s.active[record.ID] = &record
+		case journalEvent:
+			record, ok := s.active[entry.EntityID]
+			if !ok {
+				return replayError(entry, fmt.Errorf("request is not active"))
+			}
+			var event Event
+			if err := json.Unmarshal(entry.Payload, &event); err != nil {
+				return replayError(entry, err)
+			}
+			applyEvent(record, event)
+		case journalFinish:
+			record, ok := s.active[entry.EntityID]
+			if !ok {
+				return replayError(entry, fmt.Errorf("request is not active"))
+			}
+			var payload finishPayload
+			if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+				return replayError(entry, err)
+			}
+			delete(s.active, entry.EntityID)
+			record.State = payload.Outcome
+			record.CompletedAt = payload.CompletedAt
+			s.history = append([]Record{cloneRecord(*record)}, s.history...)
+		default:
+			return replayError(entry, fmt.Errorf("unsupported event type %q", entry.Type))
+		}
+	}
+	s.pruneLocked()
+	return nil
+}
+
+func (s *Store) orphanInterrupted() error {
+	now := s.now()
+	for id, record := range s.active {
+		payload := finishPayload{Outcome: "orphaned", CompletedAt: now}
+		if _, err := s.journal.Append(id, journalFinish, payload); err != nil {
+			return fmt.Errorf("mark interrupted request %q as orphaned: %w", id, err)
+		}
+		delete(s.active, id)
+		record.State = payload.Outcome
+		record.CompletedAt = payload.CompletedAt
+		s.history = append([]Record{cloneRecord(*record)}, s.history...)
+	}
+	s.pruneLocked()
+	return nil
+}
+
+func (s *Store) appendJournal(id, eventType string, payload any) {
+	if s.journal != nil {
+		_, _ = s.journal.Append(id, eventType, payload)
+	}
+}
+
+func applyEvent(record *Record, event Event) {
 	record.Events = append(record.Events, event)
 	if len(record.Events) > maxEventsPerRequest {
 		// The first event anchors the timeline; discard the oldest detail event instead.
@@ -103,18 +218,13 @@ func (s *Store) Add(id string, event Event) {
 	}
 }
 
-func (s *Store) Finish(id, outcome string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.active[id]
-	if !ok {
-		return
-	}
-	delete(s.active, id)
-	record.State = outcome
-	record.CompletedAt = s.now()
-	s.history = append([]Record{cloneRecord(*record)}, s.history...)
-	s.pruneLocked()
+type finishPayload struct {
+	Outcome     string    `json:"outcome"`
+	CompletedAt time.Time `json:"completedAt"`
+}
+
+func replayError(entry journal.Entry, err error) error {
+	return fmt.Errorf("replay timeline journal sequence %d: %w", entry.Sequence, err)
 }
 
 func (s *Store) Request(id string) (Record, bool) {

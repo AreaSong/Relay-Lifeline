@@ -1,0 +1,8 @@
+{
+  "title": "Incident center",
+  "description": "Correlated upstream outages, recovery observation, and stable closure",
+  "count": "{{count}} incidents",
+  "empty": "No incidents have been recorded",
+  "state": { "open": "Outage ongoing", "recovering": "Recovery observation", "resolved": "Stable recovery" },
+  "failedAttempts": "Failed attempts", "affectedRequests": "Affected requests", "lastFailure": "Last failure", "categories": "Error categories", "statusCodes": "HTTP status", "resolvedAt": "Stable recovery"
+}

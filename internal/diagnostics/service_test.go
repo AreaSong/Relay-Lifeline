@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/journal"
 )
 
 func TestDiagnosticsUseTCPWithoutCallingModelAPI(t *testing.T) {
@@ -38,10 +39,17 @@ func TestDiagnosticsUseTCPWithoutCallingModelAPI(t *testing.T) {
 	cfg.Upstream.BaseURL = "http://" + listener.Addr().String()
 	cfg.Stream.TempDir = t.TempDir()
 	cfg.Capture.StorageDir = t.TempDir()
+	cfg.Persistence.Directory = t.TempDir()
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
 	}
 	service := New(config.NewStore(path, cfg), "test", time.Now())
+	eventJournal, err := journal.Open(filepath.Join(cfg.Persistence.Directory, "requests.jsonl"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventJournal.Close()
+	service.SetJournal(eventJournal)
 	report := service.Run(context.Background())
 	if !report.Healthy {
 		t.Fatalf("诊断失败: %+v", report.Checks)

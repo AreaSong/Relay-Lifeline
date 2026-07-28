@@ -7,7 +7,7 @@ Transfer Lifeline separates the request data plane from the management control p
 ```text
 AI client -> data plane -> OpenAI-compatible relay -> model provider
                 |
-                +-> state registry -> timeline and in-memory history
+                +-> state registry -> persistent request timeline
                 |                         |
                 +-> risk engine ----------+-> management API <- Web UI
                 |
@@ -33,7 +33,7 @@ The downstream HTTP status is committed as `200` before waiting so keepalives ca
 
 The management API uses layered Bearer keys. Viewer can read redacted status, history, timelines, metrics, logs, and filtered captures; Operator adds pause/resume, immediate retry, cancellation, capture control, and configuration writes; Sensitive Data additionally permits full-raw downloads.
 
-Runtime records store stable message codes and interpolation details. Human-readable messages are localized at API response time, allowing the same completed history record to be viewed in either language. History is bounded by capacity and retention and is not persisted.
+Runtime records store stable message codes and interpolation details. Human-readable messages are localized at API response time, allowing the same completed history record to be viewed in either language. Request and incident timelines are restored from verified SHA-256 hash-chain journals. Startup marks unfinished requests as `orphaned` instead of replaying them. Retention maintenance removes whole expired entities and atomically rebuilds the retained chain through a mode-`0600` file, `fsync`, and rename.
 
 Configuration writes validate the complete versioned document and use an atomic rename where supported. Docker single-file bind mounts fall back to a bounded in-place write. Before persistence, the current file is copied with mode `0600` to a bounded ten-file backup set. A separate validation endpoint returns authoritative hot-reload and restart sections without mutation. Fields tied to server construction or HTTP transport report `restartRequired`; policy and locale fields are read from the current store during operation.
 

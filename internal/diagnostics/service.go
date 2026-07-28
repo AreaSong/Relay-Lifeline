@@ -13,6 +13,7 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
@@ -39,6 +40,11 @@ type Service struct {
 	store     *config.Store
 	version   string
 	startedAt time.Time
+	journal   *journal.Store
+}
+
+func (s *Service) SetJournal(eventJournal *journal.Store) {
+	s.journal = eventJournal
 }
 
 func New(store *config.Store, version string, startedAt time.Time) *Service {
@@ -55,7 +61,7 @@ func (s *Service) Run(ctx context.Context, locales ...string) Report {
 		fallback = locales[1]
 	}
 	checks := []Check{passed("service", "diagnostic.service.name", "diagnostic.service.running", nil)}
-	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkAdminKey(), s.checkCapture(cfg))
+	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkAdminKey(), s.checkCapture(cfg), s.checkJournal(cfg))
 	checks = append(checks, s.checkUpstream(ctx, cfg), s.checkCache(cfg), s.checkDisk(cfg))
 	healthy := true
 	for _, check := range checks {
@@ -72,6 +78,23 @@ func (s *Service) Run(ctx context.Context, locales ...string) Report {
 		GeneratedAt: time.Now(), Version: s.version,
 		Uptime: uptime.String(), UptimeSeconds: int64(uptime.Seconds()), Healthy: healthy, Checks: checks,
 	}
+}
+
+func (s *Service) checkJournal(cfg config.Config) Check {
+	if !cfg.Persistence.Enabled {
+		return warning("journal", "diagnostic.journal.name", "diagnostic.journal.disabled", nil)
+	}
+	if s.journal == nil {
+		entries, err := journal.Verify(filepath.Join(cfg.Persistence.Directory, "requests.jsonl"))
+		if err != nil {
+			return failed("journal", "diagnostic.journal.name", "diagnostic.journal.unavailable", nil)
+		}
+		return passed("journal", "diagnostic.journal.name", "diagnostic.journal.ready", map[string]any{"Entries": len(entries)})
+	}
+	if err := s.journal.LastError(); err != nil {
+		return failed("journal", "diagnostic.journal.name", "diagnostic.journal.write_failed", nil)
+	}
+	return passed("journal", "diagnostic.journal.name", "diagnostic.journal.ready", map[string]any{"Entries": len(s.journal.Entries())})
 }
 
 func (s *Service) checkConfig(cfg config.Config) Check {

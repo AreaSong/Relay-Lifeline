@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
@@ -228,6 +229,113 @@ func TestGatewayRecoversFromDNSConnectionAndTimeoutErrors(t *testing.T) {
 	response.Body.Close()
 	if readErr != nil || attempts.Load() != 4 || registry.Snapshot(false).Successful != 1 {
 		t.Fatalf("传输错误恢复异常: attempts=%d status=%+v err=%v", attempts.Load(), registry.Snapshot(false), readErr)
+	}
+}
+
+func TestGatewayMarksWrittenRequestWithoutHeadersAsUncertain(t *testing.T) {
+	var attempts atomic.Int32
+	gateway, registry := testGateway(t, "http://upstream.invalid")
+	gateway.client = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		if attempts.Add(1) == 1 {
+			trace := httptrace.ContextClientTrace(request.Context())
+			if trace == nil || trace.WroteRequest == nil {
+				t.Fatal("请求缺少 WroteRequest 跟踪")
+			}
+			trace.WroteRequest(httptrace.WroteRequestInfo{})
+			return nil, errors.New("connection lost before response headers")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"status":"completed"}`)),
+			Request:    request,
+		}, nil
+	})}
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || attempts.Load() != 2 {
+		t.Fatalf("不确定请求恢复异常: attempts=%d err=%v", attempts.Load(), readErr)
+	}
+	history := registry.History()
+	if len(history) != 1 {
+		t.Fatalf("请求历史异常: %+v", history)
+	}
+	foundUncertain, foundFailurePhase := false, false
+	for _, event := range history[0].Events {
+		if event.Type == "uncertain" && event.AttemptPhase == "response_headers" {
+			foundUncertain = true
+		}
+		if event.Type == "attempt_failed" && event.AttemptPhase == "response_headers" {
+			foundFailurePhase = true
+		}
+	}
+	if !foundUncertain || !foundFailurePhase {
+		t.Fatalf("时间线缺少不确定交付风险或失败阶段: %+v", history[0].Events)
+	}
+}
+
+func TestLifecycleIdempotencyConfiguration(t *testing.T) {
+	header := http.Header{"Idempotency-Key": []string{"client-key"}}
+	prepareIdempotencyKey(header, config.LifecycleConfig{GenerateIdempotencyKey: true})
+	generated := header.Get("Idempotency-Key")
+	if !strings.HasPrefix(generated, "lifeline-") || len(generated) != len("lifeline-")+32 {
+		t.Fatalf("未生成稳定幂等键: %q", generated)
+	}
+	prepareIdempotencyKey(header, config.LifecycleConfig{PreserveIdempotencyKey: true, GenerateIdempotencyKey: true})
+	if header.Get("Idempotency-Key") != generated {
+		t.Fatal("同一请求重试链的幂等键发生变化")
+	}
+	prepareIdempotencyKey(header, config.LifecycleConfig{})
+	if header.Get("Idempotency-Key") != "" {
+		t.Fatal("关闭保留与生成后仍透传幂等键")
+	}
+}
+
+func TestGatewayExpiresAtLifecycleDeadline(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"status":"completed"}`)
+	}))
+	defer upstream.Close()
+	gateway, registry := testGateway(t, upstream.URL)
+	cfg := gateway.store.Get()
+	cfg.Lifecycle.MaxRequestDuration.Duration = 30 * time.Millisecond
+	gateway.store = config.NewStore("", cfg)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(response.Body)
+	response.Body.Close()
+	history := registry.History()
+	if len(history) != 1 || history[0].State != "expired" {
+		t.Fatalf("生命周期超时终态异常: %+v", history)
+	}
+}
+
+func TestGatewayRejectsNewRequestInResourceProtectionMode(t *testing.T) {
+	gateway, registry := testGateway(t, "http://upstream.invalid")
+	gateway.resourceCheck = func(config.Config) error { return errors.New("disk pressure") }
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusServiceUnavailable || registry.Snapshot(false).TotalRequests != 0 {
+		t.Fatalf("资源保护未在接纳前拒绝: status=%d snapshot=%+v", response.StatusCode, registry.Snapshot(false))
 	}
 }
 

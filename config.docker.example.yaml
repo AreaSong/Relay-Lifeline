@@ -1,4 +1,4 @@
-schema-version: 1
+schema-version: 2
 
 server:
   listen: "0.0.0.0:8318"
@@ -86,3 +86,32 @@ logging:
   log-request-body: false
   log-response-body: false
   log-authorization: false
+
+persistence:
+  enabled: true
+  directory: "/var/lib/relay-lifeline/events"
+  retention: "336h"
+  sync-writes: true
+
+incidents:
+  enabled: true
+  correlation-window: "30s"
+  recovery-stable-window: "2m"
+  retention: "720h"
+  max-items: 1000
+
+lifecycle:
+  track-uncertain-delivery: true
+  preserve-idempotency-key: true
+  generate-idempotency-key: false
+  max-request-duration: "0s"
+  client-disconnect-policy: "cancel"
+
+management-security:
+  login-failures-per-minute: 5
+  login-cooldown: "30s"
+  session-idle-timeout: "30m"
+
+metrics-export:
+  enabled: false
+  path: "/metrics"

@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 type Duration struct {
 	time.Duration
@@ -82,19 +82,24 @@ func (b *ByteSize) UnmarshalJSON(data []byte) error {
 }
 
 type Config struct {
-	SchemaVersion int                 `yaml:"schema-version" json:"schemaVersion"`
-	Server        ServerConfig        `yaml:"server" json:"server"`
-	Upstream      UpstreamConfig      `yaml:"upstream" json:"upstream"`
-	Retry         RetryConfig         `yaml:"retry" json:"retry"`
-	Stream        StreamConfig        `yaml:"stream" json:"stream"`
-	Queue         QueueConfig         `yaml:"queue" json:"queue"`
-	History       HistoryConfig       `yaml:"history" json:"history"`
-	Observability ObservabilityConfig `yaml:"observability" json:"observability"`
-	Capture       CaptureConfig       `yaml:"capture" json:"capture"`
-	Risk          RiskConfig          `yaml:"risk" json:"risk"`
-	Localization  LocalizationConfig  `yaml:"localization" json:"localization"`
-	Notifications NotificationConfig  `yaml:"notifications" json:"notifications"`
-	Logging       LoggingConfig       `yaml:"logging" json:"logging"`
+	SchemaVersion      int                      `yaml:"schema-version" json:"schemaVersion"`
+	Server             ServerConfig             `yaml:"server" json:"server"`
+	Upstream           UpstreamConfig           `yaml:"upstream" json:"upstream"`
+	Retry              RetryConfig              `yaml:"retry" json:"retry"`
+	Stream             StreamConfig             `yaml:"stream" json:"stream"`
+	Queue              QueueConfig              `yaml:"queue" json:"queue"`
+	History            HistoryConfig            `yaml:"history" json:"history"`
+	Observability      ObservabilityConfig      `yaml:"observability" json:"observability"`
+	Capture            CaptureConfig            `yaml:"capture" json:"capture"`
+	Risk               RiskConfig               `yaml:"risk" json:"risk"`
+	Localization       LocalizationConfig       `yaml:"localization" json:"localization"`
+	Notifications      NotificationConfig       `yaml:"notifications" json:"notifications"`
+	Logging            LoggingConfig            `yaml:"logging" json:"logging"`
+	Persistence        PersistenceConfig        `yaml:"persistence" json:"persistence"`
+	Incidents          IncidentConfig           `yaml:"incidents" json:"incidents"`
+	Lifecycle          LifecycleConfig          `yaml:"lifecycle" json:"lifecycle"`
+	ManagementSecurity ManagementSecurityConfig `yaml:"management-security" json:"managementSecurity"`
+	MetricsExport      MetricsExportConfig      `yaml:"metrics-export" json:"metricsExport"`
 }
 
 type ServerConfig struct {
@@ -190,6 +195,7 @@ type LoggingConfig struct {
 }
 
 func Default() Config {
+	persistence, incidents, lifecycle, managementSecurity, metricsExport := defaultV2Config()
 	return Config{
 		SchemaVersion: CurrentSchemaVersion,
 		Server: ServerConfig{
@@ -235,7 +241,9 @@ func Default() Config {
 			EventTypes: []string{"stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"},
 			Locale:     l10n.LocaleChinese,
 		},
-		Logging: LoggingConfig{Level: "info", Locale: l10n.LocaleChinese},
+		Logging:     LoggingConfig{Level: "info", Locale: l10n.LocaleChinese},
+		Persistence: persistence, Incidents: incidents, Lifecycle: lifecycle,
+		ManagementSecurity: managementSecurity, MetricsExport: metricsExport,
 	}
 }
 
@@ -252,6 +260,11 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, l10n.E("config.parse_failed", err, map[string]any{"Error": err.Error()})
 	}
+	migrated, err := Migrate(cfg)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg = migrated
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -361,12 +374,22 @@ func (c Config) Validate() error {
 			problems = append(problems, l10n.E("config.locale.invalid", nil, map[string]any{"Field": locale.field}))
 		}
 	}
+	problems = append(problems, validateV2Config(c)...)
 	return errors.Join(problems...)
 }
 
 func Migrate(cfg Config) (Config, error) {
 	if cfg.SchemaVersion == 0 {
-		cfg.SchemaVersion = CurrentSchemaVersion
+		cfg.SchemaVersion = 1
+	}
+	if cfg.SchemaVersion == 1 {
+		defaults := Default()
+		cfg.SchemaVersion = 2
+		cfg.Persistence = defaults.Persistence
+		cfg.Incidents = defaults.Incidents
+		cfg.Lifecycle = defaults.Lifecycle
+		cfg.ManagementSecurity = defaults.ManagementSecurity
+		cfg.MetricsExport = defaults.MetricsExport
 	}
 	if cfg.SchemaVersion != CurrentSchemaVersion {
 		return Config{}, l10n.E("config.schema.unsupported", nil, map[string]any{"Version": cfg.SchemaVersion, "Current": CurrentSchemaVersion})
@@ -410,6 +433,11 @@ func PlanChanges(before, after Config) ChangePlan {
 	appendSection("localization", before.Localization != after.Localization, false)
 	appendSection("notifications", !notificationEqual(before.Notifications, after.Notifications), false)
 	appendSection("logging", before.Logging != after.Logging, before.Logging.Level != after.Logging.Level)
+	appendSection("persistence", before.Persistence != after.Persistence, true)
+	appendSection("incidents", before.Incidents != after.Incidents, false)
+	appendSection("lifecycle", before.Lifecycle != after.Lifecycle, false)
+	appendSection("management-security", before.ManagementSecurity != after.ManagementSecurity, false)
+	appendSection("metrics-export", before.MetricsExport != after.MetricsExport, true)
 	return ChangePlan{SchemaVersion: CurrentSchemaVersion, ChangedSections: changed, HotReloadSections: hot, RestartSections: restart, RestartRequired: len(restart) > 0}
 }
 

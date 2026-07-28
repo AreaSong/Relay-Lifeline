@@ -18,6 +18,7 @@ docker build --build-arg VERSION=1.0.0 --build-arg REVISION=$(git rev-parse HEAD
 - All diagnostic checks pass without issuing a model request.
 - HTTP `4xx`/`5xx`, DNS, connection refusal, header timeout, body idle timeout, malformed JSON, incomplete SSE, cancellation, and queue saturation are covered.
 - A failed request enters `waiting`, emits heartbeats, retries, and delivers one complete response after recovery.
+- Request and incident journals survive container recreation, verify successfully, compact expired entities, and restore unfinished requests only as `orphaned`.
 - Viewer cannot mutate, Operator cannot download raw content, and Sensitive Data still requires explicit raw-download confirmation.
 - Completed captures remain readable after upgrade; key status reports zero unresolved records.
 - The prior image starts with its matching prior configuration and can serve health and management endpoints.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"path"
 	"strings"
@@ -14,13 +15,16 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 )
 
 type attemptResult struct {
-	response   *http.Response
-	buffer     *ReplayBuffer
-	validation Validation
-	err        error
+	response     *http.Response
+	buffer       *ReplayBuffer
+	validation   Validation
+	err          error
+	phase        lifecycle.AttemptPhase
+	wroteRequest bool
 }
 
 var errResponseBodyIdleTimeout = errors.New("upstream response body idle timeout")
@@ -38,17 +42,24 @@ func newHTTPClient(cfg config.Config) *http.Client {
 func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, source *http.Request, body []byte, streaming bool) attemptResult {
 	target, err := buildTargetURL(cfg.Upstream.BaseURL, source.URL)
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Message: l10n.M("proxy.upstream_url_invalid")}}
+		return attemptResult{err: err, phase: lifecycle.PhasePrepare, validation: Validation{Message: l10n.M("proxy.upstream_url_invalid")}}
 	}
 	request, err := http.NewRequestWithContext(ctx, source.Method, target, bytes.NewReader(body))
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Message: l10n.M("proxy.request_create_failed")}}
+		return attemptResult{err: err, phase: lifecycle.PhasePrepare, validation: Validation{Message: l10n.M("proxy.request_create_failed")}}
 	}
+	wroteRequest := false
+	trace := &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { wroteRequest = true }}
+	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
 	copyHeaders(request.Header, source.Header)
 	request.Host = request.URL.Host
 	response, err := client.Do(request)
 	if err != nil {
-		return attemptResult{err: err, validation: Validation{Message: classifyTransportError(err)}}
+		phase := lifecycle.PhaseConnect
+		if wroteRequest {
+			phase = lifecycle.PhaseResponseHeaders
+		}
+		return attemptResult{err: err, phase: phase, wroteRequest: wroteRequest, validation: Validation{Message: classifyTransportError(err)}}
 	}
 	defer response.Body.Close()
 	buffer := NewReplayBuffer(int64(cfg.Stream.MemoryLimit), cfg.Stream.TempDir)
@@ -57,9 +68,9 @@ func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, sou
 		if errors.Is(err, errResponseBodyIdleTimeout) {
 			message = l10n.M("proxy.response_body_timeout")
 		}
-		return attemptResult{response: response, buffer: buffer, err: err, validation: Validation{Message: message}}
+		return attemptResult{response: response, buffer: buffer, err: err, phase: lifecycle.PhaseResponseBody, wroteRequest: wroteRequest, validation: Validation{Message: message}}
 	}
-	return attemptResult{response: response, buffer: buffer, validation: validateResponse(response, buffer, streaming)}
+	return attemptResult{response: response, buffer: buffer, phase: lifecycle.PhaseProtocol, wroteRequest: wroteRequest, validation: validateResponse(response, buffer, streaming)}
 }
 
 type activityWriter struct {

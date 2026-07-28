@@ -115,7 +115,7 @@ The console uses layered management keys: Viewer can read redacted status and co
 The console can:
 
 - Inspect active requests, attempts, next retry time, and safe failure details.
-- Review request timelines and bounded in-memory history.
+- Review request timelines and bounded persistent history.
 - Review current load, time-windowed reliability and pressure charts, seven stable error categories, recovery histograms, and cursor-based operational events.
 - View non-blocking alerts for long-running requests, repeated attempts, authentication failures, queue pressure, and disk pressure.
 - Run diagnostics without calling the model API and export a redacted JSON bundle.
@@ -126,7 +126,7 @@ The console can:
 - Filter and download live structured runtime logs.
 - Capture the next bounded set of requests, preview filtered bodies, and download filtered or full-raw ZIP archives.
 
-History, monitoring metrics, and operational events are memory-only and are cleared on restart. Monitoring uses 1,440 fixed UTC minute buckets independently of `history.retention`; `dataSince` and `complete` show when the process has not yet observed a full requested window. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
+Request and incident timelines persist in verified journals and are restored after restart; interrupted requests are restored as `orphaned` and are never replayed without their original client connection. Monitoring metrics, operational events, and live runtime logs remain process-local and reset on restart. Monitoring uses 1,440 fixed UTC minute buckets independently of `history.retention`; `dataSince` and `complete` show when the process has not yet observed a full requested window. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
 
 Signal Continuity visualizes observed gateway state; it does not send an extra model probe. Three.js is loaded locally and on demand. Reduced-motion preferences and background tabs pause animation, while WebGL initialization failure or context loss switches to a static topology without disabling status data or controls.
 
@@ -139,11 +139,11 @@ The authenticated management API exposes:
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>` for the bounded operational event ring. Responses include `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap` so clients can resume or detect overwritten events.
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>` for the latest structured log entries, or use an `after` cursor for incremental reads. Responses include `entries`, `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap`, with strict bounds on levels and filters.
 
-Diagnostic exports also include the latest 200 structured runtime entries, one hour of metrics, and stable error categories without request/response bodies or safe error details. Each request timeline retains at most 100 events; on overflow it preserves the first and most recent events and reports `eventsTruncated` and `droppedEvents`.
+Diagnostic ZIP exports include separate redacted configuration, diagnostics, timeline, runtime log, metric, and incident files. They never include request/response bodies or safe error details. Each request timeline retains at most 100 events; on overflow it preserves the first and most recent events and reports `eventsTruncated` and `droppedEvents`.
 
-These endpoints use the same admin Bearer authentication and localization rules as the rest of the management API.
+The browser exchanges a management key once for a short-lived HttpOnly SameSite session cookie. Mutating calls require the per-session CSRF token. Bearer authentication remains available for CLI compatibility.
 
-Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 1`; missing schema values from pre-v0.4 files migrate to version 1, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
+Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 2`; schema 1 files migrate in memory without overwriting the source file, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
 
 ## Localization
 
@@ -174,6 +174,8 @@ Stable JSON fields, status values, event codes, and message codes remain in Engl
 - Monitoring metrics never contain prompts, response bodies, Authorization, or raw upstream errors. Errors use only the stable `transport`, `protocol`, `auth`, `rate_limit`, `client`, `server`, and `http` categories; operational events contain only stable codes and bounded metadata.
 - Temporary response files use `0600` permissions and are deleted after delivery or failure.
 - Diagnostic exports redact URL credentials, query strings, Webhook targets, and error details.
+- Request and incident timelines use SHA-256 hash-chain journals. Startup refuses corrupted, truncated, or modified journals; expired entities are removed by an atomic, mode-`0600` compaction that rebuilds and verifies the retained chain.
+- Browser management keys are never stored in `sessionStorage` or `localStorage`; HttpOnly sessions enforce CSRF and login cooldowns.
 - The admin console has strict security headers and no third-party CDN dependency.
 - Temporary capture is idle by default. Bodies use chunked AES-256-GCM encryption and authentication headers are never persisted.
 - Full raw content cannot be previewed online. It is streamed through decryption into a download ZIP without a plaintext ZIP on disk.

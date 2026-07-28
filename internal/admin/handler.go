@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/incident"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
@@ -35,10 +37,13 @@ type Handler struct {
 	runLogs     *runlog.Store
 	monitor     *monitoring.Store
 	runtimeInfo func() buildinfo.Info
+	sessions    *sessionManager
+	incidents   *incident.Store
 }
 
 func (h *Handler) SetMonitoring(store *monitoring.Store)         { h.monitor = store }
 func (h *Handler) SetRuntimeInfo(provider func() buildinfo.Info) { h.runtimeInfo = provider }
+func (h *Handler) SetIncidents(store *incident.Store)            { h.incidents = store }
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
 	return NewWithServices(store, registry, controller, risk.New(), diagnostics.New(store, "dev", time.Now()), nil)
@@ -52,6 +57,7 @@ func NewWithExtendedServices(store *config.Store, registry *state.Registry, cont
 	return &Handler{
 		store: store, registry: registry, controller: controller, auth: newAuthenticatorFromEnvironment(),
 		risk: riskManager, diagnostics: diagnosticService, notifier: notifier, captures: captures, runLogs: runLogs,
+		sessions: newSessionManager(store),
 	}
 }
 
@@ -60,10 +66,23 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	locale, fallback := h.requestLocales(request)
 	writer.Header().Set("Content-Language", locale)
 	path := strings.TrimPrefix(request.URL.Path, "/admin/api")
+	if request.Method == http.MethodPost && path == "/session/login" {
+		h.login(writer, request, locale, fallback)
+		return
+	}
 	role, authenticated := h.auth.authenticate(request)
+	cookieSession, sessionToken, cookieAuthenticated := h.sessions.authenticate(request)
+	if cookieAuthenticated {
+		role, authenticated = cookieSession.Role, true
+	}
 	if !authenticated {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
 		h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
+		return
+	}
+	if cookieAuthenticated && request.Method != http.MethodGet && !secureEqual(request.Header.Get("X-CSRF-Token"), cookieSession.CSRF) {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.csrf_failed", Outcome: "denied"})
+		h.writeError(writer, http.StatusForbidden, "INVALID_CSRF_TOKEN", l10n.M("api.admin.csrf_invalid"), locale, fallback)
 		return
 	}
 	writer.Header().Set("X-Relay-Lifeline-Role", string(role))
@@ -74,7 +93,17 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	switch {
 	case request.Method == http.MethodGet && path == "/session":
-		writeJSON(writer, http.StatusOK, sessionFor(role))
+		info := sessionFor(role)
+		if cookieAuthenticated {
+			info.CSRFToken = cookieSession.CSRF
+		}
+		writeJSON(writer, http.StatusOK, info)
+	case request.Method == http.MethodPost && path == "/session/logout":
+		if cookieAuthenticated {
+			h.sessions.revoke(sessionToken)
+			setSessionCookie(writer, request, "", -1)
+		}
+		writeJSON(writer, http.StatusOK, map[string]bool{"loggedOut": true})
 	case request.Method == http.MethodGet && path == "/meta":
 		if h.runtimeInfo == nil {
 			writeJSON(writer, http.StatusOK, buildinfo.New("dev", "unknown", "unknown", "", time.Now()).Snapshot(config.CurrentSchemaVersion))
@@ -83,6 +112,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeJSON(writer, http.StatusOK, h.runtimeInfo())
 	case request.Method == http.MethodGet && path == "/status":
 		writeJSON(writer, http.StatusOK, h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback))
+	case request.Method == http.MethodGet && path == "/stream":
+		h.stream(writer, request, locale, fallback)
 	case request.Method == http.MethodGet && path == "/metrics":
 		h.metrics(writer, request)
 	case request.Method == http.MethodGet && path == "/metrics/errors":
@@ -99,6 +130,14 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.validateConfig(writer, request)
 	case request.Method == http.MethodGet && path == "/alerts":
 		writeJSON(writer, http.StatusOK, risk.Localize(h.risk.Recent(100), locale, fallback))
+	case request.Method == http.MethodGet && path == "/incidents":
+		if h.incidents == nil {
+			writeJSON(writer, http.StatusOK, []incident.Incident{})
+			return
+		}
+		writeJSON(writer, http.StatusOK, h.incidents.List())
+	case request.Method == http.MethodGet && strings.HasPrefix(path, "/incidents/"):
+		h.incident(writer, strings.TrimPrefix(path, "/incidents/"), locale, fallback)
 	case request.Method == http.MethodGet && path == "/history":
 		writeJSON(writer, http.StatusOK, timeline.LocalizeRecords(h.registry.History(), locale, fallback))
 	case request.Method == http.MethodGet && path == "/runtime-logs":
@@ -154,6 +193,103 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		h.writeError(writer, http.StatusNotFound, "ENDPOINT_NOT_FOUND", l10n.M("api.route.not_found"), locale, fallback)
 	}
+}
+
+type streamSnapshot struct {
+	Status    state.Snapshot      `json:"status"`
+	Alerts    []risk.Alert        `json:"alerts"`
+	Incidents []incident.Incident `json:"incidents"`
+	Metrics   *monitoring.Metrics `json:"metrics,omitempty"`
+}
+
+func (h *Handler) stream(writer http.ResponseWriter, request *http.Request, locale, fallback string) {
+	flusher, ok := writer.(http.Flusher)
+	if !ok {
+		h.writeError(writer, http.StatusInternalServerError, "STREAM_UNSUPPORTED", l10n.M("api.stream.unsupported"), locale, fallback)
+		return
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache, no-store")
+	writer.Header().Set("X-Accel-Buffering", "no")
+	sequence := uint64(0)
+	send := func() error {
+		sequence++
+		incidents := []incident.Incident{}
+		if h.incidents != nil {
+			incidents = h.incidents.List()
+		}
+		var metrics *monitoring.Metrics
+		if h.monitor != nil {
+			snapshot := h.monitor.Metrics(time.Hour)
+			metrics = &snapshot
+		}
+		payload, err := json.Marshal(streamSnapshot{
+			Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
+			Alerts: risk.Localize(h.risk.Recent(100), locale, fallback), Incidents: incidents, Metrics: metrics,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte("id: " + strconv.FormatUint(sequence, 10) + "\nevent: snapshot\ndata: " + string(payload) + "\n\n")); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := send(); err != nil {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (h *Handler) login(writer http.ResponseWriter, request *http.Request, locale, fallback string) {
+	var input struct {
+		Key string `json:"key"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 8<<10))
+	if err := decoder.Decode(&input); err != nil || strings.TrimSpace(input.Key) == "" {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_LOGIN_REQUEST", l10n.M("api.admin.invalid_key"), locale, fallback)
+		return
+	}
+	token, session, err := h.sessions.login(request, input.Key, h.auth)
+	if err != nil {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
+		if errors.Is(err, errLoginRateLimited) {
+			h.writeError(writer, http.StatusTooManyRequests, "LOGIN_RATE_LIMITED", l10n.M("api.admin.login_limited"), locale, fallback)
+			return
+		}
+		h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
+		return
+	}
+	setSessionCookie(writer, request, token, int(h.store.Get().ManagementSecurity.SessionIdleTimeout.Duration.Seconds()))
+	info := sessionFor(session.Role)
+	info.CSRFToken = session.CSRF
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.session_created", Outcome: "succeeded"})
+	writeJSON(writer, http.StatusOK, info)
+}
+
+func (h *Handler) incident(writer http.ResponseWriter, id, locale, fallback string) {
+	if h.incidents == nil {
+		h.writeError(writer, http.StatusNotFound, "INCIDENT_NOT_FOUND", l10n.M("api.incident.not_found"), locale, fallback)
+		return
+	}
+	item, ok := h.incidents.Get(id)
+	if !ok {
+		h.writeError(writer, http.StatusNotFound, "INCIDENT_NOT_FOUND", l10n.M("api.incident.not_found"), locale, fallback)
+		return
+	}
+	writeJSON(writer, http.StatusOK, item)
 }
 
 type captureActivation struct {
@@ -439,18 +575,6 @@ func (h *Handler) captureError(writer http.ResponseWriter, err error, locale, fa
 	h.writeError(writer, http.StatusInternalServerError, "CAPTURE_FAILED", l10n.M("api.capture.failed"), locale, fallback)
 }
 
-type diagnosticBundle struct {
-	GeneratedAt time.Time           `json:"generatedAt"`
-	Report      diagnostics.Report  `json:"report"`
-	Config      config.Config       `json:"config"`
-	Status      state.Snapshot      `json:"status"`
-	History     []timeline.Record   `json:"history"`
-	Alerts      []risk.Alert        `json:"alerts"`
-	RuntimeLogs []runlog.Entry      `json:"runtimeLogs"`
-	Metrics     *monitoring.Metrics `json:"metrics,omitempty"`
-	Errors      *monitoring.Errors  `json:"errors,omitempty"`
-}
-
 func (h *Handler) requestTimeline(writer http.ResponseWriter, path, locale, fallback string) {
 	id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/timeline")
 	record, ok := h.registry.Timeline(id)
@@ -490,11 +614,39 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 		errors := h.monitor.ErrorsFor(time.Hour)
 		metrics, metricErrors = &snapshot, &errors
 	}
-	writer.Header().Set("Content-Disposition", "attachment; filename=relay-lifeline-diagnostics.json")
-	writeJSON(writer, http.StatusOK, diagnosticBundle{
-		GeneratedAt: time.Now(), Report: report, Config: diagnostics.RedactedConfig(h.store.Get()),
-		Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback), History: timeline.LocalizeRecords(timeline.WithoutErrorDetails(history), locale, fallback), Alerts: risk.Localize(h.risk.Recent(50), locale, fallback), RuntimeLogs: logs, Metrics: metrics, Errors: metricErrors,
-	})
+	incidents := []incident.Incident{}
+	if h.incidents != nil {
+		incidents = h.incidents.List()
+	}
+	files := map[string]any{
+		"manifest.json":         map[string]any{"schemaVersion": 1, "generatedAt": time.Now(), "containsRawBodies": false},
+		"report.json":           report,
+		"config.redacted.json":  diagnostics.RedactedConfig(h.store.Get()),
+		"status.json":           h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
+		"history.redacted.json": timeline.LocalizeRecords(timeline.WithoutErrorDetails(history), locale, fallback),
+		"alerts.json":           risk.Localize(h.risk.Recent(50), locale, fallback),
+		"runtime-logs.json":     logs,
+		"metrics.json":          metrics,
+		"metric-errors.json":    metricErrors,
+		"incidents.json":        incidents,
+	}
+	writer.Header().Set("Content-Type", "application/zip")
+	writer.Header().Set("Content-Disposition", "attachment; filename=relay-lifeline-diagnostics.zip")
+	archive := zip.NewWriter(writer)
+	for _, name := range []string{"manifest.json", "report.json", "config.redacted.json", "status.json", "history.redacted.json", "alerts.json", "runtime-logs.json", "metrics.json", "metric-errors.json", "incidents.json"} {
+		entry, err := archive.Create(name)
+		if err != nil {
+			_ = archive.Close()
+			return
+		}
+		encoder := json.NewEncoder(entry)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(files[name]); err != nil {
+			_ = archive.Close()
+			return
+		}
+	}
+	_ = archive.Close()
 }
 
 func (h *Handler) recordDiagnosticAlerts(report diagnostics.Report) {

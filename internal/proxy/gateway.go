@@ -2,18 +2,25 @@ package proxy
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"os"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/incident"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/risk"
@@ -23,24 +30,27 @@ import (
 )
 
 type Gateway struct {
-	store      *config.Store
-	registry   *state.Registry
-	controller *state.Controller
-	notifier   *notify.Notifier
-	risk       *risk.Manager
-	logger     *slog.Logger
-	client     *http.Client
-	limiter    Limiter
-	retryGate  RetryGate
-	randomMu   sync.Mutex
-	random     *rand.Rand
-	captures   *capture.Manager
-	runLogs    *runlog.Store
-	monitor    *monitoring.Store
+	store         *config.Store
+	registry      *state.Registry
+	controller    *state.Controller
+	notifier      *notify.Notifier
+	risk          *risk.Manager
+	logger        *slog.Logger
+	client        *http.Client
+	limiter       Limiter
+	retryGate     RetryGate
+	randomMu      sync.Mutex
+	random        *rand.Rand
+	captures      *capture.Manager
+	runLogs       *runlog.Store
+	monitor       *monitoring.Store
+	incidents     *incident.Store
+	resourceCheck func(config.Config) error
 }
 
 func (g *Gateway) SetCaptureManager(manager *capture.Manager) { g.captures = manager }
 func (g *Gateway) SetRunLog(store *runlog.Store)              { g.runLogs = store }
+func (g *Gateway) SetIncidents(store *incident.Store)         { g.incidents = store }
 func (g *Gateway) SetMonitoring(store *monitoring.Store) {
 	g.monitor = store
 	g.recordLoad()
@@ -54,6 +64,7 @@ func NewGateway(store *config.Store, registry *state.Registry, controller *state
 	gateway := &Gateway{
 		store: store, registry: registry, controller: controller, notifier: notifier, logger: logger,
 		risk: riskManager, client: newHTTPClient(store.Get()), random: rand.New(rand.NewSource(time.Now().UnixNano())),
+		resourceCheck: checkResources,
 	}
 	gateway.limiter.SetOnChange(gateway.queueChanged)
 	return gateway
@@ -66,12 +77,28 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		return
 	}
+	if err := g.resourceCheck(cfg); err != nil {
+		http.Error(writer, g.text(clientLocale, cfg.Localization.FallbackLocale, l10n.M("proxy.resource_protected")), http.StatusServiceUnavailable)
+		return
+	}
 	streaming := requestWantsStream(body, request.Header)
-	ctx, cancel := context.WithCancel(request.Context())
-	watchDownstreamClose(ctx, writer, cancel)
+	prepareIdempotencyKey(request.Header, cfg.Lifecycle)
+	baseContext := request.Context()
+	if cfg.Lifecycle.ClientDisconnectPolicy == "finish-attempt" {
+		baseContext = context.WithoutCancel(baseContext)
+	}
+	ctx, cancel := requestContext(baseContext, cfg.Lifecycle.MaxRequestDuration.Duration)
+	var clientDisconnected atomic.Bool
+	onDisconnect := func() {
+		clientDisconnected.Store(true)
+		if cfg.Lifecycle.ClientDisconnectPolicy == "cancel" {
+			cancel()
+		}
+	}
+	watchDownstreamClose(ctx, writer, onDisconnect)
 	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
 	started := time.Now()
-	outcome := "failed"
+	outcome := lifecycle.StateFailed
 	finalAttempt := 0
 	hadFailure := false
 	if g.monitor != nil {
@@ -87,21 +114,26 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	defer func() {
-		if outcome != "successful" && outcome != "rejected" && ctx.Err() != nil {
-			outcome = "canceled"
-			g.registry.RecordEvent(requestID, timeline.Event{Type: "canceled", MessageCode: "timeline.canceled"})
+		if outcome != lifecycle.StateSuccessful && outcome != lifecycle.StateRejected && (ctx.Err() != nil || clientDisconnected.Load()) {
+			outcome = lifecycle.StateCanceled
+			event := timeline.Event{Type: "canceled", MessageCode: "timeline.canceled"}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				outcome = lifecycle.StateExpired
+				event = timeline.Event{Type: "expired", MessageCode: "timeline.expired"}
+			}
+			g.registry.RecordEvent(requestID, event)
 			g.addRunLog("info", "request.canceled", "客户端已取消请求", requestID, 0, 0, nil)
 		}
 		cancel()
 		g.risk.ResolveRequest(requestID)
 		g.registry.Remove(requestID, outcome)
 		if g.monitor != nil {
-			g.monitor.RecordFinal(outcome)
+			g.monitor.RecordFinal(string(outcome))
 			g.monitor.RecordEvent(monitoring.Event{Code: terminalEventCode(outcome), RequestID: requestID})
 			g.recordLoad()
 		}
 		if g.captures != nil {
-			if captureErr := g.captures.Finish(requestID, outcome, finalAttempt); captureErr != nil {
+			if captureErr := g.captures.Finish(requestID, string(outcome), finalAttempt); captureErr != nil {
 				g.addRunLog("warn", "capture.finish_failed", "无法完成捕获记录", requestID, finalAttempt, 0, map[string]any{"reason": captureErr.Error()})
 			}
 		}
@@ -110,7 +142,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	downstream := startDownstream(writer, streaming, cfg.Stream.HeartbeatInterval.Duration, func() {
 		g.addRunLog("debug", "downstream.heartbeat", "已发送下游保活心跳", requestID, 0, 0, nil)
 	}, func(error) {
-		cancel()
+		onDisconnect()
 	})
 	defer downstream.stopHeartbeat()
 	g.addRunLog("info", "queue.entered", "请求进入并发队列", requestID, 0, 0, nil)
@@ -122,7 +154,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if !errors.Is(err, ErrQueueFull) {
 			return
 		}
-		outcome = "rejected"
+		outcome = lifecycle.StateRejected
 		g.addRunLog("warn", "queue.rejected", "等待队列已满", requestID, 0, 0, nil)
 		downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, message))
 		return
@@ -140,7 +172,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-		g.registry.UpdateMessage(requestID, "requesting", attempt, l10n.Message{}, time.Time{})
+		g.registry.UpdateMessage(requestID, lifecycle.StateForwarding, attempt, l10n.Message{}, time.Time{})
 		if g.monitor != nil {
 			g.monitor.RecordAttempt()
 			g.monitor.RecordEvent(monitoring.Event{Code: "upstream.attempt_started", RequestID: requestID, Attempt: attempt})
@@ -167,21 +199,32 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				_ = closer.Close()
 			}
 		}
+		if clientDisconnected.Load() && cfg.Lifecycle.ClientDisconnectPolicy == "finish-attempt" {
+			if result.buffer != nil {
+				result.buffer.Close()
+			}
+			return
+		}
 		if result.validation.Success {
 			g.registry.SetUpstreamMessage(true, l10n.Message{})
+			if g.incidents != nil {
+				g.incidents.RecordSuccess()
+			}
+			g.registry.UpdateMessage(requestID, lifecycle.StateBuffering, attempt, l10n.Message{}, time.Time{})
+			g.registry.UpdateMessage(requestID, lifecycle.StateDelivering, attempt, l10n.Message{}, time.Time{})
 			if err := downstream.deliver(result.buffer); err != nil {
 				result.buffer.Close()
-				g.registry.RecordEvent(requestID, timeline.Event{Type: "delivery_failed", Attempt: attempt, Category: "client", MessageCode: "timeline.delivery_failed"})
+				g.registry.RecordEvent(requestID, timeline.Event{Type: "delivery_failed", Attempt: attempt, Category: "client", MessageCode: "timeline.delivery_failed", AttemptPhase: string(lifecycle.PhaseDelivery)})
 				return
 			}
 			result.buffer.Close()
-			outcome = "successful"
+			outcome = lifecycle.StateSuccessful
 			elapsed := time.Since(started)
 			if hadFailure && g.monitor != nil {
 				g.monitor.RecordRecovery(elapsed, attempt)
 				g.monitor.RecordEvent(monitoring.Event{Code: "upstream.recovered", RequestID: requestID, Attempt: attempt})
 			}
-			g.registry.UpdateMessage(requestID, "completed", attempt, l10n.Message{}, time.Time{})
+			g.registry.UpdateMessage(requestID, lifecycle.StateCompleted, attempt, l10n.Message{}, time.Time{})
 			g.registry.RecordEvent(requestID, timeline.Event{Type: "completed", Attempt: attempt, MessageCode: "timeline.completed"})
 			if (g.registry.WasNotified(requestID) || g.risk.HasOpenRequestAlerts(requestID)) && cfg.Notifications.NotifyOnRecovery {
 				g.notifier.Send(notify.Event{Type: "recovered", RequestID: requestID, Attempts: attempt, Elapsed: elapsed, MessageCode: "notify.recovered"})
@@ -191,6 +234,15 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		errorDetail := extractSafeErrorDetail(cfg.Observability, result, streaming)
+		if result.response != nil {
+			g.registry.UpdateMessage(requestID, lifecycle.StateBuffering, attempt, l10n.Message{}, time.Time{})
+		} else if result.wroteRequest && cfg.Lifecycle.TrackUncertainDelivery {
+			g.registry.UpdateMessage(requestID, lifecycle.StateUncertain, attempt, describeAttempt(result), time.Time{})
+			g.registry.RecordEvent(requestID, timeline.Event{
+				Type: "uncertain", Attempt: attempt, Category: "duplicate_risk",
+				MessageCode: "timeline.uncertain", AttemptPhase: string(result.phase),
+			})
+		}
 		if result.buffer != nil {
 			result.buffer.Close()
 		}
@@ -198,6 +250,9 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		reason := describeAttempt(result)
 		statusCode := attemptStatus(result)
 		category := attemptCategory(result)
+		if g.incidents != nil {
+			g.incidents.RecordFailure(requestID, category, statusCode)
+		}
 		hadFailure = true
 		if g.monitor != nil {
 			g.monitor.RecordAttemptFailure(category)
@@ -207,7 +262,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		g.registry.RecordEvent(requestID, timeline.Event{
 			Type: "attempt_failed", Attempt: attempt, StatusCode: statusCode,
 			Category: category, MessageCode: reason.ID, MessageDetails: reason.Data,
-			ErrorDetail: errorDetail,
+			ErrorDetail: errorDetail, AttemptPhase: string(result.phase),
 		})
 		g.publishAlerts(g.risk.EvaluateAttempt(requestID, attempt, started, statusCode, cfg.Risk))
 		g.logger.Warn(g.logText(cfg, "log.upstream_failed"), "event", "upstream.request_failed", "request_id", requestID, "attempt", attempt, "reason_code", reason.ID, "status", statusCode)
@@ -220,7 +275,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		delay := g.retryDelay(cfg, result.response)
 		g.addRunLog("info", "retry.scheduled", "已安排再次请求", requestID, attempt, statusCode, map[string]any{"waitMilliseconds": delay.Milliseconds()})
 		nextRetry := time.Now().Add(delay)
-		g.registry.UpdateMessage(requestID, "waiting", attempt, reason, nextRetry)
+		g.registry.UpdateMessage(requestID, lifecycle.StateWaiting, attempt, reason, nextRetry)
 		g.recordLoad()
 		g.registry.RecordEvent(requestID, timeline.Event{
 			Type: "waiting", Attempt: attempt, MessageCode: "timeline.waiting", WaitMilliseconds: delay.Milliseconds(),
@@ -239,7 +294,23 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func watchDownstreamClose(ctx context.Context, writer http.ResponseWriter, cancel context.CancelFunc) {
+func checkResources(cfg config.Config) error {
+	directory := cfg.Stream.TempDir
+	if directory == "" {
+		directory = os.TempDir()
+	}
+	var stats syscall.Statfs_t
+	if err := syscall.Statfs(directory, &stats); err != nil {
+		return err
+	}
+	available := int64(stats.Bavail) * int64(stats.Bsize)
+	if available < int64(cfg.Risk.MinimumFreeDisk) {
+		return fmt.Errorf("available disk %d below minimum %d", available, cfg.Risk.MinimumFreeDisk)
+	}
+	return nil
+}
+
+func watchDownstreamClose(ctx context.Context, writer http.ResponseWriter, onClose func()) {
 	notifier, ok := writer.(http.CloseNotifier)
 	if !ok {
 		return
@@ -249,9 +320,28 @@ func watchDownstreamClose(ctx context.Context, writer http.ResponseWriter, cance
 		select {
 		case <-ctx.Done():
 		case <-closed:
-			cancel()
+			onClose()
 		}
 	}()
+}
+
+func requestContext(parent context.Context, maximum time.Duration) (context.Context, context.CancelFunc) {
+	if maximum > 0 {
+		return context.WithTimeout(parent, maximum)
+	}
+	return context.WithCancel(parent)
+}
+
+func prepareIdempotencyKey(header http.Header, cfg config.LifecycleConfig) {
+	if !cfg.PreserveIdempotencyKey {
+		header.Del("Idempotency-Key")
+	}
+	if cfg.GenerateIdempotencyKey && header.Get("Idempotency-Key") == "" {
+		buffer := make([]byte, 16)
+		if _, err := cryptorand.Read(buffer); err == nil {
+			header.Set("Idempotency-Key", "lifeline-"+hex.EncodeToString(buffer))
+		}
+	}
 }
 
 func (g *Gateway) addRunLog(level, event, message, requestID string, attempt, statusCode int, fields map[string]any) {
@@ -365,13 +455,13 @@ func attemptCategory(result attemptResult) string {
 	}
 }
 
-func terminalEventCode(outcome string) string {
+func terminalEventCode(outcome lifecycle.State) string {
 	switch outcome {
-	case "successful":
+	case lifecycle.StateSuccessful:
 		return "request.succeeded"
-	case "canceled":
+	case lifecycle.StateCanceled:
 		return "request.canceled"
-	case "rejected":
+	case lifecycle.StateRejected:
 		return "request.rejected"
 	default:
 		return "request.failed"

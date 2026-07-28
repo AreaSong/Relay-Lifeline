@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const AdminAPIVersion = "1"
+const AdminAPIVersion = "2"
 
 type Provider struct {
 	version   string

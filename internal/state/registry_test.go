@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 )
 
 func TestControllerPauseAndResume(t *testing.T) {
@@ -55,8 +56,9 @@ func TestRetryWaitingOnlySignalsWaitingRequests(t *testing.T) {
 	registry := NewRegistry()
 	waitingID, waitingRetry := registry.Add("POST", "/v1/responses", func() {})
 	requestingID, requestingRetry := registry.Add("POST", "/v1/responses", func() {})
-	registry.UpdateMessage(waitingID, "waiting", 1, l10n.Message{}, time.Now().Add(time.Minute))
-	registry.UpdateMessage(requestingID, "requesting", 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(waitingID, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(waitingID, lifecycle.StateWaiting, 1, l10n.Message{}, time.Now().Add(time.Minute))
+	registry.UpdateMessage(requestingID, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
 
 	if count := registry.RetryWaiting(); count != 1 {
 		t.Fatalf("排空唤醒数量 = %d，期望 1", count)

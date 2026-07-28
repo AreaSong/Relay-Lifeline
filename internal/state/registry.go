@@ -10,21 +10,22 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/timeline"
 )
 
 type RequestInfo struct {
-	ID               string         `json:"id"`
-	Method           string         `json:"method"`
-	Path             string         `json:"path"`
-	State            string         `json:"state"`
-	Attempt          int            `json:"attempt"`
-	StartedAt        time.Time      `json:"startedAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
-	NextRetryAt      time.Time      `json:"nextRetryAt,omitempty"`
-	LastError        string         `json:"lastError,omitempty"`
-	LastErrorCode    string         `json:"lastErrorCode,omitempty"`
-	LastErrorDetails map[string]any `json:"lastErrorDetails,omitempty"`
+	ID               string          `json:"id"`
+	Method           string          `json:"method"`
+	Path             string          `json:"path"`
+	State            lifecycle.State `json:"state"`
+	Attempt          int             `json:"attempt"`
+	StartedAt        time.Time       `json:"startedAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+	NextRetryAt      time.Time       `json:"nextRetryAt,omitempty"`
+	LastError        string          `json:"lastError,omitempty"`
+	LastErrorCode    string          `json:"lastErrorCode,omitempty"`
+	LastErrorDetails map[string]any  `json:"lastErrorDetails,omitempty"`
 }
 
 type trackedRequest struct {
@@ -79,7 +80,7 @@ func (r *Registry) Add(method, path string, cancel context.CancelFunc) (string, 
 	retryNow := make(chan struct{}, 1)
 	r.mu.Lock()
 	r.requests[id] = &trackedRequest{
-		info:   RequestInfo{ID: id, Method: method, Path: path, State: "queued", StartedAt: now, UpdatedAt: now},
+		info:   RequestInfo{ID: id, Method: method, Path: path, State: lifecycle.StateQueued, StartedAt: now, UpdatedAt: now},
 		cancel: cancel, retryNow: retryNow,
 	}
 	r.mu.Unlock()
@@ -88,7 +89,7 @@ func (r *Registry) Add(method, path string, cancel context.CancelFunc) (string, 
 	return id, retryNow
 }
 
-func (r *Registry) Update(id, status string, attempt int, lastError string, nextRetry time.Time) {
+func (r *Registry) Update(id string, status lifecycle.State, attempt int, lastError string, nextRetry time.Time) {
 	r.UpdateMessage(id, status, attempt, l10n.Message{}, nextRetry)
 	if lastError != "" {
 		r.mu.Lock()
@@ -99,11 +100,14 @@ func (r *Registry) Update(id, status string, attempt int, lastError string, next
 	}
 }
 
-func (r *Registry) UpdateMessage(id, status string, attempt int, message l10n.Message, nextRetry time.Time) {
+func (r *Registry) UpdateMessage(id string, status lifecycle.State, attempt int, message l10n.Message, nextRetry time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	request, ok := r.requests[id]
 	if !ok {
+		return
+	}
+	if lifecycle.ValidateTransition(request.info.State, status) != nil {
 		return
 	}
 	request.info.State = status
@@ -115,12 +119,17 @@ func (r *Registry) UpdateMessage(id, status string, attempt int, message l10n.Me
 	request.info.UpdatedAt = time.Now()
 }
 
-func (r *Registry) Remove(id, outcome string) {
+func (r *Registry) Remove(id string, outcome lifecycle.State) {
 	r.mu.Lock()
+	request, ok := r.requests[id]
+	if ok && lifecycle.ValidateTransition(request.info.State, outcome) != nil {
+		r.mu.Unlock()
+		return
+	}
 	delete(r.requests, id)
 	r.mu.Unlock()
-	r.timeline.Finish(id, outcome)
-	if outcome == "successful" {
+	r.timeline.Finish(id, string(outcome))
+	if outcome == lifecycle.StateSuccessful {
 		r.success.Add(1)
 	}
 }
@@ -176,7 +185,7 @@ func (r *Registry) RetryWaiting() int {
 	r.mu.RLock()
 	ids := make([]string, 0)
 	for id, request := range r.requests {
-		if request.info.State == "waiting" {
+		if request.info.State == lifecycle.StateWaiting {
 			ids = append(ids, id)
 		}
 	}
@@ -221,11 +230,11 @@ func (r *Registry) Snapshot(paused bool) Snapshot {
 	for _, request := range r.requests {
 		requests = append(requests, request.info)
 		switch request.info.State {
-		case "queued":
+		case lifecycle.StateQueued:
 			queued++
-		case "waiting":
+		case lifecycle.StateWaiting:
 			waiting++
-		case "requesting":
+		case lifecycle.StateForwarding:
 			requesting++
 		}
 	}

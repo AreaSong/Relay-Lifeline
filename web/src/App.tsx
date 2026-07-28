@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Archive, CirclePause, CirclePlay, Clock3, FileLock2, HeartPulse, LogOut,
-  Menu, RefreshCw, ScrollText, Settings2, ShieldCheck, Stethoscope,
+  Menu, RefreshCw, ScrollText, Settings2, ShieldAlert, ShieldCheck, Stethoscope,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -14,22 +14,24 @@ import { ViewErrorBoundary } from "./components/ViewErrorBoundary";
 import { normalizeLocale } from "./i18n";
 import { useTheme } from "./theme";
 import type {
-  Alert, Config, DiagnosticReport, HistoryRecord, MetricsErrors, MetricsSnapshot,
+  Alert, Config, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot,
   MetricsWindow, MonitoringEvent, RuntimeInfo, SessionInfo, Status,
 } from "./types";
 import { CapturesView } from "./views/CapturesView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
 import { HistoryView } from "./views/HistoryView";
+import { IncidentsView } from "./views/IncidentsView";
 import { LogsView } from "./views/LogsView";
 import { OverviewView } from "./views/OverviewView";
 import { RequestsView } from "./views/RequestsView";
 import { SettingsView } from "./views/SettingsView";
 
-type View = "overview" | "requests" | "history" | "logs" | "captures" | "diagnostics" | "settings";
-const allViews: View[] = ["overview", "requests", "history", "logs", "captures", "diagnostics", "settings"];
+type View = "overview" | "requests" | "history" | "incidents" | "logs" | "captures" | "diagnostics" | "settings";
+const allViews: View[] = ["overview", "requests", "history", "incidents", "logs", "captures", "diagnostics", "settings"];
 const mobileViews: View[] = ["overview", "requests", "history", "diagnostics", "settings"];
 const navigation: Array<{ view: View; icon: LucideIcon }> = [
   { view: "overview", icon: Activity }, { view: "requests", icon: Clock3 }, { view: "history", icon: Archive },
+  { view: "incidents", icon: ShieldAlert },
   { view: "logs", icon: ScrollText }, { view: "captures", icon: FileLock2 },
   { view: "diagnostics", icon: Stethoscope }, { view: "settings", icon: Settings2 },
 ];
@@ -81,7 +83,7 @@ export function App() {
   const { t, i18n } = useTranslation(["common", "overview", "settings", "diagnostics", "requests", "errors"]);
   const locale = normalizeLocale(i18n.resolvedLanguage);
   const theme = useTheme();
-  const [token, setToken] = useState(() => sessionStorage.getItem("relay-lifeline-token") || "");
+  const [authenticated, setAuthenticated] = useState(true);
   const [authExpired, setAuthExpired] = useState(false);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<View>(currentView);
@@ -91,6 +93,7 @@ export function App() {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [timeline, setTimeline] = useState<HistoryRecord | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
   const [diagnosticBusy, setDiagnosticBusy] = useState(false);
@@ -101,13 +104,11 @@ export function App() {
   const [mobileTools, setMobileTools] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
-  const resetAuthentication = useCallback((expired: boolean, expectedToken?: string) => {
-    if (expectedToken !== undefined && sessionStorage.getItem("relay-lifeline-token") !== expectedToken) return;
-    sessionStorage.removeItem("relay-lifeline-token");
-    setToken(""); setAuthExpired(expired); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
-    setAlerts([]); setHistory([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage("");
+  const resetAuthentication = useCallback((expired: boolean) => {
+    setAuthenticated(false); setAuthExpired(expired); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
+    setAlerts([]); setHistory([]); setIncidents([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage("");
   }, []);
-  const api = useMemo(() => new ApiClient(token, locale, (failedToken) => resetAuthentication(true, failedToken)), [locale, resetAuthentication, token]);
+  const api = useMemo(() => new ApiClient(locale, () => resetAuthentication(true)), [locale, resetAuthentication]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const canOperate = session?.capabilities.includes("operate") || false;
   const canSensitive = session?.capabilities.includes("sensitive") || false;
@@ -117,8 +118,8 @@ export function App() {
     setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
   }, []);
   const refresh = useCallback(async () => {
-    const [nextStatus, nextAlerts] = await Promise.all([api.status(), api.alerts()]);
-    setStatus(nextStatus); setAlerts(nextAlerts);
+    const [nextStatus, nextAlerts, nextIncidents] = await Promise.all([api.status(), api.alerts(), api.incidents()]);
+    setStatus(nextStatus); setAlerts(nextAlerts); setIncidents(nextIncidents);
   }, [api]);
   const refreshMonitoring = useCallback(async () => {
     const [nextMetrics, nextErrors, nextEvents] = await Promise.all([
@@ -134,7 +135,7 @@ export function App() {
     return () => window.removeEventListener("hashchange", changed);
   }, []);
   useEffect(() => {
-    if (!token) return;
+    if (!authenticated) return;
     let disposed = false;
     void api.session().then(async (nextSession) => {
       if (disposed) return;
@@ -145,23 +146,25 @@ export function App() {
     }).catch((reason) => { if (!disposed) showMessage(errorMessage(reason), "error"); });
     setTimeline(null); setDiagnostics(null);
     return () => { disposed = true; };
-  }, [api, refresh, showMessage, token]);
+  }, [api, authenticated, refresh, showMessage]);
   useEffect(() => {
-    if (!token || !session) return;
-    const statusTimer = window.setInterval(() => refresh().catch(() => undefined), 2000);
-    return () => window.clearInterval(statusTimer);
-  }, [refresh, session, token]);
+    if (!authenticated || !session) return;
+    return api.subscribe((snapshot) => {
+      setStatus(snapshot.status); setAlerts(snapshot.alerts); setIncidents(snapshot.incidents);
+      if (snapshot.metrics) setMetrics(snapshot.metrics);
+    }, () => { void refresh().catch(() => undefined); });
+  }, [api, authenticated, refresh, session]);
   useEffect(() => {
     if (session && !canOperate && view === "settings") {
       setView("overview"); window.location.hash = "/overview";
     }
   }, [canOperate, session, view]);
   useEffect(() => {
-    if (!token || !session) return;
+    if (!authenticated || !session) return;
     void refreshMonitoring().catch((reason) => showMessage(errorMessage(reason), "error"));
     const metricsTimer = window.setInterval(() => refreshMonitoring().catch(() => undefined), 10_000);
     return () => window.clearInterval(metricsTimer);
-  }, [refreshMonitoring, session, showMessage, token]);
+  }, [authenticated, refreshMonitoring, session, showMessage]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", warn);
@@ -175,10 +178,11 @@ export function App() {
   }, [mobileTools]);
 
   async function login(value: string) {
-    const nextSession = await new ApiClient(value, locale).session();
-    sessionStorage.setItem("relay-lifeline-token", value); setAuthExpired(false); setSession(nextSession); setToken(value);
+    const nextSession = await api.login(value);
+    setAuthExpired(false); setSession(nextSession); setAuthenticated(true);
   }
-  function logout() {
+  async function logout() {
+    await api.logout().catch(() => undefined);
     resetAuthentication(false);
   }
   async function selectView(next: View) {
@@ -223,7 +227,7 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
 
-  if (!token) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} expired={authExpired} />;
+  if (!authenticated) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} expired={authExpired} />;
   if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
@@ -243,6 +247,7 @@ export function App() {
         {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} locale={locale} dark={theme.resolved === "dark"} incident={incident} canOperate={canOperate} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} canOperate={canOperate} />}
         {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
+        {view === "incidents" && <IncidentsView incidents={incidents} />}
         {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
         {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} />}
         {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -18,6 +20,8 @@ import (
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/incident"
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
@@ -40,10 +44,22 @@ func main() {
 	localeExplicit := hasLocaleArgument(os.Args[1:])
 	configPath := flag.String("config", "config.yaml", l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_path")))
 	showVersion := flag.Bool("version", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.version")))
+	validateOnly := flag.Bool("config-validate", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_validate")))
+	doctor := flag.Bool("doctor", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.doctor")))
+	verifyJournal := flag.String("journal-verify", "", l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.journal_verify")))
 	localeFlag := flag.String("locale", preLocale, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.locale")))
 	flag.Parse()
 	if *showVersion {
 		fmt.Printf("%s revision=%s built=%s\n", version, revision, builtAt)
+		return
+	}
+	if *verifyJournal != "" {
+		entries, err := journal.Verify(*verifyJournal)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("journal valid: %d entries\n", len(entries))
 		return
 	}
 
@@ -57,22 +73,75 @@ func main() {
 	if localeExplicit || localeFromEnvironment {
 		cliLocale = l10n.Normalize(*localeFlag)
 	}
-	if err := validateManagementKeys(cfg.Server.AdminEnabled, os.Getenv("RELAY_LIFELINE_ADMIN_KEY"), os.Getenv("RELAY_LIFELINE_VIEWER_KEY"), os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY")); err != nil {
-		fmt.Fprintln(os.Stderr, l10n.Default.Error(cliLocale, cfg.Localization.FallbackLocale, err))
-		os.Exit(1)
+	if *validateOnly {
+		fmt.Printf("configuration valid: schema-version %d\n", cfg.SchemaVersion)
+		return
+	}
+	if !*doctor {
+		if err := validateManagementKeys(cfg.Server.AdminEnabled, os.Getenv("RELAY_LIFELINE_ADMIN_KEY"), os.Getenv("RELAY_LIFELINE_VIEWER_KEY"), os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY")); err != nil {
+			fmt.Fprintln(os.Stderr, l10n.Default.Error(cliLocale, cfg.Localization.FallbackLocale, err))
+			os.Exit(1)
+		}
 	}
 	logger := newLogger(cfg.Logging.Level)
 	startedAt := time.Now()
 	runtimeInfo := buildinfo.New(version, revision, builtAt, os.Getenv("RELAY_LIFELINE_IMAGE_REF"), startedAt)
 	store := config.NewStore(*configPath, cfg)
-	timelineStore := timeline.New(func() timeline.Limits {
+	timelineLimits := func() timeline.Limits {
 		current := store.Get().History
 		return timeline.Limits{MaxItems: current.MaxItems, Retention: current.Retention.Duration}
-	})
+	}
+	var eventJournal *journal.Store
+	var incidentJournal *journal.Store
+	if cfg.Persistence.Enabled && !*doctor {
+		journalPath := filepath.Join(cfg.Persistence.Directory, "requests.jsonl")
+		eventJournal, err = journal.Open(journalPath, cfg.Persistence.SyncWrites)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open verified event journal: %v\n", err)
+			os.Exit(1)
+		}
+		defer eventJournal.Close()
+		incidentJournal, err = journal.Open(filepath.Join(cfg.Persistence.Directory, "incidents.jsonl"), cfg.Persistence.SyncWrites)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open verified incident journal: %v\n", err)
+			os.Exit(1)
+		}
+		defer incidentJournal.Close()
+		if _, err := eventJournal.Compact(time.Now().Add(-cfg.Persistence.Retention.Duration)); err != nil {
+			fmt.Fprintf(os.Stderr, "compact request journal: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := incidentJournal.Compact(time.Now().Add(-cfg.Incidents.Retention.Duration)); err != nil {
+			fmt.Fprintf(os.Stderr, "compact incident journal: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if *doctor {
+		diagnosticStore := config.NewStore(*configPath, cfg)
+		service := diagnostics.New(diagnosticStore, version, time.Now())
+		service.SetJournal(eventJournal)
+		report := service.Run(context.Background(), cliLocale, cfg.Localization.FallbackLocale)
+		_ = json.NewEncoder(os.Stdout).Encode(report)
+		if !report.Healthy {
+			os.Exit(1)
+		}
+		return
+	}
+	timelineStore, err := timeline.NewPersistent(timelineLimits, eventJournal)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "restore request timeline: %v\n", err)
+		os.Exit(1)
+	}
 	registry := state.NewRegistry(timelineStore)
 	controller := state.NewController()
 	riskManager := risk.New()
 	monitoringStore := monitoring.New()
+	incidentStore, err := incident.New(func() config.IncidentConfig { return store.Get().Incidents }, incidentJournal)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "restore incidents: %v\n", err)
+		os.Exit(1)
+	}
+	defer incidentStore.Close()
 	runLogStore := runlog.New(func() runlog.Limits {
 		current := store.Get().Capture
 		return runlog.Limits{MaxItems: current.LogMaxItems, Retention: current.LogRetention.Duration}
@@ -87,9 +156,12 @@ func main() {
 	gateway.SetCaptureManager(captureManager)
 	gateway.SetRunLog(runLogStore)
 	gateway.SetMonitoring(monitoringStore)
+	gateway.SetIncidents(incidentStore)
 	diagnosticService := diagnostics.New(store, version, startedAt)
+	diagnosticService.SetJournal(eventJournal)
 	adminHandler := admin.NewWithExtendedServices(store, registry, controller, riskManager, diagnosticService, notifier, captureManager, runLogStore)
 	adminHandler.SetMonitoring(monitoringStore)
+	adminHandler.SetIncidents(incidentStore)
 	adminHandler.SetRuntimeInfo(func() buildinfo.Info { return runtimeInfo.Snapshot(config.CurrentSchemaVersion) })
 
 	mux := http.NewServeMux()
@@ -108,6 +180,9 @@ func main() {
 		mux.Handle("/admin/", webui.Handler())
 		mux.Handle("/admin", webui.Handler())
 	}
+	if cfg.MetricsExport.Enabled {
+		mux.Handle(cfg.MetricsExport.Path, monitoringStore.PrometheusHandler())
+	}
 	mux.Handle("/", gateway)
 
 	server := &http.Server{
@@ -117,6 +192,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go captureManager.StartCleaner(ctx)
+	if eventJournal != nil {
+		go maintainJournals(ctx, store, logger, eventJournal, incidentJournal)
+	}
 	go reloadOnSignal(store, logger)
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -138,6 +216,25 @@ func main() {
 	}
 	if ctx.Err() != nil {
 		<-shutdownDone
+	}
+}
+
+func maintainJournals(ctx context.Context, store *config.Store, logger *slog.Logger, requestJournal, incidentJournal *journal.Store) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			cfg := store.Get()
+			if _, err := requestJournal.Compact(now.Add(-cfg.Persistence.Retention.Duration)); err != nil {
+				logger.Error("compact request journal", "event", "journal.compaction_failed", "journal", "requests", "error", err)
+			}
+			if _, err := incidentJournal.Compact(now.Add(-cfg.Incidents.Retention.Duration)); err != nil {
+				logger.Error("compact incident journal", "event", "journal.compaction_failed", "journal", "incidents", "error", err)
+			}
+		}
 	}
 }
 

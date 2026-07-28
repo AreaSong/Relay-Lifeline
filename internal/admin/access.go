@@ -20,6 +20,7 @@ type sessionInfo struct {
 	Authenticated bool     `json:"authenticated"`
 	Role          Role     `json:"role"`
 	Capabilities  []string `json:"capabilities"`
+	CSRFToken     string   `json:"csrfToken,omitempty"`
 }
 
 type authenticator struct {
@@ -41,6 +42,10 @@ func (a authenticator) authenticate(request *http.Request) (Role, bool) {
 		return "", false
 	}
 	provided := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+	return a.authenticateKey(provided)
+}
+
+func (a authenticator) authenticateKey(provided string) (Role, bool) {
 	role := Role("")
 	if a.viewer != "" && secureEqual(provided, a.viewer) {
 		role = RoleViewer

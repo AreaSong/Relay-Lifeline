@@ -7,8 +7,8 @@ import (
 
 func TestSnapshotContainsStableContractIdentity(t *testing.T) {
 	started := time.Now().Add(-2 * time.Second)
-	info := New("0.4.0", "abc123", "2026-07-27T00:00:00Z", "relay-lifeline:test", started).Snapshot(1)
-	if info.Version != "0.4.0" || info.Revision != "abc123" || info.AdminAPIVersion != "1" || info.ConfigSchemaVersion != 1 {
+	info := New("2.0.0", "abc123", "2026-07-27T00:00:00Z", "relay-lifeline:test", started).Snapshot(2)
+	if info.Version != "2.0.0" || info.Revision != "abc123" || info.AdminAPIVersion != "2" || info.ConfigSchemaVersion != 2 {
 		t.Fatalf("运行身份不完整: %+v", info)
 	}
 	if info.GoVersion == "" || info.Platform == "" || info.UptimeSeconds < 1 {
