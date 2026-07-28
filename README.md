@@ -118,7 +118,7 @@ The console can:
 - Review request timelines and bounded persistent history.
 - Review current load, time-windowed reliability and pressure charts, seven stable error categories, recovery histograms, and cursor-based operational events.
 - View non-blocking alerts for long-running requests, repeated attempts, authentication failures, queue pressure, and disk pressure.
-- Run diagnostics without calling the model API and export a redacted JSON bundle.
+- Run diagnostics without calling the model API and export a redacted ZIP bundle with recovery, journal, and backup-integrity evidence.
 - Pause or resume all requests, retry immediately, or cancel a request.
 - Change retry, stream, queue, history, risk, notification, logging, and locale settings.
 - Validate configuration without persistence, show hot-reload and restart sections, save atomically, and reload it from disk.
@@ -126,7 +126,7 @@ The console can:
 - Filter and download live structured runtime logs.
 - Capture the next bounded set of requests, preview filtered bodies, and download filtered or full-raw ZIP archives.
 
-Request and incident timelines persist in verified journals and are restored after restart; interrupted requests are restored as `orphaned` and are never replayed without their original client connection. Monitoring metrics, operational events, and live runtime logs remain process-local and reset on restart. Monitoring uses 1,440 fixed UTC minute buckets independently of `history.retention`; `dataSince` and `complete` show when the process has not yet observed a full requested window. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
+Request and incident timelines persist in verified journals and are restored after restart; interrupted requests are restored as `orphaned` and are never replayed without their original client connection. Traffic metrics, operational events, and live runtime logs remain process-local and reset on restart; Journal size, replay, compaction, and health metrics reflect persistent storage state. Monitoring uses 1,440 fixed UTC minute buckets independently of `history.retention`; `dataSince` and `complete` show when the process has not yet observed a full requested window. Listen address, admin enablement, upstream transport settings, server timeouts, and log level require a restart. Retry, queue, history, risk, locale, and notification behavior is read from the current configuration during operation.
 
 Signal Continuity visualizes observed gateway state; it does not send an extra model probe. Three.js is loaded locally and on demand. Reduced-motion preferences and background tabs pause animation, while WebGL initialization failure or context loss switches to a static topology without disabling status data or controls.
 
@@ -138,8 +138,9 @@ The authenticated management API exposes:
 - `GET /admin/api/metrics/errors?window=15m|1h|6h|24h` for the stable error distribution. The default window is `24h`.
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>` for the bounded operational event ring. Responses include `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap` so clients can resume or detect overwritten events.
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>` for the latest structured log entries, or use an `after` cursor for incremental reads. Responses include `entries`, `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap`, with strict bounds on levels and filters.
+- The Prometheus endpoint includes `relay_lifeline_journal_*` gauges for entry count, bytes, startup replay, latest compaction, write health, and compaction health.
 
-Diagnostic ZIP exports include separate redacted configuration, diagnostics, timeline, runtime log, metric, and incident files. They never include request/response bodies or safe error details. Each request timeline retains at most 100 events; on overflow it preserves the first and most recent events and reports `eventsTruncated` and `droppedEvents`.
+Diagnostic ZIP exports include separate redacted configuration, diagnostics, timeline, runtime log, metric, incident, recovery-check, journal-summary, and configuration-backup metadata files. They never include request/response bodies, safe error details, backup contents, or secrets. Each request timeline retains at most 100 events; on overflow it preserves the first and most recent events and reports `eventsTruncated` and `droppedEvents`.
 
 The browser exchanges a management key once for a short-lived HttpOnly SameSite session cookie. Mutating calls require the per-session CSRF token. Bearer authentication remains available for CLI compatibility.
 
@@ -197,7 +198,10 @@ Requirements: Go 1.22+, Node.js 22+, and Docker for integration verification.
 
 ```bash
 make check
+make race
+./scripts/ci-integration.sh
 make docker-build
+./scripts/container-smoke.sh relay-lifeline:dev
 ```
 
 On some recent macOS/Xcode combinations, Go 1.22 test binaries require external linking. Use `go test -ldflags=-linkmode=external ./...` if the internal linker reports a missing `LC_UUID` load command.

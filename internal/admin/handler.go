@@ -16,9 +16,11 @@ import (
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
 	"github.com/areasong/relay-lifeline/internal/incident"
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
+	"github.com/areasong/relay-lifeline/internal/recovery"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -39,11 +41,15 @@ type Handler struct {
 	runtimeInfo func() buildinfo.Info
 	sessions    *sessionManager
 	incidents   *incident.Store
+	journals    map[string]*journal.Store
 }
 
 func (h *Handler) SetMonitoring(store *monitoring.Store)         { h.monitor = store }
 func (h *Handler) SetRuntimeInfo(provider func() buildinfo.Info) { h.runtimeInfo = provider }
 func (h *Handler) SetIncidents(store *incident.Store)            { h.incidents = store }
+func (h *Handler) SetJournals(requests, incidents *journal.Store) {
+	h.journals = map[string]*journal.Store{"requests": requests, "incidents": incidents}
+}
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
 	return NewWithServices(store, registry, controller, risk.New(), diagnostics.New(store, "dev", time.Now()), nil)
@@ -71,13 +77,20 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	role, authenticated := h.auth.authenticate(request)
-	cookieSession, sessionToken, cookieAuthenticated := h.sessions.authenticate(request)
+	cookieSession, sessionToken, cookieAuthenticated, cookieState := h.sessions.authenticate(request)
 	if cookieAuthenticated {
 		role, authenticated = cookieSession.Role, true
 	}
 	if !authenticated {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
-		h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
+		switch {
+		case cookieState == "invalidated" || cookieState == "idle_timeout":
+			h.writeError(writer, http.StatusUnauthorized, "SESSION_EXPIRED", l10n.M("api.admin.session_expired"), locale, fallback)
+		case request.Header.Get("Authorization") == "":
+			h.writeError(writer, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", l10n.M("api.admin.authentication_required"), locale, fallback)
+		default:
+			h.writeError(writer, http.StatusUnauthorized, "INVALID_ADMIN_KEY", l10n.M("api.admin.invalid_key"), locale, fallback)
+		}
 		return
 	}
 	if cookieAuthenticated && request.Method != http.MethodGet && !secureEqual(request.Header.Get("X-CSRF-Token"), cookieSession.CSRF) {
@@ -618,8 +631,14 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 	if h.incidents != nil {
 		incidents = h.incidents.List()
 	}
+	recoveryReport := recovery.Verify(h.store.Path(), h.store.Get())
+	backups, backupErr := recovery.ConfigBackups(h.store.Path(), h.store.Get().Server.ConfigBackupDir)
+	backupResult := map[string]any{"items": backups}
+	if backupErr != nil {
+		backupResult["error"] = backupErr.Error()
+	}
 	files := map[string]any{
-		"manifest.json":         map[string]any{"schemaVersion": 1, "generatedAt": time.Now(), "containsRawBodies": false},
+		"manifest.json":         map[string]any{"schemaVersion": 2, "generatedAt": time.Now(), "containsRawBodies": false},
 		"report.json":           report,
 		"config.redacted.json":  diagnostics.RedactedConfig(h.store.Get()),
 		"status.json":           h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
@@ -629,11 +648,14 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 		"metrics.json":          metrics,
 		"metric-errors.json":    metricErrors,
 		"incidents.json":        incidents,
+		"recovery-check.json":   recoveryReport,
+		"journal-summary.json":  h.journalSummary(recoveryReport),
+		"config-backups.json":   backupResult,
 	}
 	writer.Header().Set("Content-Type", "application/zip")
 	writer.Header().Set("Content-Disposition", "attachment; filename=relay-lifeline-diagnostics.zip")
 	archive := zip.NewWriter(writer)
-	for _, name := range []string{"manifest.json", "report.json", "config.redacted.json", "status.json", "history.redacted.json", "alerts.json", "runtime-logs.json", "metrics.json", "metric-errors.json", "incidents.json"} {
+	for _, name := range []string{"manifest.json", "report.json", "config.redacted.json", "status.json", "history.redacted.json", "alerts.json", "runtime-logs.json", "metrics.json", "metric-errors.json", "incidents.json", "recovery-check.json", "journal-summary.json", "config-backups.json"} {
 		entry, err := archive.Create(name)
 		if err != nil {
 			_ = archive.Close()
@@ -647,6 +669,43 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	_ = archive.Close()
+}
+
+func (h *Handler) journalSummary(report recovery.Report) map[string]any {
+	result := make(map[string]any, len(h.journals))
+	checks := make(map[string]recovery.Check, len(report.Checks))
+	for _, check := range report.Checks {
+		checks[check.Name] = check
+	}
+	for name, store := range h.journals {
+		if store == nil {
+			continue
+		}
+		stats := store.Stats()
+		health := "healthy"
+		if err := store.Health(); err != nil {
+			health = err.Error()
+		}
+		verification := checks[name+"_journal"]
+		result[name] = map[string]any{
+			"entries": stats.Entries, "sizeBytes": stats.SizeBytes,
+			"replayDurationSeconds":         stats.ReplayDuration.Seconds(),
+			"lastCompactionAt":              stats.LastCompactionAt,
+			"lastCompactionDurationSeconds": stats.LastCompactionDuration.Seconds(),
+			"lastCompactionRemovedEntries":  stats.LastCompactionRemoved,
+			"healthy":                       health == "healthy", "healthError": nullableDiagnosticError(health),
+			"compactionHealthy": stats.CompactionHealthy,
+			"hashChainValid":    verification.Status == "pass", "verificationStatus": verification.Status,
+		}
+	}
+	return result
+}
+
+func nullableDiagnosticError(value string) any {
+	if value == "healthy" {
+		return nil
+	}
+	return value
 }
 
 func (h *Handler) recordDiagnosticAlerts(report diagnostics.Report) {

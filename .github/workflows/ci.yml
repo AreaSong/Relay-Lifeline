@@ -23,6 +23,8 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
+      - run: npm run l10n:check
+        working-directory: web
       - run: npm run typecheck
         working-directory: web
       - run: npm run build
@@ -34,4 +36,6 @@ jobs:
       - run: go vet ./...
         env:
           CGO_ENABLED: "0"
+      - run: ./scripts/ci-integration.sh
       - run: docker build -t relay-lifeline:ci .
+      - run: ./scripts/container-smoke.sh relay-lifeline:ci

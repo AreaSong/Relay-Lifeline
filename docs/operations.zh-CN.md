@@ -30,6 +30,29 @@ curl -fsS http://127.0.0.1:8318/healthz
 curl -fsS http://127.0.0.1:8318/readyz
 ```
 
+启用持久化后，如果请求或事故 Journal（追加日志）已关闭、不可写或最近写入失败，`/readyz` 会返回 `503 unavailable`。Prometheus 的 `relay_lifeline_journal_*` 指标会暴露条目数、文件大小、启动回放、最近压实以及日志/压实健康状态。
+
+## 迁移、恢复检查与故障演练
+
+以下命令应针对已停止的实例或文件副本执行。`-recovery-check` 只读；`-config-migrate` 会先生成权限为 `0600` 的备份，再原子写入 schema 2。
+
+```bash
+relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
+relay-lifeline -config /etc/relay-lifeline/config.yaml -config-migrate
+relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
+relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
+```
+
+隔离演练重试链时，在测试端口启动 `fault-upstream`，并让一份临时 Lifeline 配置指向它。不要为了演练修改生产 CPA 上游地址。
+
+```bash
+go run ./cmd/fault-upstream -listen 127.0.0.1:18317 \
+  -sequence 401,429,503,invalid-json,truncated-sse,success
+./scripts/ci-integration.sh
+```
+
+诊断 ZIP 新增 `recovery-check.json`、`journal-summary.json` 和 `config-backups.json`。备份记录只包含文件名、修改时间、大小、SHA-256、源 schema 和校验状态；诊断包绝不包含原始请求体、响应体或备份正文。
+
 CPA 与 Transfer Lifeline 位于同一个 Compose 网络时，上游使用服务名：
 
 ```yaml

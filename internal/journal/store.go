@@ -27,14 +27,29 @@ type Entry struct {
 }
 
 type Store struct {
-	mu       sync.Mutex
-	path     string
-	file     *os.File
-	sync     bool
-	sequence uint64
-	lastHash string
-	entries  []Entry
-	lastErr  error
+	mu                     sync.Mutex
+	path                   string
+	file                   *os.File
+	sync                   bool
+	sequence               uint64
+	lastHash               string
+	entries                []Entry
+	lastErr                error
+	replayDuration         time.Duration
+	lastCompactionAt       time.Time
+	lastCompactionDuration time.Duration
+	lastCompactionRemoved  int
+	lastCompactionErr      error
+}
+
+type Stats struct {
+	Entries                int
+	SizeBytes              int64
+	ReplayDuration         time.Duration
+	LastCompactionAt       time.Time
+	LastCompactionDuration time.Duration
+	LastCompactionRemoved  int
+	CompactionHealthy      bool
 }
 
 func Open(path string, syncWrites bool) (*Store, error) {
@@ -44,6 +59,7 @@ func Open(path string, syncWrites bool) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create journal directory: %w", err)
 	}
+	replayStarted := time.Now()
 	entries, err := readAndVerify(path)
 	if err != nil {
 		return nil, err
@@ -56,7 +72,7 @@ func Open(path string, syncWrites bool) (*Store, error) {
 		file.Close()
 		return nil, fmt.Errorf("protect journal: %w", err)
 	}
-	store := &Store{path: path, file: file, sync: syncWrites, entries: entries}
+	store := &Store{path: path, file: file, sync: syncWrites, entries: entries, replayDuration: time.Since(replayStarted)}
 	if len(entries) > 0 {
 		store.sequence = entries[len(entries)-1].Sequence
 		store.lastHash = entries[len(entries)-1].Hash
@@ -105,11 +121,51 @@ func (s *Store) LastError() error {
 	return s.lastErr
 }
 
-// Compact removes entities whose newest event is older than cutoff and
-// atomically rebuilds the remaining hash chain.
-func (s *Store) Compact(cutoff time.Time) (int, error) {
+func (s *Store) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stats := Stats{
+		Entries: len(s.entries), ReplayDuration: s.replayDuration,
+		LastCompactionAt: s.lastCompactionAt, LastCompactionDuration: s.lastCompactionDuration,
+		LastCompactionRemoved: s.lastCompactionRemoved, CompactionHealthy: s.lastCompactionErr == nil,
+	}
+	if s.file != nil {
+		if info, err := s.file.Stat(); err == nil {
+			stats.SizeBytes = info.Size()
+		}
+	}
+	return stats
+}
+
+func (s *Store) Health() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastErr != nil {
+		return fmt.Errorf("last journal write failed: %w", s.lastErr)
+	}
+	if s.file == nil {
+		return errors.New("journal is closed")
+	}
+	if _, err := s.file.Stat(); err != nil {
+		return fmt.Errorf("stat journal: %w", err)
+	}
+	probe, err := os.OpenFile(s.path, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("journal is not writable: %w", err)
+	}
+	return probe.Close()
+}
+
+// Compact removes entities whose newest event is older than cutoff and
+// atomically rebuilds the remaining hash chain.
+func (s *Store) Compact(cutoff time.Time) (removed int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	startedAt := time.Now()
+	defer func() {
+		s.lastCompactionDuration = time.Since(startedAt)
+		s.lastCompactionErr = err
+	}()
 
 	retainedEntities := make(map[string]struct{})
 	for _, entry := range s.entries {
@@ -123,8 +179,10 @@ func (s *Store) Compact(cutoff time.Time) (int, error) {
 			retained = append(retained, entry)
 		}
 	}
-	removed := len(s.entries) - len(retained)
+	removed = len(s.entries) - len(retained)
 	if removed == 0 {
+		s.lastCompactionAt = time.Now().UTC()
+		s.lastCompactionRemoved = 0
 		return 0, nil
 	}
 
@@ -177,6 +235,8 @@ func (s *Store) Compact(cutoff time.Time) (int, error) {
 		s.sequence = retained[len(retained)-1].Sequence
 		s.lastHash = retained[len(retained)-1].Hash
 	}
+	s.lastCompactionAt = time.Now().UTC()
+	s.lastCompactionRemoved = removed
 	return removed, nil
 }
 

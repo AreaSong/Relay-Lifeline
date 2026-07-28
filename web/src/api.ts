@@ -45,13 +45,20 @@ export class ApiClient {
 
   constructor(
     private locale = normalizeLocale(i18n.resolvedLanguage),
-    private onUnauthorized?: () => void,
+    private onUnauthorized?: (code: string) => void,
   ) {}
 
-  private notifyUnauthorized(status: number) {
+  private notifyUnauthorized(status: number, code: string) {
     if (status !== 401 || this.unauthorizedNotified) return;
     this.unauthorizedNotified = true;
-    this.onUnauthorized?.();
+    this.onUnauthorized?.(code);
+  }
+
+  private async throwDownloadError(response: Response): Promise<never> {
+    const payload = await response.json().catch(() => ({})) as { code?: string; error?: string; details?: Record<string, unknown> };
+    const code = payload.code || `HTTP_${response.status}`;
+    this.notifyUnauthorized(response.status, code);
+    throw new ApiError(code, payload.error || i18n.t("common:httpError", { status: response.status }), payload.details);
   }
 
   private async request<T>(path: string, init?: RequestInit, validate: (value: unknown) => T = (value) => value as T): Promise<T> {
@@ -67,8 +74,9 @@ export class ApiClient {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      this.notifyUnauthorized(response.status);
-      throw new ApiError(payload.code || `HTTP_${response.status}`, payload.error || i18n.t("common:httpError", { status: response.status }), payload.details);
+      const code = payload.code || `HTTP_${response.status}`;
+      this.notifyUnauthorized(response.status, code);
+      throw new ApiError(code, payload.error || i18n.t("common:httpError", { status: response.status }), payload.details);
     }
     return validate(payload);
   }
@@ -202,8 +210,7 @@ export class ApiClient {
       credentials: "same-origin",
       headers: { "Accept-Language": this.locale },
     });
-    this.notifyUnauthorized(response.status);
-    if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
+    if (!response.ok) await this.throwDownloadError(response);
     const blob = await response.blob();
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -222,8 +229,7 @@ export class ApiClient {
 
   private async download(path: string, filename: string, extraHeaders?: Record<string, string>) {
     const response = await fetch(`/admin/api${path}`, { credentials: "same-origin", headers: { "Accept-Language": this.locale, ...extraHeaders } });
-    this.notifyUnauthorized(response.status);
-    if (!response.ok) throw new Error(i18n.t("common:httpError", { status: response.status }));
+    if (!response.ok) await this.throwDownloadError(response);
     const blob = await response.blob();
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);

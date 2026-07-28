@@ -2,6 +2,25 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [2.0.0] - 2026-07-28
+
+### Added
+
+- Persistent request and incident journal health, replay, size, and compaction metrics, with persistence-aware readiness.
+- Configuration migration and read-only recovery-check commands, plus a deterministic fault-upstream drill utility.
+- Diagnostic ZIP recovery evidence, journal summaries, and configuration-backup fingerprints without raw bodies or configuration contents.
+- CI gates for localization, CLI migration/recovery, multi-failure retry recovery, and container health/readiness contracts.
+
+### Changed
+
+- Distinguish an absent management session, an invalid management key, and an expired or restarted session in both the Admin API and Web UI.
+- Configuration schema 2 is the release contract; schema 1 remains explicitly migratable.
+
+### Security
+
+- Diagnostic manifests explicitly declare `containsRawBodies: false`; backup exports contain only filename, time, size, SHA-256, schema, and validity metadata.
+- Download endpoints now preserve structured authentication error codes instead of collapsing every `401` into one client-side state.
+
 ## [1.0.1] - 2026-07-27
 
 ### Fixed

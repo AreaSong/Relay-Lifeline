@@ -26,6 +26,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/proxy"
+	"github.com/areasong/relay-lifeline/internal/recovery"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -45,6 +46,8 @@ func main() {
 	configPath := flag.String("config", "config.yaml", l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_path")))
 	showVersion := flag.Bool("version", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.version")))
 	validateOnly := flag.Bool("config-validate", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_validate")))
+	migrateConfig := flag.Bool("config-migrate", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.config_migrate")))
+	recoveryCheck := flag.Bool("recovery-check", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.recovery_check")))
 	doctor := flag.Bool("doctor", false, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.doctor")))
 	verifyJournal := flag.String("journal-verify", "", l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.journal_verify")))
 	localeFlag := flag.String("locale", preLocale, l10n.Default.Text(preLocale, l10n.LocaleEnglish, l10n.M("cli.locale")))
@@ -63,7 +66,7 @@ func main() {
 		return
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, sourceSchemaVersion, err := config.LoadWithSourceVersion(*configPath)
 	if err != nil {
 		message := l10n.M("cli.config_load_failed", map[string]any{"Error": l10n.Default.Error(preLocale, l10n.LocaleEnglish, err)})
 		fmt.Fprintln(os.Stderr, l10n.Default.Text(preLocale, l10n.LocaleEnglish, message))
@@ -75,6 +78,27 @@ func main() {
 	}
 	if *validateOnly {
 		fmt.Printf("configuration valid: schema-version %d\n", cfg.SchemaVersion)
+		return
+	}
+	if *migrateConfig {
+		if sourceSchemaVersion == config.CurrentSchemaVersion {
+			fmt.Printf("configuration already current: schema-version %d\n", config.CurrentSchemaVersion)
+			return
+		}
+		result, updateErr := config.NewStore(*configPath, cfg).UpdateWithResult(cfg, true)
+		if updateErr != nil {
+			fmt.Fprintln(os.Stderr, l10n.Default.Error(cliLocale, cfg.Localization.FallbackLocale, updateErr))
+			os.Exit(1)
+		}
+		fmt.Printf("configuration migrated: schema-version %d -> %d backup=%s\n", sourceSchemaVersion, config.CurrentSchemaVersion, result.BackupPath)
+		return
+	}
+	if *recoveryCheck {
+		report := recovery.Verify(*configPath, cfg)
+		_ = json.NewEncoder(os.Stdout).Encode(report)
+		if !report.Healthy {
+			os.Exit(1)
+		}
 		return
 	}
 	if !*doctor {
@@ -136,6 +160,13 @@ func main() {
 	controller := state.NewController()
 	riskManager := risk.New()
 	monitoringStore := monitoring.New()
+	if eventJournal != nil {
+		monitoringStore.SetPersistenceProvider(func() []monitoring.PersistenceMetric {
+			return []monitoring.PersistenceMetric{
+				journalMetric("requests", eventJournal), journalMetric("incidents", incidentJournal),
+			}
+		})
+	}
 	incidentStore, err := incident.New(func() config.IncidentConfig { return store.Get().Incidents }, incidentJournal)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "restore incidents: %v\n", err)
@@ -162,6 +193,7 @@ func main() {
 	adminHandler := admin.NewWithExtendedServices(store, registry, controller, riskManager, diagnosticService, notifier, captureManager, runLogStore)
 	adminHandler.SetMonitoring(monitoringStore)
 	adminHandler.SetIncidents(incidentStore)
+	adminHandler.SetJournals(eventJournal, incidentJournal)
 	adminHandler.SetRuntimeInfo(func() buildinfo.Info { return runtimeInfo.Snapshot(config.CurrentSchemaVersion) })
 
 	mux := http.NewServeMux()
@@ -171,7 +203,15 @@ func main() {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.Handle("/readyz", readinessHandler(&ready))
+	mux.Handle("/readyz", readinessHandler(&ready, func() error {
+		if eventJournal == nil {
+			return nil
+		}
+		if err := eventJournal.Health(); err != nil {
+			return err
+		}
+		return incidentJournal.Health()
+	}))
 	mux.HandleFunc("/favicon.ico", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
@@ -238,7 +278,7 @@ func maintainJournals(ctx context.Context, store *config.Store, logger *slog.Log
 	}
 }
 
-func readinessHandler(ready *atomic.Bool) http.Handler {
+func readinessHandler(ready *atomic.Bool, checks ...func() error) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if !ready.Load() {
@@ -246,8 +286,29 @@ func readinessHandler(ready *atomic.Bool) http.Handler {
 			_, _ = writer.Write([]byte(`{"status":"draining"}`))
 			return
 		}
+		for _, check := range checks {
+			if check != nil && check() != nil {
+				writer.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = writer.Write([]byte(`{"status":"unavailable"}`))
+				return
+			}
+		}
 		_, _ = writer.Write([]byte(`{"status":"ready"}`))
 	})
+}
+
+func journalMetric(name string, store *journal.Store) monitoring.PersistenceMetric {
+	stats := store.Stats()
+	lastCompaction := float64(0)
+	if !stats.LastCompactionAt.IsZero() {
+		lastCompaction = float64(stats.LastCompactionAt.Unix())
+	}
+	return monitoring.PersistenceMetric{
+		Journal: name, Entries: stats.Entries, SizeBytes: stats.SizeBytes,
+		ReplayDurationSeconds: stats.ReplayDuration.Seconds(), LastCompactionTimestamp: lastCompaction,
+		LastCompactionSeconds: stats.LastCompactionDuration.Seconds(), LastCompactionRemoved: stats.LastCompactionRemoved,
+		Healthy: store.Health() == nil, CompactionHealthy: stats.CompactionHealthy,
+	}
 }
 
 func validateManagementKeys(adminEnabled bool, operatorKey, viewerKey, sensitiveKey string) error {

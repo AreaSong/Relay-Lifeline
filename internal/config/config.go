@@ -250,25 +250,31 @@ func Default() Config {
 func duration(value time.Duration) Duration { return Duration{Duration: value} }
 
 func Load(path string) (Config, error) {
+	cfg, _, err := LoadWithSourceVersion(path)
+	return cfg, err
+}
+
+func LoadWithSourceVersion(path string) (Config, int, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, l10n.E("config.read_failed", err, map[string]any{"Error": err.Error()})
+		return Config{}, 0, l10n.E("config.read_failed", err, map[string]any{"Error": err.Error()})
 	}
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
-		return Config{}, l10n.E("config.parse_failed", err, map[string]any{"Error": err.Error()})
+		return Config{}, 0, l10n.E("config.parse_failed", err, map[string]any{"Error": err.Error()})
 	}
+	sourceVersion := cfg.SchemaVersion
 	migrated, err := Migrate(cfg)
 	if err != nil {
-		return Config{}, err
+		return Config{}, sourceVersion, err
 	}
 	cfg = migrated
 	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+		return Config{}, sourceVersion, err
 	}
-	return cfg, nil
+	return cfg, sourceVersion, nil
 }
 
 func (c Config) Validate() error {

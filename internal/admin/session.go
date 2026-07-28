@@ -69,23 +69,27 @@ func (m *sessionManager) login(request *http.Request, key string, authenticator 
 	return token, session, nil
 }
 
-func (m *sessionManager) authenticate(request *http.Request) (managementSession, string, bool) {
+func (m *sessionManager) authenticate(request *http.Request) (managementSession, string, bool, string) {
 	cookie, err := request.Cookie(managementSessionCookie)
 	if err != nil || cookie.Value == "" {
-		return managementSession{}, "", false
+		return managementSession{}, "", false, "missing"
 	}
 	now := m.now()
 	timeout := m.store.Get().ManagementSecurity.SessionIdleTimeout.Duration
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	session, ok := m.sessions[cookie.Value]
-	if !ok || now.Sub(session.LastSeen) > timeout {
+	if !ok {
 		delete(m.sessions, cookie.Value)
-		return managementSession{}, "", false
+		return managementSession{}, "", false, "invalidated"
+	}
+	if now.Sub(session.LastSeen) > timeout {
+		delete(m.sessions, cookie.Value)
+		return managementSession{}, "", false, "idle_timeout"
 	}
 	session.LastSeen = now
 	m.sessions[cookie.Value] = session
-	return session, cookie.Value, true
+	return session, cookie.Value, true, "active"
 }
 
 func (m *sessionManager) revoke(token string) {

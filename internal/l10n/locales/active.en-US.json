@@ -1,5 +1,7 @@
 [
   {"id":"api.admin.invalid_key","translation":"Invalid admin key"},
+  {"id":"api.admin.authentication_required","translation":"A management session or Bearer key is required"},
+  {"id":"api.admin.session_expired","translation":"The management session ended after a service restart, logout, or idle timeout"},
   {"id":"api.admin.login_limited","translation":"Too many failed logins; retry after the cooldown"},
   {"id":"api.admin.csrf_invalid","translation":"The management session CSRF token is invalid or expired"},
   {"id":"api.route.not_found","translation":"Endpoint not found"},
@@ -70,6 +72,8 @@
   {"id":"cli.config_path","translation":"Configuration file path"},
   {"id":"cli.version","translation":"Show version"},
   {"id":"cli.config_validate","translation":"Validate the configuration and exit"},
+  {"id":"cli.config_migrate","translation":"Back up and migrate the configuration to the current schema, then exit"},
+  {"id":"cli.recovery_check","translation":"Run a read-only configuration, backup, journal, and capture recovery check"},
   {"id":"cli.doctor","translation":"Run read-only environment diagnostics and exit"},
   {"id":"cli.journal_verify","translation":"Verify the hash chain of an event journal and exit"},
   {"id":"cli.locale","translation":"CLI locale (zh-CN or en-US)"},

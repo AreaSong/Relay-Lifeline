@@ -148,6 +148,18 @@ func TestMigrateAddsCurrentSchemaAndRejectsFutureSchema(t *testing.T) {
 	}
 }
 
+func TestLoadWithSourceVersionReportsMigrationOrigin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte("schema-version: 1\nupstream:\n  base-url: http://127.0.0.1:8317\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, sourceVersion, err := LoadWithSourceVersion(path)
+	if err != nil || sourceVersion != 1 || cfg.SchemaVersion != CurrentSchemaVersion {
+		t.Fatalf("源 schema 识别异常: source=%d current=%d err=%v", sourceVersion, cfg.SchemaVersion, err)
+	}
+}
+
 func TestPlanChangesSeparatesHotReloadAndRestartSections(t *testing.T) {
 	before := Default()
 	after := before

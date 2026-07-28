@@ -90,6 +90,29 @@ curl -fsS http://127.0.0.1:8318/healthz
 curl -fsS http://127.0.0.1:8318/readyz
 ```
 
+Readiness returns `503 unavailable` when an enabled request or incident journal is closed, unwritable, or has a recorded write failure. Prometheus exposes the `relay_lifeline_journal_*` gauges for entries, bytes, replay duration, latest compaction, and journal/compaction health.
+
+## Migration, recovery, and drills
+
+Run these commands against a stopped instance or a copy of its files. `-recovery-check` is read-only; `-config-migrate` first creates a mode-`0600` backup and then atomically writes schema 2.
+
+```bash
+relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
+relay-lifeline -config /etc/relay-lifeline/config.yaml -config-migrate
+relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
+relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
+```
+
+For an isolated retry drill, start `fault-upstream` on a test port and point a temporary Lifeline configuration at it. Never replace the production CPA address for this test.
+
+```bash
+go run ./cmd/fault-upstream -listen 127.0.0.1:18317 \
+  -sequence 401,429,503,invalid-json,truncated-sse,success
+./scripts/ci-integration.sh
+```
+
+The diagnostic ZIP adds `recovery-check.json`, `journal-summary.json`, and `config-backups.json`. Backup records contain only filename, modification time, size, SHA-256, source schema, and validation status. The bundle never contains raw request/response bodies or backup contents.
+
 ## Restart and drain
 
 Keep Compose `stop_grace_period` longer than `server.shutdown-timeout`. On a termination signal, the server becomes unready, wakes waiting requests for one immediate retry, and synchronously waits for active handlers to drain.

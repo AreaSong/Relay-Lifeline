@@ -20,6 +20,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
@@ -82,6 +83,16 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := config.NewStore(path, cfg)
+	requestJournal, err := journal.Open(filepath.Join(t.TempDir(), "requests.jsonl"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer requestJournal.Close()
+	incidentJournal, err := journal.Open(filepath.Join(t.TempDir(), "incidents.jsonl"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer incidentJournal.Close()
 	registry := state.NewRegistry()
 	id, _ := registry.Add("POST", "/v1/responses", func() {})
 	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
@@ -91,6 +102,7 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 	registry.UpdateMessage(id, lifecycle.StateCompleted, 1, l10n.Message{}, time.Time{})
 	registry.Remove(id, lifecycle.StateSuccessful)
 	handler := NewWithServices(store, registry, state.NewController(), risk.New(), diagnostics.New(store, "test", time.Now()), nil)
+	handler.SetJournals(requestJournal, incidentJournal)
 
 	history := authenticatedRequest(handler, http.MethodGet, "/admin/api/history")
 	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), id) {
@@ -108,6 +120,14 @@ func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
 		t.Fatalf("诊断包接口异常: %d %s", bundle.Code, bundle.Body.String())
 	}
 	files := diagnosticFiles(t, bundle.Body.Bytes())
+	for _, name := range []string{"recovery-check.json", "journal-summary.json", "config-backups.json"} {
+		if files[name] == "" {
+			t.Fatalf("诊断包缺少 %s", name)
+		}
+	}
+	if !strings.Contains(files["manifest.json"], `"schemaVersion": 2`) || !strings.Contains(files["manifest.json"], `"containsRawBodies": false`) {
+		t.Fatalf("诊断清单契约异常: %s", files["manifest.json"])
+	}
 	for _, secret := range []string{"upstream-secret", "hidden", "webhook-secret", "diagnostic-only-secret"} {
 		for name, body := range files {
 			if strings.Contains(body, secret) {
@@ -147,7 +167,7 @@ func TestAdminLocalizesErrorsAndStoredHistoryPerRequest(t *testing.T) {
 	unauthorizedRequest.Header.Set("Accept-Language", "en-US")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, unauthorizedRequest)
-	if unauthorized.Header().Get("Content-Language") != "en-US" || !strings.Contains(unauthorized.Body.String(), `"code":"INVALID_ADMIN_KEY"`) || !strings.Contains(unauthorized.Body.String(), "Invalid admin key") {
+	if unauthorized.Header().Get("Content-Language") != "en-US" || !strings.Contains(unauthorized.Body.String(), `"code":"AUTHENTICATION_REQUIRED"`) || !strings.Contains(unauthorized.Body.String(), "A management session or Bearer key is required") {
 		t.Fatalf("英文错误响应异常: header=%q body=%s", unauthorized.Header().Get("Content-Language"), unauthorized.Body.String())
 	}
 
@@ -538,8 +558,38 @@ func TestManagementSessionCookieCSRFAndRevocation(t *testing.T) {
 	afterLogout.AddCookie(cookies[0])
 	afterRecorder := httptest.NewRecorder()
 	handler.ServeHTTP(afterRecorder, afterLogout)
-	if afterRecorder.Code != http.StatusUnauthorized {
+	if afterRecorder.Code != http.StatusUnauthorized || !strings.Contains(afterRecorder.Body.String(), `"code":"SESSION_EXPIRED"`) {
 		t.Fatalf("注销后会话仍有效: %d", afterRecorder.Code)
+	}
+}
+
+func TestManagementAuthenticationErrorClassification(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	store := config.NewStore("", config.Default())
+	handler := New(store, state.NewRegistry(), state.NewController())
+
+	invalidBearer := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
+	invalidBearer.Header.Set("Authorization", "Bearer wrong-key")
+	invalidRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(invalidRecorder, invalidBearer)
+	if invalidRecorder.Code != http.StatusUnauthorized || !strings.Contains(invalidRecorder.Body.String(), `"code":"INVALID_ADMIN_KEY"`) {
+		t.Fatalf("无效 Bearer 分类异常: %d %s", invalidRecorder.Code, invalidRecorder.Body.String())
+	}
+
+	handler.sessions.now = func() time.Time { return time.Unix(100, 0) }
+	token, _, err := handler.sessions.login(httptest.NewRequest(http.MethodPost, "/admin/api/session/login", nil), "123456789012345678901234", handler.auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.sessions.now = func() time.Time {
+		return time.Unix(100, 0).Add(store.Get().ManagementSecurity.SessionIdleTimeout.Duration + time.Second)
+	}
+	expired := httptest.NewRequest(http.MethodGet, "/admin/api/status", nil)
+	expired.AddCookie(&http.Cookie{Name: managementSessionCookie, Value: token})
+	expiredRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(expiredRecorder, expired)
+	if expiredRecorder.Code != http.StatusUnauthorized || !strings.Contains(expiredRecorder.Body.String(), `"code":"SESSION_EXPIRED"`) {
+		t.Fatalf("空闲超时分类异常: %d %s", expiredRecorder.Code, expiredRecorder.Body.String())
 	}
 }
 

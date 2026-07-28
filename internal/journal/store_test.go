@@ -106,3 +106,30 @@ func TestJournalRejectsTampering(t *testing.T) {
 		t.Fatal("篡改后的日志不应通过校验")
 	}
 }
+
+func TestJournalReportsRuntimeStatsAndHealth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requests.jsonl")
+	store, err := Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("request-1", "start", map[string]bool{"ok": true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Compact(time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	stats := store.Stats()
+	if stats.Entries != 1 || stats.SizeBytes == 0 || stats.ReplayDuration < 0 || stats.LastCompactionAt.IsZero() || !stats.CompactionHealthy {
+		t.Fatalf("日志统计异常: %+v", stats)
+	}
+	if err := store.Health(); err != nil {
+		t.Fatalf("日志健康检查失败: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Health(); err == nil {
+		t.Fatal("已关闭日志不应继续报告健康")
+	}
+}

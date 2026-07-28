@@ -96,12 +96,13 @@ type minuteBucket struct {
 }
 
 type Store struct {
-	mu        sync.Mutex
-	buckets   [minuteBucketCount]minuteBucket
-	load      Load
-	startedAt time.Time
-	now       func() time.Time
-	events    eventRing
+	mu          sync.Mutex
+	buckets     [minuteBucketCount]minuteBucket
+	load        Load
+	startedAt   time.Time
+	now         func() time.Time
+	events      eventRing
+	persistence func() []PersistenceMetric
 }
 
 func New() *Store {

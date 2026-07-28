@@ -12,6 +12,9 @@ func TestPrometheusHandlerExportsBoundedMetrics(t *testing.T) {
 	store.RecordAttempt()
 	store.RecordAttemptFailure("server")
 	store.SetLoad(2, 1, 1, 1)
+	store.SetPersistenceProvider(func() []PersistenceMetric {
+		return []PersistenceMetric{{Journal: "requests", Entries: 12, SizeBytes: 4096, Healthy: true, CompactionHealthy: true}}
+	})
 	recorder := httptest.NewRecorder()
 	store.PrometheusHandler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
 	if recorder.Code != 200 || !strings.Contains(recorder.Header().Get("Content-Type"), "text/plain") {
@@ -22,6 +25,9 @@ func TestPrometheusHandlerExportsBoundedMetrics(t *testing.T) {
 		"relay_lifeline_requests_24h 1",
 		"relay_lifeline_active_requests 2",
 		`relay_lifeline_failed_attempts_by_category_24h{category="server"} 1`,
+		`relay_lifeline_journal_entries{journal="requests"} 12`,
+		`relay_lifeline_journal_size_bytes{journal="requests"} 4096`,
+		`relay_lifeline_journal_healthy{journal="requests"} 1`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Prometheus 输出缺少 %q:\n%s", expected, body)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,17 @@ func TestReadinessHandlerDistinguishesReadyAndDraining(t *testing.T) {
 	handler.ServeHTTP(draining, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if draining.Code != http.StatusServiceUnavailable || !strings.Contains(draining.Body.String(), "draining") {
 		t.Fatalf("排空响应异常: %d %s", draining.Code, draining.Body.String())
+	}
+}
+
+func TestReadinessHandlerRejectsFailedDependency(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
+	handler := readinessHandler(&ready, func() error { return errors.New("journal unavailable") })
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "unavailable") {
+		t.Fatalf("依赖异常时仍然就绪: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

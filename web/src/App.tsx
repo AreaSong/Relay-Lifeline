@@ -41,11 +41,11 @@ function currentView(): View {
   return allViews.includes(candidate) ? candidate : "overview";
 }
 
-function Login({ onLogin, themeMode, setThemeMode, expired }: {
+function Login({ onLogin, themeMode, setThemeMode, sessionExpired }: {
   onLogin: (token: string) => Promise<void>;
   themeMode: ReturnType<typeof useTheme>["mode"];
   setThemeMode: ReturnType<typeof useTheme>["setMode"];
-  expired?: boolean;
+  sessionExpired?: boolean;
 }) {
   const { t, i18n } = useTranslation(["auth", "common", "overview"]);
   const [token, setToken] = useState("");
@@ -72,7 +72,7 @@ function Login({ onLogin, themeMode, setThemeMode, expired }: {
       <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
         <input className="sr-only" type="text" name="username" value="relay-lifeline-admin" autoComplete="username" tabIndex={-1} aria-hidden="true" readOnly />
         <label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => { setToken(event.target.value); setError(""); }} autoComplete="current-password" autoFocus required /></label>
-        {(error || expired) && <div className="error-banner" role="alert">{error || t("auth:sessionExpired")}</div>}
+        {(error || sessionExpired) && <div className="error-banner" role="alert">{error || t("auth:sessionExpired")}</div>}
         <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
       </form>
     </section>
@@ -84,7 +84,7 @@ export function App() {
   const locale = normalizeLocale(i18n.resolvedLanguage);
   const theme = useTheme();
   const [authenticated, setAuthenticated] = useState(true);
-  const [authExpired, setAuthExpired] = useState(false);
+  const [authReason, setAuthReason] = useState<"required" | "expired" | null>(null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<View>(currentView);
   const [status, setStatus] = useState<Status | null>(null);
@@ -104,11 +104,11 @@ export function App() {
   const [mobileTools, setMobileTools] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
-  const resetAuthentication = useCallback((expired: boolean) => {
-    setAuthenticated(false); setAuthExpired(expired); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
+  const resetAuthentication = useCallback((reason: "required" | "expired" | null) => {
+    setAuthenticated(false); setAuthReason(reason); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
     setAlerts([]); setHistory([]); setIncidents([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage("");
   }, []);
-  const api = useMemo(() => new ApiClient(locale, () => resetAuthentication(true)), [locale, resetAuthentication]);
+  const api = useMemo(() => new ApiClient(locale, (code) => resetAuthentication(code === "SESSION_EXPIRED" ? "expired" : "required")), [locale, resetAuthentication]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const canOperate = session?.capabilities.includes("operate") || false;
   const canSensitive = session?.capabilities.includes("sensitive") || false;
@@ -179,11 +179,11 @@ export function App() {
 
   async function login(value: string) {
     const nextSession = await api.login(value);
-    setAuthExpired(false); setSession(nextSession); setAuthenticated(true);
+    setAuthReason(null); setSession(nextSession); setAuthenticated(true);
   }
   async function logout() {
     await api.logout().catch(() => undefined);
-    resetAuthentication(false);
+    resetAuthentication(null);
   }
   async function selectView(next: View) {
     if (next === "settings" && !canOperate) return;
@@ -227,7 +227,7 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
 
-  if (!authenticated) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} expired={authExpired} />;
+  if (!authenticated) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} sessionExpired={authReason === "expired"} />;
   if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";

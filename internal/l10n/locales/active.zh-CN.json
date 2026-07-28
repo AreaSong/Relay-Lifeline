@@ -1,5 +1,7 @@
 [
   {"id":"api.admin.invalid_key","translation":"管理密钥无效"},
+  {"id":"api.admin.authentication_required","translation":"需要管理会话或 Bearer 密钥"},
+  {"id":"api.admin.session_expired","translation":"管理会话因服务重启、注销或空闲超时而结束"},
   {"id":"api.admin.login_limited","translation":"登录失败次数过多，请在冷却时间后重试"},
   {"id":"api.admin.csrf_invalid","translation":"管理会话 CSRF 令牌无效或已过期"},
   {"id":"api.route.not_found","translation":"接口不存在"},
@@ -70,6 +72,8 @@
   {"id":"cli.config_path","translation":"配置文件路径"},
   {"id":"cli.version","translation":"显示版本"},
   {"id":"cli.config_validate","translation":"校验配置后退出"},
+  {"id":"cli.config_migrate","translation":"备份配置并迁移到当前 schema 后退出"},
+  {"id":"cli.recovery_check","translation":"只读检查配置、备份、事件链和捕获目录的恢复条件"},
   {"id":"cli.doctor","translation":"运行只读环境诊断后退出"},
   {"id":"cli.journal_verify","translation":"校验指定事件日志哈希链后退出"},
   {"id":"cli.locale","translation":"CLI 语言（zh-CN 或 en-US）"},

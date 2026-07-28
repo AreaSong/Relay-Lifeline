@@ -8,7 +8,9 @@ Run every gate before publishing a tag.
 git diff --check
 make check
 make race
-docker build --build-arg VERSION=1.0.0 --build-arg REVISION=$(git rev-parse HEAD) -t transfer-lifeline:1.0.0 .
+./scripts/ci-integration.sh
+docker build --build-arg VERSION=2.0.0 --build-arg REVISION=$(git rev-parse HEAD) -t transfer-lifeline:2.0.0 .
+./scripts/container-smoke.sh transfer-lifeline:2.0.0
 ```
 
 ## Runtime gates
