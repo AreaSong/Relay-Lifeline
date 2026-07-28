@@ -5,12 +5,19 @@ Run every gate before publishing a tag.
 ## Source gates
 
 ```bash
+export VERSION="$(node -p "require('./web/package.json').version")"
+export REVISION="$(git rev-parse HEAD)"
+export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git diff --check
 make check
 make race
 ./scripts/ci-integration.sh
-docker build --build-arg VERSION=2.0.0 --build-arg REVISION=$(git rev-parse HEAD) -t transfer-lifeline:2.0.0 .
-./scripts/container-smoke.sh transfer-lifeline:2.0.0
+docker build \
+  --build-arg VERSION="${VERSION}" \
+  --build-arg REVISION="${REVISION}" \
+  --build-arg BUILD_TIME="${BUILD_TIME}" \
+  -t "transfer-lifeline:${VERSION}" .
+./scripts/container-smoke.sh "transfer-lifeline:${VERSION}"
 ```
 
 ## Runtime gates

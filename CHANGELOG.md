@@ -2,6 +2,24 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [2.1.0] - 2026-07-29
+
+### Added
+
+- Incident-first overview that prioritizes active incidents, alerts, and recovering requests in one compact operating surface.
+- Switchable 15-minute, 1-hour, 6-hour, and 24-hour telemetry windows, secondary chart tabs, and focused chart expansion.
+- Collapsible desktop navigation with persistent preference and responsive controls for compact screens.
+
+### Changed
+
+- Rebuilt the management console visual system around denser operational hierarchy, standardized Lucide icons, and responsive layouts tuned for 2560x1440, 1512x982, and mobile viewports.
+- Reorganized reliability, pressure, error, and recovery charts into a consistent visualization system with complete/partial-window state.
+
+### Fixed
+
+- Preserve FIFO ordering in the concurrency limiter by giving each queued waiter a unique non-zero-sized address.
+- Report live requesting pressure separately from total active requests in pressure charts.
+
 ## [2.0.0] - 2026-07-28
 
 ### Added
