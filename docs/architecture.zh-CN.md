@@ -2,7 +2,7 @@
 
 [English](architecture.md)
 
-Transfer Lifeline 将请求数据面与管理控制面分离。
+Relay-Lifeline 将请求数据面与管理控制面分离。
 
 ```text
 AI 客户端 -> 数据面 -> OpenAI-compatible 中转站 -> 模型提供商
@@ -69,7 +69,7 @@ Signal Continuity 场景按需加载本地 Three.js 包，展示既有网关状�
 
 ## 职责边界
 
-Transfer Lifeline 只维护一个上游目标。账号池、多供应商路由、模型映射、渠道权重和多个中转站之间的故障切换属于 CPA 或其他上游中转站。
+Relay-Lifeline 只维护一个上游目标。账号池、多供应商路由、模型映射、渠道权重和多个中转站之间的故障切换属于 CPA 或其他上游中转站。
 
 ## 完成规则
 

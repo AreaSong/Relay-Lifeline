@@ -4,8 +4,8 @@
     "healthyTitle": "The relay path stays continuous.",
     "degradedTitle": "Upstream is recovering. Requests remain held.",
     "unknownTitle": "Waiting for the first upstream signal.",
-    "healthyDescription": "Requests are moving through Transfer Lifeline to the configured relay without interruption.",
-    "degradedDescription": "Active connections stay open. Transfer Lifeline will retry according to policy without changing the request.",
+    "healthyDescription": "Requests are moving through Relay-Lifeline to the configured relay without interruption.",
+    "degradedDescription": "Active connections stay open. Relay-Lifeline will retry according to policy without changing the request.",
     "unknownDescription": "The gateway is online and will assess upstream health on the next request.",
     "codex": "Codex",
     "relay": "Lifeline",
@@ -19,7 +19,7 @@
     "nextRetry": "Next retry",
     "retryNow": "Retry signal",
     "staticFallback": "Live rendering unavailable; operational data remains current"
-    ,"topologyLabel": "Live route from Codex through Transfer Lifeline to the configured upstream"
+    ,"topologyLabel": "Live route from Codex through Relay-Lifeline to the configured upstream"
   },
   "incident": {
     "title": "Incident mode",
@@ -79,7 +79,7 @@
     "requestState": "Request state",
     "started": "Elapsed",
     "stableHeadline": "No active incidents",
-    "stableDescription": "Transfer Lifeline is healthy and the upstream path is available or standing by.",
+    "stableDescription": "Relay-Lifeline is healthy and the upstream path is available or standing by.",
     "alerts": "Unresolved alerts"
   },
   "errorCategories": { "transport": "Transport", "protocol": "Protocol", "auth": "Authentication", "rate_limit": "Rate limit", "client": "Client request", "server": "Upstream server", "http": "Other HTTP" },

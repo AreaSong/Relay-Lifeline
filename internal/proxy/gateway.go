@@ -488,5 +488,5 @@ func (g *Gateway) logText(cfg config.Config, messageID string) string {
 }
 
 func (g *Gateway) String() string {
-	return fmt.Sprintf("Transfer Lifeline -> %s", g.store.Get().Upstream.BaseURL)
+	return fmt.Sprintf("Relay-Lifeline -> %s", g.store.Get().Upstream.BaseURL)
 }

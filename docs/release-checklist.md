@@ -16,8 +16,8 @@ docker build \
   --build-arg VERSION="${VERSION}" \
   --build-arg REVISION="${REVISION}" \
   --build-arg BUILD_TIME="${BUILD_TIME}" \
-  -t "transfer-lifeline:${VERSION}" .
-./scripts/container-smoke.sh "transfer-lifeline:${VERSION}"
+  -t "relay-lifeline:${VERSION}" .
+./scripts/container-smoke.sh "relay-lifeline:${VERSION}"
 ```
 
 ## Runtime gates

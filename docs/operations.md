@@ -1,4 +1,4 @@
-# Transfer Lifeline Operations Guide
+# Relay-Lifeline Operations Guide
 
 [简体中文](operations.zh-CN.md)
 
@@ -79,7 +79,7 @@ Rewrap changes only small wrapped data keys. Never retire a key while records st
 
 The normal recovery path is `queued -> requesting -> waiting -> requesting -> completed`. Use the Request ID across the Requests, Logs, History, and Capture views. Run diagnostics before changing policy; the upstream probe performs DNS/TCP checks without a model call.
 
-Transfer Lifeline does not own account pools, quotas, model routing, or vendor failover. Diagnose those in CPA or the configured relay.
+Relay-Lifeline does not own account pools, quotas, model routing, or vendor failover. Diagnose those in CPA or the configured relay.
 
 Useful commands:
 

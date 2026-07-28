@@ -6,7 +6,7 @@ services:
         VERSION: ${RELAY_LIFELINE_VERSION:-dev}
         REVISION: ${RELAY_LIFELINE_REVISION:-unknown}
         BUILD_TIME: ${RELAY_LIFELINE_BUILD_TIME:-unknown}
-    image: ghcr.io/areasong/transfer-lifeline:${RELAY_LIFELINE_VERSION:-latest}
+    image: ghcr.io/areasong/relay-lifeline:${RELAY_LIFELINE_VERSION:-latest}
     container_name: relay-lifeline
     restart: unless-stopped
     stop_grace_period: 3m10s
@@ -22,7 +22,7 @@ services:
       RELAY_LIFELINE_CAPTURE_KEY: ${RELAY_LIFELINE_CAPTURE_KEY:-}
       RELAY_LIFELINE_CAPTURE_ACTIVE_KEY_ID: ${RELAY_LIFELINE_CAPTURE_ACTIVE_KEY_ID:-}
       RELAY_LIFELINE_CAPTURE_KEYRING: ${RELAY_LIFELINE_CAPTURE_KEYRING:-}
-      RELAY_LIFELINE_IMAGE_REF: ghcr.io/areasong/transfer-lifeline:${RELAY_LIFELINE_VERSION:-latest}
+      RELAY_LIFELINE_IMAGE_REF: ghcr.io/areasong/relay-lifeline:${RELAY_LIFELINE_VERSION:-latest}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ${RELAY_LIFELINE_CONFIG:-./config.docker.yaml}:/etc/relay-lifeline/config.yaml:rw

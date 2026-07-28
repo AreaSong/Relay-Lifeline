@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image="${1:-transfer-lifeline:ci}"
+image="${1:-relay-lifeline:ci}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
-name="transfer-lifeline-smoke-${RANDOM}"
+name="relay-lifeline-smoke-${RANDOM}"
 cleanup() {
   docker rm -f "${name}" >/dev/null 2>&1 || true
   rm -rf "${work}"

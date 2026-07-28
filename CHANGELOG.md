@@ -69,7 +69,7 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ### Compatibility
 
-- Public branding and the official image use Transfer Lifeline and `ghcr.io/areasong/transfer-lifeline`.
+- Public branding and the official image use Relay-Lifeline and `ghcr.io/areasong/relay-lifeline`.
 - Existing `relay-lifeline` binary names, Go module, environment variables, headers, storage paths, and client provider identifiers remain supported.
 
 ### Security

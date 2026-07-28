@@ -4,13 +4,13 @@
 
 ## 报告漏洞
 
-请勿在公开 Issue 中披露可利用的安全问题。使用 [GitHub 私密安全报告](https://github.com/AreaSong/transfer-lifeline/security/advisories/new) 联系维护者，并尽量提供复现步骤、受影响版本、影响范围和建议缓解方式。
+请勿在公开 Issue 中披露可利用的安全问题。使用 [GitHub 私密安全报告](https://github.com/AreaSong/Relay-Lifeline/security/advisories/new) 联系维护者，并尽量提供复现步骤、受影响版本、影响范围和建议缓解方式。
 
 报告中不得包含真实 API Key、管理密钥、提示词、模型响应、原始上游错误或含凭据 URL。请使用可辨识但无效的固定占位符替换。
 
 ## 安全边界
 
-- Transfer Lifeline 只在内存中把下游 Authorization 透传给唯一配置上游。
+- Relay-Lifeline 只在内存中把下游 Authorization 透传给唯一配置上游。
 - 支持的配置不记录请求体、响应体或 Authorization。
 - 管理 API 使用彼此不同且不少于 24 个字符的角色密钥：可选 Viewer、Operator（`RELAY_LIFELINE_ADMIN_KEY`）和 Sensitive Data。Viewer 只读，Operator 可以修改运行状态，只有 Sensitive Data 可以下载完整原文。
 - Docker 默认只将服务发布到宿主机回环地址。

@@ -12,8 +12,8 @@ FROM alpine:3.21
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG BUILD_TIME=unknown
-LABEL org.opencontainers.image.title="Transfer Lifeline" \
-      org.opencontainers.image.source="https://github.com/AreaSong/transfer-lifeline" \
+LABEL org.opencontainers.image.title="Relay-Lifeline" \
+      org.opencontainers.image.source="https://github.com/AreaSong/Relay-Lifeline" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \

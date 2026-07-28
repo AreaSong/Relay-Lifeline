@@ -4,8 +4,8 @@
     "healthyTitle": "中转链路，保持连续。",
     "degradedTitle": "上游恢复中，请求仍被托住。",
     "unknownTitle": "等待首次上游信号。",
-    "healthyDescription": "请求正通过 Transfer Lifeline 连续到达已配置的中转站，没有发生中断。",
-    "degradedDescription": "活动连接会保持开启，Transfer Lifeline 将按策略重试，不会改写原请求。",
+    "healthyDescription": "请求正通过 Relay-Lifeline 连续到达已配置的中转站，没有发生中断。",
+    "degradedDescription": "活动连接会保持开启，Relay-Lifeline 将按策略重试，不会改写原请求。",
     "unknownDescription": "网关已经在线，将在下一个请求到达时判断上游状态。",
     "codex": "Codex",
     "relay": "Lifeline",
@@ -19,7 +19,7 @@
     "nextRetry": "下次重试",
     "retryNow": "重试信号",
     "staticFallback": "实时渲染不可用，运行数据仍保持更新"
-    ,"topologyLabel": "从 Codex 经 Transfer Lifeline 到已配置上游的实时链路"
+    ,"topologyLabel": "从 Codex 经 Relay-Lifeline 到已配置上游的实时链路"
   },
   "incident": {
     "title": "故障模式",
@@ -79,7 +79,7 @@
     "requestState": "请求状态",
     "started": "持续时间",
     "stableHeadline": "当前没有活动事故",
-    "stableDescription": "Transfer Lifeline 自身健康，上游链路处于可用或待命状态。",
+    "stableDescription": "Relay-Lifeline 自身健康，上游链路处于可用或待命状态。",
     "alerts": "未解除提醒"
   },
   "errorCategories": { "transport": "网络传输", "protocol": "响应协议", "auth": "鉴权", "rate_limit": "限流", "client": "客户端请求", "server": "上游服务", "http": "其他 HTTP" },

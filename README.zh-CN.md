@@ -1,8 +1,8 @@
-# Transfer Lifeline（中转生命线）
+# Relay-Lifeline（中转生命线）
 
-[GitHub](https://github.com/AreaSong/transfer-lifeline) | [English](README.md)
+[GitHub](https://github.com/AreaSong/Relay-Lifeline) | [English](README.md)
 
-Transfer Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网关。它位于 Codex、IDE 或其他 AI 客户端与现有中转站之间；上游返回任意错误时，它保持客户端连接，按配置等待后重新提交同一个请求。
+Relay-Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网关。它位于 Codex、IDE 或其他 AI 客户端与现有中转站之间；上游返回任意错误时，它保持客户端连接，按配置等待后重新提交同一个请求。
 
 本项目与 CLIProxyAPI（CPA）及任何模型提供商均无官方关联。
 
@@ -10,7 +10,7 @@ Transfer Lifeline 是面向 OpenAI-compatible API 中转站的本地可靠性网
 AI 客户端
    │  沿用原 API Key，只修改 base_url
    ▼
-Transfer Lifeline :8318
+Relay-Lifeline :8318
    │  Authorization 原样透传
    ▼
 CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
@@ -18,7 +18,7 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 由中转站管理的账号、路由和模型提供商
 ```
 
-公开项目名称统一为 **Transfer Lifeline**，官方镜像使用 `ghcr.io/areasong/transfer-lifeline`。为保证已有部署无损升级，二进制名、Go module、`RELAY_LIFELINE_*` 环境变量、`X-Relay-Lifeline-*` Header 和磁盘路径继续保留 `relay-lifeline` 兼容技术标识。
+公开项目名称统一为 **Relay-Lifeline**，官方镜像使用 `ghcr.io/areasong/relay-lifeline`。为保证已有部署无损升级，二进制名、Go module、`RELAY_LIFELINE_*` 环境变量、`X-Relay-Lifeline-*` Header 和磁盘路径继续保留 `relay-lifeline` 兼容技术标识。
 
 ## 核心能力
 
@@ -41,7 +41,7 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - UI、日志和通知语言独立配置并可热更新。
 - 独立管理密钥和默认仅本机监听。
 
-Transfer Lifeline 始终只连接一个中转站。账号池、供应商选择、模型映射、权重和多个中转站之间的故障切换仍由 CPA 或指定上游负责。
+Relay-Lifeline 始终只连接一个中转站。账号池、供应商选择、模型映射、权重和多个中转站之间的故障切换仍由 CPA 或指定上游负责。
 
 ## 快速启动
 
@@ -106,7 +106,7 @@ retry:
 
 网关先缓存并校验上游响应，再向客户端交付，因此流中断时不会暴露半截正文。流式请求等待期间默认每 15 秒发送 SSE 注释；非流式 JSON 使用空白保活，不改变最终 JSON 值。
 
-客户端传入的 `Idempotency-Key` 会在每次尝试中保持不变；Transfer Lifeline 不擅自生成该键，避免上游把第一次错误缓存到同一个键。断联检测同时使用下游请求 Context、连接关闭通知和心跳写入/Flush 错误，客户端离开后会取消活动中的上游调用。
+客户端传入的 `Idempotency-Key` 会在每次尝试中保持不变；Relay-Lifeline 不擅自生成该键，避免上游把第一次错误缓存到同一个键。断联检测同时使用下游请求 Context、连接关闭通知和心跳写入/Flush 错误，客户端离开后会取消活动中的上游调用。
 
 ## 管理控制台
 
@@ -210,7 +210,7 @@ make docker-build
 
 ## 回滚
 
-Transfer Lifeline 不修改上游账号或 API Key。将客户端 `base_url` 改回 CPA 或原中转站即可立即绕过网关。每次持久化配置前，当前文件都会以 `0600` 权限复制到 `server.config-backup-dir`；未配置时使用配置文件旁的 `.relay-lifeline-backups`，只保留最新 10 份。升级已部署实例时还应保留旧镜像。
+Relay-Lifeline 不修改上游账号或 API Key。将客户端 `base_url` 改回 CPA 或原中转站即可立即绕过网关。每次持久化配置前，当前文件都会以 `0600` 权限复制到 `server.config-backup-dir`；未配置时使用配置文件旁的 `.relay-lifeline-backups`，只保留最新 10 份。升级已部署实例时还应保留旧镜像。
 
 Docker 构建接受 `VERSION`、`REVISION`、`BUILD_TIME` 参数；运行镜像引用通过 `RELAY_LIFELINE_IMAGE_REF` 传入，使设置页和 `/admin/api/meta` 能准确标识待回滚的部署版本。
 

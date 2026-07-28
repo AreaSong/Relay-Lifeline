@@ -24,7 +24,7 @@ jobs:
       - id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/areasong/transfer-lifeline
+          images: ghcr.io/areasong/relay-lifeline
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -74,7 +74,7 @@ jobs:
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             os="${target%/*}"
             arch="${target#*/}"
-            directory="transfer-lifeline-${version}-${os}-${arch}"
+            directory="relay-lifeline-${version}-${os}-${arch}"
             mkdir -p "dist/${directory}"
             output="dist/${directory}/relay-lifeline"
             if [ "${os}" = windows ]; then output="${output}.exe"; fi

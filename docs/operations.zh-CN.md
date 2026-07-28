@@ -1,4 +1,4 @@
-# Transfer Lifeline 运维手册
+# Relay-Lifeline 运维手册
 
 [English](operations.md)
 
@@ -53,7 +53,7 @@ go run ./cmd/fault-upstream -listen 127.0.0.1:18317 \
 
 诊断 ZIP 新增 `recovery-check.json`、`journal-summary.json` 和 `config-backups.json`。备份记录只包含文件名、修改时间、大小、SHA-256、源 schema 和校验状态；诊断包绝不包含原始请求体、响应体或备份正文。
 
-CPA 与 Transfer Lifeline 位于同一个 Compose 网络时，上游使用服务名：
+CPA 与 Relay-Lifeline 位于同一个 Compose 网络时，上游使用服务名：
 
 ```yaml
 upstream:
@@ -165,7 +165,7 @@ queued -> requesting -> waiting -> requesting -> completed
 
 1. 查看管理后台“请求”和“日志”页的 Request ID。
 2. 运行诊断，确认 DNS、TCP、配置、磁盘和捕获密钥状态。
-3. 检查 CPA 自身状态；Transfer Lifeline 不管理账号池、额度或模型路由。
+3. 检查 CPA 自身状态；Relay-Lifeline 不管理账号池、额度或模型路由。
 4. 必要时使用“立即重试”，不要重复提交多个相同客户端请求。
 5. 导出诊断包；诊断包不含请求体、响应体和完整原文。
 
@@ -190,7 +190,7 @@ Compose 的 `stop_grace_period` 应大于 `server.shutdown-timeout`。收到退�
 ## 升级
 
 ```bash
-docker image tag ghcr.io/areasong/transfer-lifeline:CURRENT transfer-lifeline:rollback
+docker image tag ghcr.io/areasong/relay-lifeline:CURRENT relay-lifeline:rollback
 cp config.docker.yaml config.docker.rollback.yaml
 docker compose pull
 docker compose up -d

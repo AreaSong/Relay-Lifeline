@@ -36,7 +36,7 @@ const navigation: Array<{ view: View; icon: LucideIcon }> = [
   { view: "logs", icon: ScrollText }, { view: "captures", icon: FileLock2 },
   { view: "diagnostics", icon: Stethoscope }, { view: "settings", icon: Settings2 },
 ];
-const railStorageKey = "transfer-lifeline-rail-collapsed";
+const railStorageKey = "relay-lifeline-rail-collapsed";
 
 function storedRailState() {
   return localStorage.getItem(railStorageKey) === "true";
@@ -70,9 +70,9 @@ function Login({ onLogin, themeMode, setThemeMode, sessionExpired }: {
     waiting: t("overview:signal.waiting"), nextRetry: t("overview:signal.nextRetry"), retryNow: t("overview:signal.retryNow"), staticFallback: t("overview:signal.staticFallback"),
   };
   return <main className="login-shell">
-    <section className="login-visual"><div className="login-wordmark"><span className="rail-brand"><HeartPulse size={19} /></span><span>Transfer Lifeline</span></div>
+    <section className="login-visual"><div className="login-wordmark"><span className="rail-brand"><HeartPulse size={19} /></span><span>Relay-Lifeline</span></div>
       <div className="login-topology"><SignalTopology upstreamState="unknown" active={0} waiting={0} labels={labels} locale={i18n.resolvedLanguage} /></div>
-      <div className="login-statement"><h1>Transfer Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
+      <div className="login-statement"><h1>Relay-Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
     </section>
     <section className="login-access"><div className="login-language"><LanguageSelector /><ThemeSelector mode={themeMode} onChange={setThemeMode} compact /></div>
       <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
@@ -135,7 +135,7 @@ export function App() {
     setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events);
   }, [api, metricsWindow]);
 
-  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Transfer Lifeline`; }, [locale, t, view]);
+  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
   useEffect(() => {
     const changed = () => setView(currentView());
     window.addEventListener("hashchange", changed);
@@ -244,9 +244,9 @@ export function App() {
   const incident = status.upstream.state === "degraded" && (status.waiting + status.queued > 0 || (status.upstream.lastChecked ? Date.now() - new Date(status.upstream.lastChecked).getTime() >= 10_000 : false));
   return <div className={`app-shell view-${view}${railCollapsed ? " rail-collapsed" : ""}${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
     <aside className="app-rail" aria-label={t("common:brandSubtitle")}>
-      <button className="rail-identity" aria-label="Transfer Lifeline" onClick={() => selectView("overview")}>
+      <button className="rail-identity" aria-label="Relay-Lifeline" onClick={() => selectView("overview")}>
         <span className="rail-brand"><HeartPulse size={20} /></span>
-        <span className="rail-copy"><strong>Transfer Lifeline</strong><small>{t("common:brandSubtitle")}</small></span>
+        <span className="rail-copy"><strong>Relay-Lifeline</strong><small>{t("common:brandSubtitle")}</small></span>
       </button>
       <nav>{visibleNavigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={railCollapsed ? t(`common:nav.${itemView}`) : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /><span className="rail-label">{t(`common:nav.${itemView}`)}</span></button>)}</nav>
       <div className="rail-footer">
@@ -258,8 +258,8 @@ export function App() {
       </div>
     </aside>
 
-    <main className={`workspace workspace-${view}`}><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Transfer Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
-      <div className="desktop-heading"><span className="workspace-eyebrow">Transfer Lifeline / {t(`common:nav.${view}`)}</span><div className="workspace-title-row"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div></div>
+    <main className={`workspace workspace-${view}`}><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Relay-Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
+      <div className="desktop-heading"><span className="workspace-eyebrow">Relay-Lifeline / {t(`common:nav.${view}`)}</span><div className="workspace-title-row"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div></div>
       <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button>{canOperate && <button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button>}</div>
     </header>
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}

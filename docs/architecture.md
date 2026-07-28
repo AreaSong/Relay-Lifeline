@@ -2,7 +2,7 @@
 
 [简体中文](architecture.zh-CN.md)
 
-Transfer Lifeline separates the request data plane from the management control plane.
+Relay-Lifeline separates the request data plane from the management control plane.
 
 ```text
 AI client -> data plane -> OpenAI-compatible relay -> model provider
@@ -69,7 +69,7 @@ Diagnostics validate local configuration, configuration-file access, admin-key l
 
 ## Responsibility boundary
 
-Transfer Lifeline maintains one upstream target. Account pools, multi-provider routing, model mapping, channel weights, and failover between relay vendors belong to CPA or another upstream relay.
+Relay-Lifeline maintains one upstream target. Account pools, multi-provider routing, model mapping, channel weights, and failover between relay vendors belong to CPA or another upstream relay.
 
 ## Completion rules
 

@@ -44,7 +44,7 @@ func (s *Store) Prometheus() string {
 	writeMetric("relay_lifeline_successful_requests_24h", "Successful requests in the retained 24 hour window.", "gauge", metrics.Totals.Successful)
 	writeMetric("relay_lifeline_failed_attempts_24h", "Failed upstream attempts in the retained 24 hour window.", "gauge", metrics.Totals.FailedAttempts)
 	writeMetric("relay_lifeline_recovered_requests_24h", "Requests recovered after at least one failure in the retained 24 hour window.", "gauge", metrics.Totals.Recovered)
-	writeMetric("relay_lifeline_active_requests", "Requests currently owned by Transfer Lifeline.", "gauge", metrics.Load.Active)
+	writeMetric("relay_lifeline_active_requests", "Requests currently owned by Relay-Lifeline.", "gauge", metrics.Load.Active)
 	writeMetric("relay_lifeline_queued_requests", "Requests waiting for an active concurrency slot.", "gauge", metrics.Load.Queued)
 	writeMetric("relay_lifeline_waiting_requests", "Requests waiting before another upstream attempt.", "gauge", metrics.Load.Waiting)
 	writeMetric("relay_lifeline_requesting_requests", "Requests currently attempting the upstream.", "gauge", metrics.Load.Requesting)

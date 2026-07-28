@@ -1,8 +1,8 @@
-# Transfer Lifeline
+# Relay-Lifeline
 
-[GitHub](https://github.com/AreaSong/transfer-lifeline) | [简体中文](README.zh-CN.md)
+[GitHub](https://github.com/AreaSong/Relay-Lifeline) | [简体中文](README.zh-CN.md)
 
-Transfer Lifeline is a resilient local gateway for OpenAI-compatible API relays. It sits between Codex, an IDE, or another AI client and an existing relay, keeps the downstream connection alive, and retries the same request after the configured delay when the upstream returns any error.
+Relay-Lifeline is a resilient local gateway for OpenAI-compatible API relays. It sits between Codex, an IDE, or another AI client and an existing relay, keeps the downstream connection alive, and retries the same request after the configured delay when the upstream returns any error.
 
 The project is independent from CLIProxyAPI (CPA) and all model providers.
 
@@ -10,7 +10,7 @@ The project is independent from CLIProxyAPI (CPA) and all model providers.
 AI client
    |  Existing API key; change only base_url
    v
-Transfer Lifeline :8318
+Relay-Lifeline :8318
    |  Authorization is forwarded unchanged
    v
 CLIProxyAPI :8317 or another OpenAI-compatible relay
@@ -18,7 +18,7 @@ CLIProxyAPI :8317 or another OpenAI-compatible relay
 Accounts, routes, and model providers managed by that relay
 ```
 
-The public project name is **Transfer Lifeline**, and the official image is `ghcr.io/areasong/transfer-lifeline`. For upgrade compatibility, the binary, Go module, `RELAY_LIFELINE_*` environment variables, `X-Relay-Lifeline-*` headers, and storage paths retain the `relay-lifeline` technical identifier.
+The public project name is **Relay-Lifeline**, and the official image is `ghcr.io/areasong/relay-lifeline`. For upgrade compatibility, the binary, Go module, `RELAY_LIFELINE_*` environment variables, `X-Relay-Lifeline-*` headers, and storage paths retain the `relay-lifeline` technical identifier.
 
 ## Capabilities
 
@@ -41,7 +41,7 @@ The public project name is **Transfer Lifeline**, and the official image is `ghc
 - Separate UI, log, and notification locales with hot-reloadable configuration.
 - Independent admin key and secure-by-default local binding.
 
-Transfer Lifeline always targets one relay. Account pools, provider selection, model mapping, weights, and failover between relay vendors remain the responsibility of CPA or the configured upstream.
+Relay-Lifeline always targets one relay. Account pools, provider selection, model mapping, weights, and failover between relay vendors remain the responsibility of CPA or the configured upstream.
 
 ## Quick Start
 
@@ -106,7 +106,7 @@ retry:
 
 The gateway buffers an upstream response before delivering it. This allows it to retry an interrupted stream without exposing partial output. During a streaming request it emits SSE comments every 15 seconds by default. For non-streaming JSON, whitespace keepalives preserve the connection without changing the eventual JSON value.
 
-An `Idempotency-Key` supplied by the client is forwarded unchanged on every attempt; Transfer Lifeline does not invent one because an upstream may cache an error under that key. Disconnect detection combines the downstream request context, connection-close notification, and heartbeat write/flush errors so active upstream work is canceled when the client is gone.
+An `Idempotency-Key` supplied by the client is forwarded unchanged on every attempt; Relay-Lifeline does not invent one because an upstream may cache an error under that key. Disconnect detection combines the downstream request context, connection-close notification, and heartbeat write/flush errors so active upstream work is canceled when the client is gone.
 
 ## Administration
 
@@ -210,7 +210,7 @@ See the [Operations Guide](docs/operations.md), [Architecture](docs/architecture
 
 ## Rollback
 
-Transfer Lifeline does not modify upstream accounts or API keys. Change the client's `base_url` back to CPA or the original relay to bypass the gateway immediately. Before every persisted configuration change, the current file is copied with mode `0600` to `server.config-backup-dir` (or `.relay-lifeline-backups` beside the config) and the newest 10 copies are retained. Keep the previous image when upgrading a deployed instance.
+Relay-Lifeline does not modify upstream accounts or API keys. Change the client's `base_url` back to CPA or the original relay to bypass the gateway immediately. Before every persisted configuration change, the current file is copied with mode `0600` to `server.config-backup-dir` (or `.relay-lifeline-backups` beside the config) and the newest 10 copies are retained. Keep the previous image when upgrading a deployed instance.
 
 Docker builds accept `VERSION`, `REVISION`, and `BUILD_TIME` arguments. The runtime image reference can be supplied through `RELAY_LIFELINE_IMAGE_REF`, allowing the Settings page and `/admin/api/meta` to identify the exact deployment being rolled back.
 

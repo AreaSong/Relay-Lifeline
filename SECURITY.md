@@ -4,13 +4,13 @@
 
 ## Reporting a vulnerability
 
-Do not disclose exploitable security issues in a public issue. Use [GitHub private vulnerability reporting](https://github.com/AreaSong/transfer-lifeline/security/advisories/new) and include reproduction steps, affected versions, impact, and a proposed mitigation when available.
+Do not disclose exploitable security issues in a public issue. Use [GitHub private vulnerability reporting](https://github.com/AreaSong/Relay-Lifeline/security/advisories/new) and include reproduction steps, affected versions, impact, and a proposed mitigation when available.
 
 Never include a live API key, admin key, prompt, model response, raw upstream error, or credential-bearing URL in a report. Replace secrets with deterministic placeholders.
 
 ## Security boundary
 
-- Transfer Lifeline forwards downstream Authorization to one configured upstream in memory.
+- Relay-Lifeline forwards downstream Authorization to one configured upstream in memory.
 - Request bodies, response bodies, and Authorization are not logged by the supported configuration.
 - The management API uses distinct role keys of at least 24 characters: optional Viewer, Operator (`RELAY_LIFELINE_ADMIN_KEY`), and Sensitive Data. Viewer is read-only, Operator can mutate runtime state, and only Sensitive Data can download full raw content.
 - Docker publishes the service on host loopback by default.

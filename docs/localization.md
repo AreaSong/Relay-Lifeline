@@ -2,7 +2,7 @@
 
 [简体中文](localization.zh-CN.md)
 
-Transfer Lifeline supports `zh-CN` and `en-US` across the Web UI, management API, CLI, diagnostics, logs, Webhooks, history, timelines, alerts, and configuration validation.
+Relay-Lifeline supports `zh-CN` and `en-US` across the Web UI, management API, CLI, diagnostics, logs, Webhooks, history, timelines, alerts, and configuration validation.
 
 ## Locale ownership
 
