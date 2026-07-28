@@ -1,7 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Archive, CirclePause, CirclePlay, Clock3, FileLock2, HeartPulse, LogOut,
-  Menu, RefreshCw, ScrollText, Settings2, ShieldAlert, ShieldCheck, Stethoscope,
+  Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ScrollText, Settings2, ShieldAlert,
+  ShieldCheck, Stethoscope,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -35,6 +36,11 @@ const navigation: Array<{ view: View; icon: LucideIcon }> = [
   { view: "logs", icon: ScrollText }, { view: "captures", icon: FileLock2 },
   { view: "diagnostics", icon: Stethoscope }, { view: "settings", icon: Settings2 },
 ];
+const railStorageKey = "transfer-lifeline-rail-collapsed";
+
+function storedRailState() {
+  return localStorage.getItem(railStorageKey) === "true";
+}
 
 function currentView(): View {
   const candidate = window.location.hash.replace(/^#\/?/, "") as View;
@@ -102,6 +108,7 @@ export function App() {
   const [metricErrors, setMetricErrors] = useState<MetricsErrors | null>(null);
   const [events, setEvents] = useState<MonitoringEvent[]>([]);
   const [mobileTools, setMobileTools] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(storedRailState);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
   const resetAuthentication = useCallback((reason: "required" | "expired" | null) => {
@@ -176,6 +183,9 @@ export function App() {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [mobileTools]);
+  useEffect(() => {
+    localStorage.setItem(railStorageKey, String(railCollapsed));
+  }, [railCollapsed]);
 
   async function login(value: string) {
     const nextSession = await api.login(value);
@@ -232,19 +242,29 @@ export function App() {
 
   const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
   const incident = status.upstream.state === "degraded" && (status.waiting + status.queued > 0 || (status.upstream.lastChecked ? Date.now() - new Date(status.upstream.lastChecked).getTime() >= 10_000 : false));
-  return <div className={`app-shell${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
-    <aside className="app-rail" aria-label={t("common:brandSubtitle")}><button className="rail-brand" aria-label="Transfer Lifeline" data-tooltip="Transfer Lifeline" onClick={() => selectView("overview")}><HeartPulse size={21} /></button>
-      <nav>{visibleNavigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={t(`common:nav.${itemView}`)} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /></button>)}</nav>
-      <div className="rail-footer"><ThemeSelector mode={theme.mode} onChange={theme.setMode} compact /><LanguageSelector compact /><button className="rail-action" aria-label={t("common:actions.logout")} data-tooltip={t("common:actions.logout")} onClick={logout}><LogOut size={17} /></button></div>
+  return <div className={`app-shell view-${view}${railCollapsed ? " rail-collapsed" : ""}${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
+    <aside className="app-rail" aria-label={t("common:brandSubtitle")}>
+      <button className="rail-identity" aria-label="Transfer Lifeline" onClick={() => selectView("overview")}>
+        <span className="rail-brand"><HeartPulse size={20} /></span>
+        <span className="rail-copy"><strong>Transfer Lifeline</strong><small>{t("common:brandSubtitle")}</small></span>
+      </button>
+      <nav>{visibleNavigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={railCollapsed ? t(`common:nav.${itemView}`) : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /><span className="rail-label">{t(`common:nav.${itemView}`)}</span></button>)}</nav>
+      <div className="rail-footer">
+        <div className="rail-utilities"><ThemeSelector mode={theme.mode} onChange={theme.setMode} compact /><LanguageSelector compact /><button className="rail-action" aria-label={t("common:actions.logout")} data-tooltip={t("common:actions.logout")} onClick={logout}><LogOut size={17} /></button></div>
+        <button className="rail-collapse" aria-label={railCollapsed ? t("common:actions.expandNav") : t("common:actions.collapseNav")} onClick={() => setRailCollapsed((value) => !value)}>
+          {railCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          <span className="rail-label">{t("common:actions.collapseNav")}</span>
+        </button>
+      </div>
     </aside>
 
-    <main className="workspace"><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Transfer Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
-      <div className="desktop-heading"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div>
+    <main className={`workspace workspace-${view}`}><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Transfer Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
+      <div className="desktop-heading"><span className="workspace-eyebrow">Transfer Lifeline / {t(`common:nav.${view}`)}</span><div className="workspace-title-row"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div></div>
       <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button>{canOperate && <button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button>}</div>
     </header>
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
-        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} locale={locale} dark={theme.resolved === "dark"} incident={incident} canOperate={canOperate} />}
+        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onWindowChange={setMetricsWindow} onOpen={openTimeline} locale={locale} dark={theme.resolved === "dark"} incident={incident} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} canOperate={canOperate} />}
         {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
         {view === "incidents" && <IncidentsView incidents={incidents} />}

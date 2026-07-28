@@ -29,13 +29,14 @@ export function HistoryView({ records, onOpen, metrics, errors, events, window, 
   const chartLabels = {
     reliabilityTitle: t("overview:charts.reliability"), pressureTitle: t("overview:charts.pressure"), errorsTitle: t("overview:charts.errors"), recoveryTitle: t("overview:charts.recovery"),
     empty: t("overview:charts.empty"), unavailable: t("overview:charts.unavailable"), requests: t("overview:charts.requests"), successRate: t("overview:charts.successRate"), failedAttempts: t("overview:charts.failedAttempts"),
-    active: t("overview:charts.active"), waiting: t("overview:charts.waiting"), queued: t("overview:charts.queued"), duration: t("overview:charts.duration"),
+    active: t("overview:charts.active"), requesting: t("overview:charts.requesting"), waiting: t("overview:charts.waiting"), queued: t("overview:charts.queued"), duration: t("overview:charts.duration"),
+    expand: t("overview:charts.expand"), collapse: t("overview:charts.collapse"),
   };
 
   return <div className="page-stack history-view">
     <section className="content-section">
       <div className="section-heading"><div><h2>{t("requests:history.title")}</h2><p>{t("requests:history.description")}</p></div><div className="segmented-control" role="group" aria-label={t("requests:history.window")}>{windows.map((value) => <button key={value} className={window === value ? "active" : ""} aria-pressed={window === value} onClick={() => onWindowChange(value)}>{t(`requests:windowLabels.${value}`)}</button>)}</div></div>
-      <OperationsCharts reliability={metrics?.series || []} pressure={metrics?.series || []} errors={localizedErrors} recovery={recovery} labels={chartLabels} theme={operationsChartTheme(dark)} locale={locale} />
+      <OperationsCharts className="history-chart-system" reliability={metrics?.series || []} pressure={metrics?.series || []} errors={localizedErrors} recovery={recovery} labels={chartLabels} theme={operationsChartTheme(dark)} locale={locale} />
     </section>
     <section className="content-section"><div className="section-heading"><div><h2>{t("requests:history.events")}</h2><p>{t("requests:history.description")}</p></div></div>
       {events.length ? <div className="event-track">{events.slice(-20).reverse().map((event) => <article className={`event-marker ${event.code.includes("failure") || event.code.includes("failed") || event.code.includes("rejected") ? "failure" : event.code.includes("recover") || event.code.includes("succeeded") ? "recovery" : ""}`} key={event.id}><i /><div><strong>{t(`requests:events.${event.code}`, { defaultValue: event.code })}</strong><time>{new Date(event.time).toLocaleTimeString(locale)}</time></div></article>)}</div> : <div className="empty-state compact">{t("requests:history.eventsEmpty")}</div>}

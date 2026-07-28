@@ -1,19 +1,20 @@
 {
   "signal": {
     "kicker": "信号连续性",
-    "healthyTitle": "中转链路保持连续。",
-    "degradedTitle": "上游恢复期间，链路正在托住请求。",
-    "unknownTitle": "正在等待首次上游信号。",
+    "healthyTitle": "中转链路，保持连续。",
+    "degradedTitle": "上游恢复中，请求仍被托住。",
+    "unknownTitle": "等待首次上游信号。",
     "healthyDescription": "请求正通过 Transfer Lifeline 连续到达已配置的中转站，没有发生中断。",
     "degradedDescription": "活动连接会保持开启，Transfer Lifeline 将按策略重试，不会改写原请求。",
     "unknownDescription": "网关已经在线，将在下一个请求到达时判断上游状态。",
     "codex": "Codex",
-    "relay": "Transfer Lifeline",
+    "relay": "Lifeline",
     "cpa": "CPA / 上游",
     "healthy": "已连接",
     "degraded": "恢复中",
     "unknown": "待命",
     "active": "活动",
+    "requesting": "请求中",
     "waiting": "等待",
     "nextRetry": "下次重试",
     "retryNow": "重试信号",
@@ -33,7 +34,15 @@
     "active": "活动请求",
     "recovering": "等待恢复",
     "successful": "成功请求",
-    "failedAttempts": "失败尝试"
+    "successRate": "最终成功率",
+    "failedAttempts": "失败尝试",
+    "live": "实时"
+  },
+  "cockpit": {
+    "kicker": "实时遥测",
+    "title": "链路运行脉冲",
+    "complete": "窗口完整",
+    "partial": "数据积累中"
   },
   "charts": {
     "reliability": "可靠性趋势",
@@ -49,7 +58,29 @@
     "queued": "排队",
     "failedAttempts": "失败尝试",
     "duration": "恢复耗时",
-    "window": "最近一小时"
+    "window": "观测时间范围",
+    "expand": "展开图表",
+    "collapse": "关闭大图",
+    "windows": { "15m": "15 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" }
+  },
+  "priority": {
+    "kicker": "优先处置",
+    "title": "当前态势",
+    "incident": "事故优先",
+    "request": "活动请求",
+    "stable": "链路稳定",
+    "incidentHeadline": "检测到上游连续异常",
+    "affected": "影响请求",
+    "attempts": "尝试次数",
+    "lastFailure": "最近失败",
+    "categories": "主要错误分类",
+    "openIncidents": "打开事故中心",
+    "latestRequest": "最新活动请求",
+    "requestState": "请求状态",
+    "started": "持续时间",
+    "stableHeadline": "当前没有活动事故",
+    "stableDescription": "Transfer Lifeline 自身健康，上游链路处于可用或待命状态。",
+    "alerts": "未解除提醒"
   },
   "errorCategories": { "transport": "网络传输", "protocol": "响应协议", "auth": "鉴权", "rate_limit": "限流", "client": "客户端请求", "server": "上游服务", "http": "其他 HTTP" },
   "recoveryBuckets": { "<=1s": "1 秒内", "<=5s": "5 秒内", "<=15s": "15 秒内", "<=30s": "30 秒内", "<=1m": "1 分钟内", "<=5m": "5 分钟内", "<=15m": "15 分钟内", "<=1h": "1 小时内", ">1h": "超过 1 小时" },

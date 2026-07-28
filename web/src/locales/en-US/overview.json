@@ -1,19 +1,20 @@
 {
   "signal": {
     "kicker": "Signal continuity",
-    "healthyTitle": "The relay path is continuous.",
-    "degradedTitle": "The path is holding while upstream recovers.",
+    "healthyTitle": "The relay path stays continuous.",
+    "degradedTitle": "Upstream is recovering. Requests remain held.",
     "unknownTitle": "Waiting for the first upstream signal.",
     "healthyDescription": "Requests are moving through Transfer Lifeline to the configured relay without interruption.",
     "degradedDescription": "Active connections stay open. Transfer Lifeline will retry according to policy without changing the request.",
     "unknownDescription": "The gateway is online and will assess upstream health on the next request.",
     "codex": "Codex",
-    "relay": "Transfer Lifeline",
+    "relay": "Lifeline",
     "cpa": "CPA / upstream",
     "healthy": "Connected",
     "degraded": "Recovering",
     "unknown": "Standby",
     "active": "Active",
+    "requesting": "Requesting",
     "waiting": "Waiting",
     "nextRetry": "Next retry",
     "retryNow": "Retry signal",
@@ -33,7 +34,15 @@
     "active": "Active requests",
     "recovering": "Waiting to recover",
     "successful": "Successful requests",
-    "failedAttempts": "Failed attempts"
+    "successRate": "Final success rate",
+    "failedAttempts": "Failed attempts",
+    "live": "Live"
+  },
+  "cockpit": {
+    "kicker": "Live telemetry",
+    "title": "Relay operations pulse",
+    "complete": "Complete window",
+    "partial": "Accumulating data"
   },
   "charts": {
     "reliability": "Reliability trend",
@@ -49,7 +58,29 @@
     "queued": "Queued",
     "failedAttempts": "Failed attempts",
     "duration": "Recovery",
-    "window": "Last hour"
+    "window": "Observation window",
+    "expand": "Expand chart",
+    "collapse": "Close expanded chart",
+    "windows": { "15m": "15 min", "1h": "1 hour", "6h": "6 hours", "24h": "24 hours" }
+  },
+  "priority": {
+    "kicker": "Response priority",
+    "title": "Current situation",
+    "incident": "Incident first",
+    "request": "Active request",
+    "stable": "Path stable",
+    "incidentHeadline": "Sustained upstream errors detected",
+    "affected": "Affected",
+    "attempts": "Attempts",
+    "lastFailure": "Last failure",
+    "categories": "Leading error categories",
+    "openIncidents": "Open incident center",
+    "latestRequest": "Latest active request",
+    "requestState": "Request state",
+    "started": "Elapsed",
+    "stableHeadline": "No active incidents",
+    "stableDescription": "Transfer Lifeline is healthy and the upstream path is available or standing by.",
+    "alerts": "Unresolved alerts"
   },
   "errorCategories": { "transport": "Transport", "protocol": "Protocol", "auth": "Authentication", "rate_limit": "Rate limit", "client": "Client request", "server": "Upstream server", "http": "Other HTTP" },
   "recoveryBuckets": { "<=1s": "Up to 1 sec", "<=5s": "Up to 5 sec", "<=15s": "Up to 15 sec", "<=30s": "Up to 30 sec", "<=1m": "Up to 1 min", "<=5m": "Up to 5 min", "<=15m": "Up to 15 min", "<=1h": "Up to 1 hr", ">1h": "Over 1 hr" },

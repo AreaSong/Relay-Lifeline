@@ -1,3 +1,4 @@
+import { Maximize2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { ECharts, EChartsCoreOption } from "echarts/core";
@@ -12,6 +13,7 @@ export interface TimeSeriesPoint {
 export interface PressurePoint {
   time: string;
   active: number;
+  requesting?: number;
   waiting: number;
   queued: number;
 }
@@ -37,9 +39,12 @@ export interface OperationsChartLabels {
   successRate: string;
   failedAttempts: string;
   active: string;
+  requesting: string;
   waiting: string;
   queued: string;
   duration: string;
+  expand: string;
+  collapse: string;
 }
 
 export interface OperationsChartTheme {
@@ -48,7 +53,6 @@ export interface OperationsChartTheme {
   grid: string;
   success: string;
   warning: string;
-  danger: string;
   accent: string;
   surface: string;
 }
@@ -62,15 +66,16 @@ export interface OperationsChartsProps {
   theme: OperationsChartTheme;
   locale?: string;
   className?: string;
+  preferredSecondary?: Exclude<ChartKey, "reliability">;
 }
 
 export function operationsChartTheme(dark: boolean): OperationsChartTheme {
   return dark ? {
-    foreground: "#edf2ee", muted: "#8b968e", grid: "#303731", success: "#69dfa0",
-    warning: "#efb64d", danger: "#ef7064", accent: "#66b8d0", surface: "transparent",
+    foreground: "#f2f6f3", muted: "#87938b", grid: "#2b342f", success: "#68e0a0",
+    warning: "#eab55a", accent: "#68bde7", surface: "#141917",
   } : {
-    foreground: "#1b201d", muted: "#727b75", grid: "#d1d7d1", success: "#25845a",
-    warning: "#b97816", danger: "#c34f46", accent: "#236d4b", surface: "transparent",
+    foreground: "#151b17", muted: "#6f7a73", grid: "#d9dfda", success: "#187b4c",
+    warning: "#a96b12", accent: "#176e9b", surface: "#ffffff",
   };
 }
 
@@ -80,6 +85,7 @@ type ChartInstances = Partial<Record<ChartKey, ECharts>>;
 type LoadState = "loading" | "ready" | "failed";
 
 const chartKeys: ChartKey[] = ["reliability", "pressure", "errors", "recovery"];
+const secondaryKeys: Exclude<ChartKey, "reliability">[] = ["pressure", "errors", "recovery"];
 
 function safeValue(value: number) {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -95,7 +101,11 @@ function tooltipStyle(theme: OperationsChartTheme) {
   return {
     backgroundColor: theme.surface,
     borderColor: theme.grid,
-    textStyle: { color: theme.foreground },
+    borderWidth: 1,
+    padding: [9, 11],
+    confine: true,
+    textStyle: { color: theme.foreground, fontSize: 11 },
+    extraCssText: "box-shadow: 0 16px 48px rgba(0,0,0,.22); border-radius: 6px;",
   };
 }
 
@@ -107,7 +117,7 @@ function categoryAxis(data: string[], theme: OperationsChartTheme, name?: string
     nameTextStyle: { color: theme.muted },
     axisLine: { lineStyle: { color: theme.grid } },
     axisTick: { show: false },
-    axisLabel: { color: theme.muted, hideOverlap: true },
+    axisLabel: { color: theme.muted, hideOverlap: true, fontSize: 10 },
   };
 }
 
@@ -119,8 +129,8 @@ function valueAxis(theme: OperationsChartTheme, name?: string) {
     nameTextStyle: { color: theme.muted },
     axisLine: { show: false },
     axisTick: { show: false },
-    axisLabel: { color: theme.muted },
-    splitLine: { lineStyle: { color: theme.grid } },
+    axisLabel: { color: theme.muted, fontSize: 10 },
+    splitLine: { lineStyle: { color: theme.grid, type: "dashed", opacity: 0.72 } },
   };
 }
 
@@ -130,9 +140,9 @@ function baseCartesian(theme: OperationsChartTheme, animated: boolean) {
     animationDuration: 360,
     backgroundColor: theme.surface,
     textStyle: { color: theme.foreground },
-    tooltip: { trigger: "axis", ...tooltipStyle(theme) },
-    legend: { top: 0, left: 0, textStyle: { color: theme.muted }, itemWidth: 12, itemHeight: 8 },
-    grid: { top: 48, right: 18, bottom: 30, left: 42, containLabel: true },
+    tooltip: { trigger: "axis", axisPointer: { type: "cross", lineStyle: { color: theme.muted, opacity: 0.5 }, crossStyle: { color: theme.muted, opacity: 0.5 } }, ...tooltipStyle(theme) },
+    legend: { top: 0, left: 0, textStyle: { color: theme.muted, fontSize: 10 }, itemWidth: 12, itemHeight: 7, itemGap: 16 },
+    grid: { top: 44, right: 16, bottom: 22, left: 34, containLabel: true },
   };
 }
 
@@ -155,8 +165,8 @@ function reliabilityOption(
       { ...valueAxis(theme), min: 0, max: 100, minInterval: undefined, axisLabel: { color: theme.muted, formatter: "{value}%" } },
     ],
     series: [
-      { name: labels.requests, type: "bar", data: data.map((point) => safeValue(point.requests)), itemStyle: { color: theme.accent, opacity: 0.32 }, barMaxWidth: 18 },
-      { name: labels.failedAttempts, type: "line", data: data.map((point) => safeValue(point.failedAttempts)), symbol: "none", lineStyle: { color: theme.danger, width: 2 } },
+      { name: labels.requests, type: "bar", data: data.map((point) => safeValue(point.requests)), itemStyle: { color: theme.accent, opacity: 0.28 }, barMaxWidth: 14 },
+      { name: labels.failedAttempts, type: "line", data: data.map((point) => safeValue(point.failedAttempts)), symbol: "none", lineStyle: { color: theme.warning, width: 2 } },
       { name: labels.successRate, type: "line", yAxisIndex: 1, data: successRates, symbol: "none", smooth: 0.24, lineStyle: { color: theme.success, width: 2.5 } },
     ],
   };
@@ -172,18 +182,19 @@ function pressureOption(
   const line = (name: string, color: string, values: number[]) => ({
     name,
     type: "line",
+    stack: "load",
     data: values,
     symbol: "none",
     smooth: 0.22,
-    lineStyle: { color, width: 2 },
-    areaStyle: { color, opacity: 0.09 },
+    lineStyle: { color, width: 1.6 },
+    areaStyle: { color, opacity: 0.16 },
   });
   return {
     ...baseCartesian(theme, animated),
     xAxis: categoryAxis(data.map((point) => formatTimeLabel(point.time, locale)), theme),
     yAxis: valueAxis(theme, labels.requests),
     series: [
-      line(labels.active, theme.accent, data.map((point) => safeValue(point.active))),
+      line(labels.requesting, theme.accent, data.map((point) => safeValue(point.requesting ?? point.active))),
       line(labels.waiting, theme.warning, data.map((point) => safeValue(point.waiting))),
       line(labels.queued, theme.muted, data.map((point) => safeValue(point.queued))),
     ],
@@ -191,13 +202,13 @@ function pressureOption(
 }
 
 function errorsOption(data: ErrorSlice[], labels: OperationsChartLabels, theme: OperationsChartTheme, animated: boolean): EChartsCoreOption {
-  const values = data.filter((slice) => safeValue(slice.count) > 0);
-  const colors = [theme.danger, theme.warning, theme.accent, theme.muted, theme.success];
+  const values = data.filter((slice) => safeValue(slice.count) > 0).sort((left, right) => right.count - left.count);
+  const colors = [theme.warning, theme.accent, theme.muted, theme.success];
   return {
     ...baseCartesian(theme, animated),
     legend: { show: false },
     grid: { top: 12, right: 22, bottom: 24, left: 18, containLabel: true },
-    xAxis: valueAxis(theme, labels.failedAttempts),
+    xAxis: valueAxis(theme),
     yAxis: { ...categoryAxis(values.map((slice) => slice.category), theme), inverse: true },
     series: [{
       name: labels.failedAttempts,
@@ -257,18 +268,27 @@ interface ChartCardProps {
   emptyLabel: string;
   unavailableLabel: string;
   canvasRef: RefObject<HTMLDivElement | null>;
+  active?: boolean;
+  expanded?: boolean;
+  expandLabel?: string;
+  collapseLabel?: string;
+  onToggleExpand?: () => void;
+  showHeader?: boolean;
 }
 
-function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef }: ChartCardProps) {
+function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef, active = true, expanded = false, expandLabel, collapseLabel, onToggleExpand, showHeader = true }: ChartCardProps) {
   const unavailable = loadState === "failed";
   const classes = [
     "operations-chart",
     `operations-chart--${chartKey}`,
     empty ? "operations-chart--empty" : "",
     unavailable ? "operations-chart--unavailable" : "",
+    active ? "is-active" : "is-inactive",
+    expanded ? "is-expanded" : "",
+    showHeader ? "" : "operations-chart--headerless",
   ].filter(Boolean).join(" ");
-  return <article className={classes} aria-busy={loadState === "loading"}>
-    <header className="operations-chart__header"><h3>{title}</h3></header>
+  return <article className={classes} aria-busy={loadState === "loading"} aria-hidden={!active}>
+    {showHeader && <header className="operations-chart__header"><h3>{title}</h3>{onToggleExpand && <button className="chart-expand" aria-label={expanded ? collapseLabel : expandLabel} onClick={onToggleExpand}>{expanded ? <X size={16} /> : <Maximize2 size={15} />}</button>}</header>}
     <div className="operations-chart__body">
       <div
         className="operations-chart__canvas"
@@ -293,6 +313,7 @@ export function OperationsCharts({
   theme,
   locale,
   className = "",
+  preferredSecondary = "pressure",
 }: OperationsChartsProps) {
   const reliabilityRef = useRef<HTMLDivElement>(null);
   const pressureRef = useRef<HTMLDivElement>(null);
@@ -301,10 +322,12 @@ export function OperationsCharts({
   const instancesRef = useRef<ChartInstances>({});
   const optionsRef = useRef<ChartOptions>({ reliability: null, pressure: null, errors: null, recovery: null });
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [secondary, setSecondary] = useState<Exclude<ChartKey, "reliability">>(preferredSecondary);
+  const [expanded, setExpanded] = useState<"reliability" | "secondary" | null>(null);
   const reducedMotion = useReducedMotion();
   const empty = {
     reliability: reliability.length === 0 || reliability.every((point) => safeValue(point.requests) === 0 && safeValue(point.successful) === 0 && safeValue(point.failedAttempts) === 0),
-    pressure: pressure.length === 0 || pressure.every((point) => safeValue(point.active) === 0 && safeValue(point.waiting) === 0 && safeValue(point.queued) === 0),
+    pressure: pressure.length === 0 || pressure.every((point) => safeValue(point.requesting ?? point.active) === 0 && safeValue(point.waiting) === 0 && safeValue(point.queued) === 0),
     errors: errors.length === 0 || errors.every((slice) => safeValue(slice.count) === 0),
     recovery: recovery.length === 0 || recovery.every((point) => safeValue(point.count) === 0),
   };
@@ -365,10 +388,37 @@ export function OperationsCharts({
 
   useEffect(() => { applyOptions(instancesRef.current, options); }, [options]);
 
-  return <div className={["operations-charts", className].filter(Boolean).join(" ")}>
-    <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} />
-    <ChartCard chartKey="pressure" title={labels.pressureTitle} empty={empty.pressure} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={pressureRef} />
-    <ChartCard chartKey="errors" title={labels.errorsTitle} empty={empty.errors} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={errorsRef} />
-    <ChartCard chartKey="recovery" title={labels.recoveryTitle} empty={empty.recovery} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={recoveryRef} />
-  </div>;
+  useEffect(() => { setSecondary(preferredSecondary); }, [preferredSecondary]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      Object.values(instancesRef.current).forEach((chart) => { if (chart && !chart.isDisposed()) chart.resize(); });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [expanded, secondary]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(null); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [expanded]);
+
+  const titles = { pressure: labels.pressureTitle, errors: labels.errorsTitle, recovery: labels.recoveryTitle };
+  const refs = { pressure: pressureRef, errors: errorsRef, recovery: recoveryRef };
+
+  return <>
+    <div className={["operations-charts", className, expanded ? "has-expanded-chart" : ""].filter(Boolean).join(" ")}>
+      <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} />
+      <article className={`operations-chart-deck${expanded === "secondary" ? " is-expanded" : ""}`}>
+        <header className="operations-chart-deck__header"><div className="chart-tabs" role="tablist" aria-label={labels.pressureTitle}>
+          {secondaryKeys.map((key) => <button key={key} role="tab" aria-selected={secondary === key} className={secondary === key ? "active" : ""} onClick={() => setSecondary(key)}>{titles[key]}</button>)}
+        </div><button className="chart-expand" aria-label={expanded === "secondary" ? labels.collapse : labels.expand} onClick={() => setExpanded((value) => value === "secondary" ? null : "secondary")}>{expanded === "secondary" ? <X size={16} /> : <Maximize2 size={15} />}</button></header>
+        <div className="operations-chart-deck__body">
+          {secondaryKeys.map((key) => <ChartCard key={key} chartKey={key} title={titles[key]} empty={empty[key]} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={refs[key]} active={secondary === key} showHeader={false} />)}
+        </div>
+      </article>
+    </div>
+    {expanded && <button className="chart-focus-backdrop" aria-label={labels.collapse} onClick={() => setExpanded(null)} />}
+  </>;
 }

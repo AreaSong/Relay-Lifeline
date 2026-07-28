@@ -1,26 +1,25 @@
-import { Activity, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Activity, RadioTower, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import type { ApiClient } from "../api";
-import { AlertsList } from "../components/AlertsList";
 import { OperationsCharts, operationsChartTheme } from "../components/OperationsCharts";
-import { RequestsTable } from "../components/RequestsTable";
+import { OverviewPriorityPanel } from "../components/OverviewPriorityPanel";
 import { SignalTopology } from "../components/SignalTopology";
-import type { Alert, MetricsErrors, MetricsSnapshot, Status } from "../types";
+import type { Alert, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, Status } from "../types";
 
-export function OverviewView({ status, metrics, errors, alerts, api, refresh, onOpen, onError, locale, dark, incident, canOperate }: {
+const windows: MetricsWindow[] = ["15m", "1h", "6h", "24h"];
+
+export function OverviewView({ status, metrics, errors, alerts, incidents, window, onWindowChange, onOpen, locale, dark, incident }: {
   status: Status;
   metrics: MetricsSnapshot | null;
   errors: MetricsErrors | null;
   alerts: Alert[];
-  api: ApiClient;
-  refresh: () => Promise<void>;
+  incidents: Incident[];
+  window: MetricsWindow;
+  onWindowChange: (window: MetricsWindow) => void;
   onOpen: (id: string) => void;
-  onError: (message: string) => void;
   locale: string;
   dark: boolean;
   incident: boolean;
-  canOperate: boolean;
 }) {
   const { t } = useTranslation(["common", "overview"]);
   const nextRetryAt = useMemo(() => status.requests.map((request) => request.nextRetryAt).filter(Boolean).sort()[0], [status.requests]);
@@ -39,8 +38,9 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
     errorsTitle: t("overview:charts.errors"), recoveryTitle: t("overview:charts.recovery"),
     empty: t("overview:charts.empty"), unavailable: t("overview:charts.unavailable"),
     requests: t("overview:charts.requests"), successRate: t("overview:charts.successRate"),
-    failedAttempts: t("overview:charts.failedAttempts"), active: t("overview:charts.active"),
+    failedAttempts: t("overview:charts.failedAttempts"), active: t("overview:charts.active"), requesting: t("overview:charts.requesting"),
     waiting: t("overview:charts.waiting"), queued: t("overview:charts.queued"), duration: t("overview:charts.duration"),
+    expand: t("overview:charts.expand"), collapse: t("overview:charts.collapse"),
   }), [locale, t]);
   const topologyLabels = useMemo(() => ({
     ariaLabel: t("overview:signal.topologyLabel"), codex: t("overview:signal.codex"), relay: t("overview:signal.relay"), cpa: t("overview:signal.cpa"),
@@ -49,10 +49,11 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
     retryNow: t("overview:signal.retryNow"), staticFallback: t("overview:signal.staticFallback"),
   }), [locale, t]);
   const chartTheme = useMemo(() => operationsChartTheme(dark), [dark]);
+  const successRate = metrics ? `${metrics.totals.successRate.toFixed(metrics.totals.successRate < 100 ? 1 : 0)}%` : t("common:notAvailable");
 
-  return <div className="page-stack overview-view">
+  return <div className="overview-view">
     <section className={`signal-hero${incident ? " incident" : ""}`}>
-      <div className="signal-hero-copy"><span className="signal-kicker"><i />{t("overview:signal.kicker")}</span><h2>{heroTitle}</h2><p>{heroDescription}</p></div>
+      <div className="signal-hero-copy"><span className="signal-kicker"><RadioTower size={13} />{t("overview:signal.kicker")}</span><h2>{heroTitle}</h2><p>{heroDescription}</p></div>
       <SignalTopology
         upstreamState={state}
         active={status.active}
@@ -61,21 +62,24 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
         locale={locale}
         labels={topologyLabels}
       />
-      {incident && <div className="incident-strip" role="status">
-        <div className="incident-state"><span>{t("overview:incident.title")}</span><strong>{t("common:status.upstreamDegraded")}</strong></div>
-        <div><span>{t("overview:incident.started")}</span><strong>{status.upstream.lastChecked ? new Date(status.upstream.lastChecked).toLocaleTimeString(locale) : t("common:notAvailable")}</strong></div>
-        <div><span>{t("overview:incident.affected")}</span><strong>{status.waiting + status.queued}</strong></div>
-        <div><span>{t("overview:incident.dominant")}</span><strong>{dominantError ? t(`overview:errorCategories.${dominantError}`, { defaultValue: dominantError }) : t("overview:incident.noRetry")}</strong></div>
-        <div><span>{t("overview:incident.nextRetry")}</span><strong>{nextRetryAt ? new Date(nextRetryAt).toLocaleTimeString(locale) : t("overview:incident.noRetry")}</strong></div>
-      </div>}
+      <div className="signal-context" aria-hidden="true"><span>{t("overview:incident.dominant")}</span><strong>{dominantError ? t(`overview:errorCategories.${dominantError}`, { defaultValue: dominantError }) : t("overview:incident.stable")}</strong></div>
     </section>
 
-    <div className="telemetry-strip">
-      <div className="telemetry-cell"><Activity size={19} /><div><span>{t("overview:stats.active")}</span><strong>{status.active}</strong></div></div>
-      <div className="telemetry-cell"><RotateCcw size={19} /><div><span>{t("overview:stats.recovering")}</span><strong>{status.waiting + status.queued}</strong></div></div>
-      <div className="telemetry-cell"><ShieldCheck size={19} /><div><span>{t("overview:stats.successful")}</span><strong>{status.successful}</strong></div></div>
-      <div className="telemetry-cell"><TriangleAlert size={19} /><div><span>{t("overview:stats.failedAttempts")}</span><strong>{status.failedAttempts}</strong></div></div>
-    </div>
+    <section className="telemetry-board" aria-labelledby="telemetry-title">
+      <header className="telemetry-heading"><div><span className="panel-kicker">{t("overview:cockpit.kicker")}</span><h2 id="telemetry-title">{t("overview:cockpit.title")}</h2></div>
+        <div className="telemetry-window"><span className={`window-integrity ${metrics?.complete ? "complete" : "partial"}`}><i />{t(metrics?.complete ? "overview:cockpit.complete" : "overview:cockpit.partial")}</span><div className="segmented-control" role="group" aria-label={t("overview:charts.window")}>
+          {windows.map((value) => <button key={value} className={window === value ? "active" : ""} aria-pressed={window === value} onClick={() => onWindowChange(value)}>{t(`overview:charts.windows.${value}`)}</button>)}
+        </div></div>
+      </header>
+      <div className="telemetry-strip">
+        <div className="telemetry-cell"><Activity size={18} /><div><span>{t("overview:stats.active")}</span><strong>{status.active}</strong><small>{t("overview:stats.live")}</small></div></div>
+        <div className="telemetry-cell warning"><RotateCcw size={18} /><div><span>{t("overview:stats.recovering")}</span><strong>{status.waiting + status.queued}</strong><small>{t("overview:stats.live")}</small></div></div>
+        <div className="telemetry-cell success"><ShieldCheck size={18} /><div><span>{t("overview:stats.successRate")}</span><strong>{successRate}</strong><small>{t(`overview:charts.windows.${window}`)}</small></div></div>
+        <div className="telemetry-cell warning"><TriangleAlert size={18} /><div><span>{t("overview:stats.failedAttempts")}</span><strong>{metrics?.totals.failedAttempts ?? status.failedAttempts}</strong><small>{t(`overview:charts.windows.${window}`)}</small></div></div>
+      </div>
+    </section>
+
+    <OverviewPriorityPanel alerts={alerts} incidents={incidents} requests={status.requests} locale={locale} onOpen={onOpen} />
 
     <OperationsCharts
       reliability={metrics?.series || []}
@@ -85,13 +89,8 @@ export function OverviewView({ status, metrics, errors, alerts, api, refresh, on
       labels={labels}
       theme={chartTheme}
       locale={locale}
+      className="overview-chart-system"
+      preferredSecondary={incident ? "errors" : "pressure"}
     />
-
-    <div className="overview-lower">
-      <section className="content-section"><div className="section-heading"><div><h2>{t("overview:recent.title")}</h2><p>{t("overview:recent.description")}</p></div><span className={`mode ${status.paused ? "paused" : ""}`}>{status.paused ? t("common:status.paused") : t("common:status.running")}</span></div>
-        <RequestsTable requests={status.requests.slice(0, 6)} api={api} refresh={refresh} onOpen={onOpen} onError={onError} canOperate={canOperate} />
-      </section>
-      <div className="overview-side"><section className="content-section"><div className="section-heading"><div><h2>{t("overview:alerts.title")}</h2><p>{t("overview:alerts.description")}</p></div></div><AlertsList alerts={alerts} /></section></div>
-    </div>
   </div>;
 }
