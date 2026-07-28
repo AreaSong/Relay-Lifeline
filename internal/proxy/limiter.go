@@ -17,7 +17,8 @@ type Limiter struct {
 	onChange func(active, waiting int)
 }
 
-type limiterWaiter struct{}
+// 保证等待节点地址唯一：Go 可能复用零大小值的指针地址。
+type limiterWaiter struct{ _ byte }
 
 func (l *Limiter) SetOnChange(callback func(active, waiting int)) {
 	l.mu.Lock()
