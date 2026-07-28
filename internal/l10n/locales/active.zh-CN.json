@@ -124,7 +124,7 @@
   {"id":"config.lifecycle.invalid","translation":"请求生命周期总时限或客户端断开策略无效"},
   {"id":"config.management_security.invalid","translation":"管理登录限速、冷却时间或会话空闲时间无效"},
   {"id":"config.metrics_export.path_invalid","translation":"指标导出路径必须是非管理接口的绝对路径"},
-  {"id":"diagnostic.service.name","translation":"Lifeline 服务"},
+  {"id":"diagnostic.service.name","translation":"Relay-Lifeline 服务"},
   {"id":"diagnostic.service.running","translation":"服务进程正在运行"},
   {"id":"diagnostic.journal.name","translation":"防篡改事件日志"},
   {"id":"diagnostic.journal.disabled","translation":"事件持久化已关闭"},

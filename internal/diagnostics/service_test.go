@@ -90,7 +90,7 @@ func TestDiagnosticsCanRenderEnglish(t *testing.T) {
 	cfg.Stream.TempDir = t.TempDir()
 	cfg.Capture.StorageDir = t.TempDir()
 	report := New(config.NewStore("", cfg), "test", time.Now()).Run(context.Background(), "en-US", "zh-CN")
-	if len(report.Checks) == 0 || report.Checks[0].Name != "Lifeline service" || report.Checks[0].Message != "Service process is running" {
+	if len(report.Checks) == 0 || report.Checks[0].Name != "Relay-Lifeline service" || report.Checks[0].Message != "Service process is running" {
 		t.Fatalf("英文诊断异常: %+v", report.Checks)
 	}
 	if report.Checks[0].NameCode != "diagnostic.service.name" || report.Checks[0].MessageCode != "diagnostic.service.running" {

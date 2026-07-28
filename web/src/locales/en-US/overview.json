@@ -8,7 +8,7 @@
     "degradedDescription": "Active connections stay open. Relay-Lifeline will retry according to policy without changing the request.",
     "unknownDescription": "The gateway is online and will assess upstream health on the next request.",
     "codex": "Codex",
-    "relay": "Lifeline",
+    "relay": "Relay-Lifeline",
     "cpa": "CPA / upstream",
     "healthy": "Connected",
     "degraded": "Recovering",

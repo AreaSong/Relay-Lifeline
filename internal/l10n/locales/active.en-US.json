@@ -124,7 +124,7 @@
   {"id":"config.lifecycle.invalid","translation":"The request lifecycle deadline or client disconnect policy is invalid"},
   {"id":"config.management_security.invalid","translation":"Management login rate, cooldown, or idle session timeout is invalid"},
   {"id":"config.metrics_export.path_invalid","translation":"The metrics export path must be an absolute non-management path"},
-  {"id":"diagnostic.service.name","translation":"Lifeline service"},
+  {"id":"diagnostic.service.name","translation":"Relay-Lifeline service"},
   {"id":"diagnostic.service.running","translation":"Service process is running"},
   {"id":"diagnostic.journal.name","translation":"Tamper-evident event journal"},
   {"id":"diagnostic.journal.disabled","translation":"Event persistence is disabled"},

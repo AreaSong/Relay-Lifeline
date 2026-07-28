@@ -8,7 +8,7 @@
     "degradedDescription": "活动连接会保持开启，Relay-Lifeline 将按策略重试，不会改写原请求。",
     "unknownDescription": "网关已经在线，将在下一个请求到达时判断上游状态。",
     "codex": "Codex",
-    "relay": "Lifeline",
+    "relay": "Relay-Lifeline",
     "cpa": "CPA / 上游",
     "healthy": "已连接",
     "degraded": "恢复中",

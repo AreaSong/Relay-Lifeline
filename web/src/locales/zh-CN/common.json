@@ -1,5 +1,5 @@
 {
-  "brandSubtitle": "中转生命线控制台",
+  "brandSubtitle": "Relay-Lifeline 控制台",
   "language": { "label": "语言", "zhCN": "简体中文", "enUS": "English" },
   "theme": { "label": "外观", "system": "跟随系统", "light": "浅色", "dark": "深色" },
   "roles": { "viewer": "只读", "operator": "运维", "sensitive": "敏感数据" },

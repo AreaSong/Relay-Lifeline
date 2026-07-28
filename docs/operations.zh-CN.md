@@ -43,7 +43,7 @@ relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
 relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
 ```
 
-隔离演练重试链时，在测试端口启动 `fault-upstream`，并让一份临时 Lifeline 配置指向它。不要为了演练修改生产 CPA 上游地址。
+隔离演练重试链时，在测试端口启动 `fault-upstream`，并让一份临时 Relay-Lifeline 配置指向它。不要为了演练修改生产 CPA 上游地址。
 
 ```bash
 go run ./cmd/fault-upstream -listen 127.0.0.1:18317 \

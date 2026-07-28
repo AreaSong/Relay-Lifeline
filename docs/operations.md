@@ -103,7 +103,7 @@ relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
 relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
 ```
 
-For an isolated retry drill, start `fault-upstream` on a test port and point a temporary Lifeline configuration at it. Never replace the production CPA address for this test.
+For an isolated retry drill, start `fault-upstream` on a test port and point a temporary Relay-Lifeline configuration at it. Never replace the production CPA address for this test.
 
 ```bash
 go run ./cmd/fault-upstream -listen 127.0.0.1:18317 \
