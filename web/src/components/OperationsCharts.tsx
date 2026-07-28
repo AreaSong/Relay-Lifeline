@@ -321,6 +321,7 @@ export function OperationsCharts({
   const recoveryRef = useRef<HTMLDivElement>(null);
   const instancesRef = useRef<ChartInstances>({});
   const optionsRef = useRef<ChartOptions>({ reliability: null, pressure: null, errors: null, recovery: null });
+  const secondaryManuallySelected = useRef(false);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [secondary, setSecondary] = useState<Exclude<ChartKey, "reliability">>(preferredSecondary);
   const [expanded, setExpanded] = useState<"reliability" | "secondary" | null>(null);
@@ -388,7 +389,9 @@ export function OperationsCharts({
 
   useEffect(() => { applyOptions(instancesRef.current, options); }, [options]);
 
-  useEffect(() => { setSecondary(preferredSecondary); }, [preferredSecondary]);
+  useEffect(() => {
+    if (!secondaryManuallySelected.current) setSecondary(preferredSecondary);
+  }, [preferredSecondary]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -412,7 +415,7 @@ export function OperationsCharts({
       <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} />
       <article className={`operations-chart-deck${expanded === "secondary" ? " is-expanded" : ""}`}>
         <header className="operations-chart-deck__header"><div className="chart-tabs" role="tablist" aria-label={labels.pressureTitle}>
-          {secondaryKeys.map((key) => <button key={key} role="tab" aria-selected={secondary === key} className={secondary === key ? "active" : ""} onClick={() => setSecondary(key)}>{titles[key]}</button>)}
+          {secondaryKeys.map((key) => <button key={key} role="tab" aria-selected={secondary === key} className={secondary === key ? "active" : ""} onClick={() => { secondaryManuallySelected.current = true; setSecondary(key); }}>{titles[key]}</button>)}
         </div><button className="chart-expand" aria-label={expanded === "secondary" ? labels.collapse : labels.expand} onClick={() => setExpanded((value) => value === "secondary" ? null : "secondary")}>{expanded === "secondary" ? <X size={16} /> : <Maximize2 size={15} />}</button></header>
         <div className="operations-chart-deck__body">
           {secondaryKeys.map((key) => <ChartCard key={key} chartKey={key} title={titles[key]} empty={empty[key]} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={refs[key]} active={secondary === key} showHeader={false} />)}

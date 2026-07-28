@@ -17,7 +17,7 @@ func Handler() http.Handler {
 	}
 	files := http.FileServer(http.FS(dist))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'sha256-yC04U2TYr3ZEsS0DBmA0w60v7war51Ttgnu+Qon/gN8='; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'sha256-yC04U2TYr3ZEsS0DBmA0w60v7war51Ttgnu+Qon/gN8='; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
