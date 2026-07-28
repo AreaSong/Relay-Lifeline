@@ -2,6 +2,13 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [2.1.1] - 2026-07-29
+
+### Fixed
+
+- Allow ECharts to apply runtime style attributes under the management UI Content Security Policy while keeping inline scripts blocked.
+- Preserve a manually selected secondary chart when live incident state changes its recommended default.
+
 ## [2.1.0] - 2026-07-29
 
 ### Added
