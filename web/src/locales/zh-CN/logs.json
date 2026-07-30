@@ -3,6 +3,8 @@
   "summary": "当前筛选结果 {{count}} 条，自动刷新仅保留结构化事件",
   "pause": "暂停刷新",
   "resume": "继续刷新",
+  "resumeWithCount": "继续刷新（{{count}}）",
+  "newCount": "界面已暂停，期间新增 {{count}} 条日志",
   "download": "下载日志",
   "level": "级别",
   "event": "事件类型",

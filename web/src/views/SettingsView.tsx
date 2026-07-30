@@ -15,8 +15,9 @@ const configTabs: Record<EditableConfigKey, Tab> = {
   lifecycle: "continuity", managementSecurity: "continuity", metricsExport: "continuity",
 };
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
-  return <label className="toggle"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className="toggle-track" /><span>{label}</span></label>;
+function Toggle({ checked, onChange, label, restart = false }: { checked: boolean; onChange: (value: boolean) => void; label: string; restart?: boolean }) {
+  const { t } = useTranslation("settings");
+  return <label className="toggle"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span className="toggle-track" /><span className="toggle-copy">{label}{restart && <small>{t("restartHint")}</small>}</span></label>;
 }
 
 const durationFactors = { ms: 0.001, s: 1, m: 60, h: 3600 } as const;
@@ -93,13 +94,14 @@ interface Props {
   reload: () => Promise<void>;
   discard: () => void;
   dirty: boolean;
+  busy: boolean;
   baseline: Config;
   runtimeInfo: RuntimeInfo | null;
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
 }
 
-export function SettingsView({ config, setConfig, save, reload, discard, dirty, baseline, runtimeInfo, themeMode, setThemeMode }: Props) {
+export function SettingsView({ config, setConfig, save, reload, discard, dirty, busy, baseline, runtimeInfo, themeMode, setThemeMode }: Props) {
   const { t } = useTranslation(["settings", "common"]);
   const [tab, setTab] = useState<Tab>("general");
   const patch = <K extends EditableConfigKey>(key: K, value: Partial<Config[K]>) => setConfig({ ...config, [key]: { ...config[key], ...value } });
@@ -156,10 +158,10 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
         <DurationField label={t("settings:fields.historyRetention")} value={config.history.retention} onChange={(retention) => patch("history", { retention })} />
       </div></section>}
 	  {tab === "continuity" && <>
-	    <section><div className="section-heading"><div><h2>{t("settings:sections.persistence.title")}</h2><p>{t("settings:sections.persistence.description")}</p></div><Toggle label={t("settings:fields.persistenceEnabled")} checked={config.persistence.enabled} onChange={(enabled) => patch("persistence", { enabled })} /></div><div className="form-grid">
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.persistence.title")}</h2><p>{t("settings:sections.persistence.description")}</p></div><Toggle restart label={t("settings:fields.persistenceEnabled")} checked={config.persistence.enabled} onChange={(enabled) => patch("persistence", { enabled })} /></div><div className="form-grid">
 	      <label className="field wide"><span>{t("settings:fields.persistenceDirectory")}</span><input value={config.persistence.directory} onChange={(event) => patch("persistence", { directory: event.target.value })} />{restartHint}</label>
 	      <DurationField restart label={t("settings:fields.persistenceRetention")} value={config.persistence.retention} onChange={(retention) => patch("persistence", { retention })} />
-	      <Toggle label={t("settings:fields.syncWrites")} checked={config.persistence.syncWrites} onChange={(syncWrites) => patch("persistence", { syncWrites })} />
+	      <Toggle restart label={t("settings:fields.syncWrites")} checked={config.persistence.syncWrites} onChange={(syncWrites) => patch("persistence", { syncWrites })} />
 	    </div></section>
 	    <section><div className="section-heading"><div><h2>{t("settings:sections.lifecycle.title")}</h2><p>{t("settings:sections.lifecycle.description")}</p></div></div><div className="form-grid">
 	      <Toggle label={t("settings:fields.trackUncertainDelivery")} checked={config.lifecycle.trackUncertainDelivery} onChange={(trackUncertainDelivery) => patch("lifecycle", { trackUncertainDelivery })} />
@@ -179,7 +181,7 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
 	      <DurationField label={t("settings:fields.loginCooldown")} value={config.managementSecurity.loginCooldown} onChange={(loginCooldown) => patch("managementSecurity", { loginCooldown })} />
 	      <DurationField label={t("settings:fields.sessionIdleTimeout")} value={config.managementSecurity.sessionIdleTimeout} onChange={(sessionIdleTimeout) => patch("managementSecurity", { sessionIdleTimeout })} />
 	    </div></section>
-	    <section><div className="section-heading"><div><h2>{t("settings:sections.metrics.title")}</h2><p>{t("settings:sections.metrics.description")}</p></div><Toggle label={t("settings:fields.metricsEnabled")} checked={config.metricsExport.enabled} onChange={(enabled) => patch("metricsExport", { enabled })} /></div><div className="form-grid">
+	    <section><div className="section-heading"><div><h2>{t("settings:sections.metrics.title")}</h2><p>{t("settings:sections.metrics.description")}</p></div><Toggle restart label={t("settings:fields.metricsEnabled")} checked={config.metricsExport.enabled} onChange={(enabled) => patch("metricsExport", { enabled })} /></div><div className="form-grid">
 	      <label className="field"><span>{t("settings:fields.metricsPath")}</span><input value={config.metricsExport.path} onChange={(event) => patch("metricsExport", { path: event.target.value })} />{restartHint}</label>
 	    </div></section>
 	  </>}
@@ -215,13 +217,13 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
         <LocaleField label={t("settings:fields.notificationLocale")} value={config.notifications.locale} onChange={(locale) => patch("notifications", { locale })} />
         <label className="field wide"><span>{t("settings:fields.webhook")}</span><input type="url" value={config.notifications.webhookUrl} onChange={(event) => patch("notifications", { webhookUrl: event.target.value })} placeholder="https://" /></label>
       </div><div className="event-options">{config.notifications.eventTypes.concat(["stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"]).filter((value, index, all) => all.indexOf(value) === index).map((eventType) => <Toggle key={eventType} label={t(`settings:events.${eventType}`, { defaultValue: eventType })} checked={config.notifications.eventTypes.includes(eventType)} onChange={(value) => toggleEvent(eventType, value)} />)}</div><Toggle label={t("settings:fields.notifyOnRecovery")} checked={config.notifications.notifyOnRecovery} onChange={(notifyOnRecovery) => patch("notifications", { notifyOnRecovery })} /></section>}
-      {tab === "appearance" && <section><div className="section-heading"><div><h2>{t("settings:sections.appearance.title")}</h2><p>{t("settings:sections.appearance.description")}</p></div></div><ThemeSelector mode={themeMode} onChange={setThemeMode} /></section>}
+      {tab === "appearance" && <section><div className="section-heading"><div><h2>{t("settings:sections.appearance.title")}</h2><p>{t("settings:sections.appearance.description")}</p></div></div><ThemeSelector mode={themeMode} onChange={setThemeMode} /><dl className="font-stack-summary"><div><dt>{t("settings:fonts.interface")}</dt><dd>Source Sans 3 · Source Han Sans SC</dd></div><div><dt>{t("settings:fonts.technical")}</dt><dd>Source Code Pro</dd></div><div><dt>{t("settings:fonts.delivery")}</dt><dd>{t("settings:fonts.selfHosted")}</dd></div></dl></section>}
       {tab === "logging" && <section><div className="section-heading"><div><h2>{t("settings:sections.logging.title")}</h2><p>{t("settings:sections.logging.description")}</p></div></div><div className="form-grid">
         <label className="field"><span>{t("settings:fields.logLevel")}</span><select value={config.logging.level} onChange={(event) => patch("logging", { level: event.target.value })}><option value="debug">{t("settings:logLevels.debug")}</option><option value="info">{t("settings:logLevels.info")}</option><option value="warn">{t("settings:logLevels.warn")}</option><option value="error">{t("settings:logLevels.error")}</option></select>{restartHint}</label>
         <LocaleField label={t("settings:fields.loggingLocale")} value={config.logging.locale} onChange={(locale) => patch("logging", { locale })} />
       </div></section>}
     </div>
     <div className={`settings-diff${dirty ? " dirty" : ""}`} aria-live="polite"><strong>{dirty ? t("settings:changeSummary", { count: changedSections.length }) : t("settings:noConfigChanges")}</strong>{dirty && <span>{t("settings:changeSections", { sections: changedSections.map((section) => t(`settings:tabs.${section}`, { defaultValue: section })).join(", ") })}</span>}</div>
-    <div className="settings-actions"><button className="button" disabled={!dirty} onClick={discard}><Undo2 size={17} />{t("common:actions.discard")}</button><button className="button" onClick={reload}><RotateCcw size={17} />{t("common:actions.reload")}</button><button className="button primary" disabled={!dirty} onClick={save}><Save size={17} />{t("common:actions.save")}</button></div>
+    <div className="settings-actions"><button className="button" disabled={!dirty || busy} onClick={discard}><Undo2 size={17} />{t("common:actions.discard")}</button><button className="button" disabled={busy} onClick={reload}><RotateCcw size={17} />{t("common:actions.reload")}</button><button className="button primary" disabled={!dirty || busy} onClick={save}><Save size={17} />{busy ? t("common:loading") : t("common:actions.save")}</button></div>
   </div>;
 }

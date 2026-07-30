@@ -1,17 +1,21 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Archive, CirclePause, CirclePlay, Clock3, FileLock2, HeartPulse, LogOut,
-  Menu, PanelLeftClose, PanelLeftOpen, RefreshCw, ScrollText, Settings2, ShieldAlert,
-  ShieldCheck, Stethoscope,
+  FileLock2, HeartPulse, LogOut, Search, ScrollText, ShieldAlert, ShieldCheck,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ApiClient, errorMessage } from "./api";
+import { AppNavigation, allViews, iconForView, mobileViews } from "./components/AppNavigation";
+import type { View } from "./components/AppNavigation";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import type { ConfirmDialogState } from "./components/ConfirmDialog";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { OverviewPriorityPanel } from "./components/OverviewPriorityPanel";
 import { SignalTopology } from "./components/SignalTopology";
 import { ThemeSelector } from "./components/ThemeSelector";
 import { TimelinePanel } from "./components/TimelinePanel";
 import { ViewErrorBoundary } from "./components/ViewErrorBoundary";
+import { WorkspaceHeader } from "./components/WorkspaceHeader";
+import type { SearchTarget } from "./components/GlobalSearch";
 import { normalizeLocale } from "./i18n";
 import { useTheme } from "./theme";
 import type {
@@ -27,16 +31,13 @@ import { OverviewView } from "./views/OverviewView";
 import { RequestsView } from "./views/RequestsView";
 import { SettingsView } from "./views/SettingsView";
 
-type View = "overview" | "requests" | "history" | "incidents" | "logs" | "captures" | "diagnostics" | "settings";
-const allViews: View[] = ["overview", "requests", "history", "incidents", "logs", "captures", "diagnostics", "settings"];
-const mobileViews: View[] = ["overview", "requests", "history", "diagnostics", "settings"];
-const navigation: Array<{ view: View; icon: LucideIcon }> = [
-  { view: "overview", icon: Activity }, { view: "requests", icon: Clock3 }, { view: "history", icon: Archive },
-  { view: "incidents", icon: ShieldAlert },
-  { view: "logs", icon: ScrollText }, { view: "captures", icon: FileLock2 },
-  { view: "diagnostics", icon: Stethoscope }, { view: "settings", icon: Settings2 },
-];
 const railStorageKey = "relay-lifeline-rail-collapsed";
+const configSectionLabelKeys: Record<string, string> = {
+  server: "service", upstream: "service", retry: "retry", stream: "stream", queue: "traffic", history: "traffic",
+  observability: "observability", capture: "capture", risk: "risk", localization: "localization", notifications: "notifications",
+  logging: "logging", persistence: "persistence", incidents: "incidents", lifecycle: "lifecycle",
+  "management-security": "managementSecurity", "metrics-export": "metrics",
+};
 
 function storedRailState() {
   return localStorage.getItem(railStorageKey) === "true";
@@ -108,18 +109,33 @@ export function App() {
   const [metricErrors, setMetricErrors] = useState<MetricsErrors | null>(null);
   const [events, setEvents] = useState<MonitoringEvent[]>([]);
   const [mobileTools, setMobileTools] = useState(false);
+  const [searchTarget, setSearchTarget] = useState<SearchTarget | null>(null);
   const [railCollapsed, setRailCollapsed] = useState(storedRailState);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
+  const [bootstrapError, setBootstrapError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [confirmation, setConfirmation] = useState<{ options: ConfirmDialogState; resolve: (value: boolean) => void } | null>(null);
+  const confirmationPending = useRef(false);
   const resetAuthentication = useCallback((reason: "required" | "expired" | null) => {
     setAuthenticated(false); setAuthReason(reason); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
-    setAlerts([]); setHistory([]); setIncidents([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage("");
+    setAlerts([]); setHistory([]); setIncidents([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage(""); setBootstrapError(""); setSearchTarget(null); setMobileTools(false);
+    confirmationPending.current = false;
+    setConfirmation((current) => { current?.resolve(false); return null; });
   }, []);
   const api = useMemo(() => new ApiClient(locale, (code) => resetAuthentication(code === "SESSION_EXPIRED" ? "expired" : "required")), [locale, resetAuthentication]);
   const dirty = useMemo(() => !!config && !!savedConfig && JSON.stringify(config) !== JSON.stringify(savedConfig), [config, savedConfig]);
   const canOperate = session?.capabilities.includes("operate") || false;
   const canSensitive = session?.capabilities.includes("sensitive") || false;
-  const visibleNavigation = useMemo(() => navigation.filter(({ view: itemView }) => canOperate || itemView !== "settings"), [canOperate]);
+  const requestConfirmation = useCallback((options: ConfirmDialogState) => {
+    if (confirmationPending.current) return Promise.resolve(false);
+    confirmationPending.current = true;
+    return new Promise<boolean>((resolve) => setConfirmation({ options, resolve }));
+  }, []);
+  const finishConfirmation = useCallback((result: boolean) => {
+    confirmationPending.current = false;
+    setConfirmation((current) => { current?.resolve(result); return null; });
+  }, []);
 
   const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
     setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
@@ -135,22 +151,48 @@ export function App() {
     setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events);
   }, [api, metricsWindow]);
 
+  const confirmSettingsLeave = useCallback(async () => {
+    if (!dirty) return true;
+    const confirmed = await requestConfirmation({
+      title: t("settings:leaveConfirmTitle"), description: t("settings:leaveConfirm"), confirmLabel: t("settings:leaveConfirmAction"), tone: "danger",
+    });
+    if (confirmed && savedConfig) setConfig(savedConfig);
+    return confirmed;
+  }, [dirty, requestConfirmation, savedConfig, t]);
+
+  const selectView = useCallback(async (next: View, updateHash = true) => {
+    if (next === "settings" && !canOperate) {
+      if (!updateHash) window.history.replaceState(null, "", `#/${view}`);
+      return;
+    }
+    if (next === view) { setMobileTools(false); return; }
+    if (view === "settings" && next !== "settings" && !await confirmSettingsLeave()) {
+      if (!updateHash) window.history.replaceState(null, "", `#/${view}`);
+      return;
+    }
+    setView(next); setMobileTools(false); setTimeline(null);
+    if (updateHash) window.history.pushState(null, "", `#/${next}`);
+    if (next === "history") await Promise.all([api.history().then(setHistory), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
+  }, [api, canOperate, confirmSettingsLeave, refreshMonitoring, showMessage, view]);
+
   useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
   useEffect(() => {
-    const changed = () => setView(currentView());
+    const changed = () => { const next = currentView(); if (next !== view) void selectView(next, false); };
     window.addEventListener("hashchange", changed);
-    return () => window.removeEventListener("hashchange", changed);
-  }, []);
+    window.addEventListener("popstate", changed);
+    return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
+  }, [selectView, view]);
   useEffect(() => {
     if (!authenticated) return;
     let disposed = false;
+    setBootstrapError("");
     void api.session().then(async (nextSession) => {
       if (disposed) return;
       setSession(nextSession);
       await Promise.all([
         refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory), api.runtimeInfo().then(setRuntimeInfo),
       ]);
-    }).catch((reason) => { if (!disposed) showMessage(errorMessage(reason), "error"); });
+    }).catch((reason) => { if (!disposed) setBootstrapError(errorMessage(reason)); });
     setTimeline(null); setDiagnostics(null);
     return () => { disposed = true; };
   }, [api, authenticated, refresh, showMessage]);
@@ -163,7 +205,7 @@ export function App() {
   }, [api, authenticated, refresh, session]);
   useEffect(() => {
     if (session && !canOperate && view === "settings") {
-      setView("overview"); window.location.hash = "/overview";
+      setView("overview"); window.history.replaceState(null, "", "#/overview");
     }
   }, [canOperate, session, view]);
   useEffect(() => {
@@ -173,15 +215,31 @@ export function App() {
     return () => window.clearInterval(metricsTimer);
   }, [authenticated, refreshMonitoring, session, showMessage]);
   useEffect(() => {
+    if (!authenticated || !session) return;
+    const historyTimer = window.setInterval(() => api.history().then(setHistory).catch(() => undefined), 10_000);
+    return () => window.clearInterval(historyTimer);
+  }, [api, authenticated, session]);
+  useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   useEffect(() => {
     if (!mobileTools) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileTools(false); };
+    const panel = document.getElementById("mobile-tools-panel");
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panel?.querySelector<HTMLElement>("button, select")?.focus();
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setMobileTools(false); return; }
+      if (event.key !== "Tab" || !panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>('button, select, [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("disabled"));
+      if (!focusable.length) return;
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
     window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
+    return () => { window.removeEventListener("keydown", close); previous?.focus(); };
   }, [mobileTools]);
   useEffect(() => {
     localStorage.setItem(railStorageKey, String(railCollapsed));
@@ -195,13 +253,6 @@ export function App() {
     await api.logout().catch(() => undefined);
     resetAuthentication(null);
   }
-  async function selectView(next: View) {
-    if (next === "settings" && !canOperate) return;
-    if (view === "settings" && next !== "settings" && dirty && !window.confirm(t("settings:leaveConfirm"))) return;
-    setView(next); setMobileTools(false); setTimeline(null);
-    window.location.hash = `/${next}`;
-    if (next === "history") await Promise.all([api.history().then(setHistory), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
-  }
   async function openTimeline(id: string) {
     try { setTimeline(await api.timeline(id)); }
     catch (reason) { showMessage(errorMessage(reason), "error"); }
@@ -211,16 +262,32 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
   async function save() {
-    if (!config) return;
+    if (!config || saving) return;
+    setSaving(true);
     try {
       const plan = await api.validateConfig(config);
-      if (plan.restartRequired && !window.confirm(t("settings:restartConfirm", { count: plan.restartSections.length }))) return;
+      const sectionNames = (sections: string[]) => Array.from(new Set(sections.map((section) => {
+        const key = configSectionLabelKeys[section];
+        return key ? t(`settings:sections.${key}.title`) : section;
+      }))).join(", ") || t("common:notAvailable");
+      const summary = t("settings:reviewPlan", {
+        changed: sectionNames(plan.changedSections), hot: sectionNames(plan.hotReloadSections), restart: sectionNames(plan.restartSections),
+      });
+      const confirmed = await requestConfirmation({
+        title: t("settings:restartConfirmTitle"),
+        description: `${plan.restartRequired
+          ? t("settings:restartConfirm", { count: plan.restartSections.length })
+          : t("settings:reviewConfirm", { count: plan.changedSections.length })}\n${summary}`,
+        confirmLabel: t("common:actions.save"),
+      });
+      if (!confirmed) return;
       const result = await api.saveConfig(config);
       setSavedConfig(config);
       showMessage(result.backupPath ? t("settings:savedBackup", { path: result.backupPath }) : result.restartRequired ? t("settings:savedRestart") : t("settings:saved"));
       await refreshMonitoring();
     }
     catch (reason) { showMessage(errorMessage(reason, "save"), "error"); }
+    finally { setSaving(false); }
   }
   async function reload() {
     try { await api.reloadConfig(); const value = await api.config(); setConfig(value); setSavedConfig(value); showMessage(t("settings:reloaded")); await refreshMonitoring(); }
@@ -238,45 +305,39 @@ export function App() {
   }
 
   if (!authenticated) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} sessionExpired={authReason === "expired"} />;
+  if (bootstrapError) return <main className="bootstrap-error"><span className="rail-brand"><HeartPulse size={22} /></span><h1>{t("common:connectionError.title")}</h1><p>{bootstrapError}</p><button className="button primary" onClick={() => window.location.reload()}><ShieldCheck size={17} />{t("common:connectionError.retry")}</button></main>;
   if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
-  const upstreamLabel = status.upstream.state === "healthy" ? "upstreamHealthy" : status.upstream.state === "degraded" ? "upstreamDegraded" : "upstreamUnknown";
   const incident = status.upstream.state === "degraded" && (status.waiting + status.queued > 0 || (status.upstream.lastChecked ? Date.now() - new Date(status.upstream.lastChecked).getTime() >= 10_000 : false));
+  const mobileNavigation = mobileViews.filter((itemView) => canOperate || itemView !== "settings");
   return <div className={`app-shell view-${view}${railCollapsed ? " rail-collapsed" : ""}${timeline ? " inspector-open" : ""}${incident ? " incident-mode" : ""}`}>
-    <aside className="app-rail" aria-label={t("common:brandSubtitle")}>
-      <button className="rail-identity" aria-label="Relay-Lifeline" onClick={() => selectView("overview")}>
-        <span className="rail-brand"><HeartPulse size={20} /></span>
-        <span className="rail-copy"><strong>Relay-Lifeline</strong><small>{t("common:brandSubtitle")}</small></span>
-      </button>
-      <nav>{visibleNavigation.map(({ view: itemView, icon: Icon }) => <button key={itemView} aria-label={t(`common:nav.${itemView}`)} aria-current={view === itemView ? "page" : undefined} data-tooltip={railCollapsed ? t(`common:nav.${itemView}`) : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={18} /><span className="rail-label">{t(`common:nav.${itemView}`)}</span></button>)}</nav>
-      <div className="rail-footer">
-        <div className="rail-utilities"><ThemeSelector mode={theme.mode} onChange={theme.setMode} compact /><LanguageSelector compact /><button className="rail-action" aria-label={t("common:actions.logout")} data-tooltip={t("common:actions.logout")} onClick={logout}><LogOut size={17} /></button></div>
-        <button className="rail-collapse" aria-label={railCollapsed ? t("common:actions.expandNav") : t("common:actions.collapseNav")} onClick={() => setRailCollapsed((value) => !value)}>
-          {railCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-          <span className="rail-label">{t("common:actions.collapseNav")}</span>
-        </button>
-      </div>
-    </aside>
+    <AppNavigation view={view} collapsed={railCollapsed} session={session} config={config} runtimeInfo={runtimeInfo} themeMode={theme.mode} onThemeChange={theme.setMode} onSelect={(next) => { setSearchTarget(null); void selectView(next); }} onCollapse={() => setRailCollapsed((value) => !value)} onLogout={() => void logout()} />
 
-    <main className={`workspace workspace-${view}`}><header className="workspace-header"><div className="mobile-topbar"><span className="rail-brand"><HeartPulse size={17} /></span><div><strong>Relay-Lifeline</strong><span>{t(`common:nav.${view}`)}</span></div></div>
-      <div className="desktop-heading"><span className="workspace-eyebrow">Relay-Lifeline / {t(`common:nav.${view}`)}</span><div className="workspace-title-row"><h1>{t(`common:title.${view}`)}</h1><div className="health-row"><span className="connection"><i />{t("common:status.gatewayOnline")}</span><span className={`connection upstream-${status.upstream.state}`}><i />{t(`common:status.${upstreamLabel}`)}</span><span className="mode">{t(`common:roles.${session.role}`)}</span></div></div></div>
-      <div className="header-actions"><button className="icon-button mobile-tools-toggle" aria-label={t("common:tools")} data-tooltip={t("common:tools")} onClick={() => setMobileTools((open) => !open)}><Menu size={17} /></button><button className="icon-button" aria-label={t("common:actions.refresh")} data-tooltip={t("common:actions.refresh")} onClick={() => { void refresh(); void refreshMonitoring(); }}><RefreshCw size={17} /></button>{canOperate && <button className={`button ${status.paused ? "primary" : ""}`} aria-label={status.paused ? t("common:actions.resume") : t("common:actions.pause")} data-tooltip={status.paused ? t("common:actions.resume") : t("common:actions.pause")} onClick={togglePause}>{status.paused ? <CirclePlay size={17} /> : <CirclePause size={17} />}<span>{status.paused ? t("common:actions.resume") : t("common:actions.pause")}</span></button>}</div>
-    </header>
+    <main className={`workspace workspace-${view}`}><WorkspaceHeader
+      api={api} config={config} view={view} status={status} session={session} requests={status.requests} history={history} incidents={incidents} alerts={alerts}
+      metricsWindow={metricsWindow} canOperate={canOperate} mobileToolsOpen={mobileTools} onWindowChange={setMetricsWindow} onOpen={(id) => void openTimeline(id)}
+      onNavigate={(next, target) => { setSearchTarget(target || null); void selectView(next); }} onRefresh={() => { void refresh(); void refreshMonitoring(); void api.history().then(setHistory).catch(() => undefined); }} onPauseToggle={() => void togglePause()} onMobileTools={() => setMobileTools((open) => !open)}
+    />
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
-        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onWindowChange={setMetricsWindow} onOpen={openTimeline} locale={locale} dark={theme.resolved === "dark"} incident={incident} />}
+        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={openTimeline} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={timeline?.id} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} canOperate={canOperate} />}
         {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
-        {view === "incidents" && <IncidentsView incidents={incidents} />}
-        {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} />}
-        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} />}
+        {view === "incidents" && <IncidentsView incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} />}
+        {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} initialRequestId={searchTarget?.kind === "log" ? searchTarget.id : undefined} initialEvent={searchTarget?.kind === "log" ? searchTarget.detail : undefined} />}
+        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} confirm={requestConfirmation} selectedId={searchTarget?.kind === "capture" ? searchTarget.id : undefined} />}
         {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
-        {view === "settings" && canOperate && <SettingsView config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
+        {view === "settings" && canOperate && <SettingsView config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
       </ViewErrorBoundary>
     </main>
 
-    <nav className="mobile-bottom-nav" aria-label={t("common:brandSubtitle")}>{mobileViews.filter((itemView) => canOperate || itemView !== "settings").map((itemView) => { const Icon = navigation.find((item) => item.view === itemView)!.icon; return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => selectView(itemView)}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>
-    <div className="mobile-tools" hidden={!mobileTools}><div className="mobile-tools-row"><button className="button" onClick={() => selectView("logs")}><ScrollText size={17} />{t("common:nav.logs")}</button><button className="button" onClick={() => selectView("captures")}><FileLock2 size={17} />{t("common:nav.captures")}</button></div><ThemeSelector mode={theme.mode} onChange={theme.setMode} /><div className="mobile-tools-row"><LanguageSelector /><button className="button" onClick={logout}><LogOut size={17} />{t("common:actions.logout")}</button></div></div>
+    {view === "overview" && <aside className="desktop-overview-inspector" aria-label={t("overview:priority.title")}>
+      <OverviewPriorityPanel alerts={alerts} incidents={incidents} requests={status.requests} locale={locale} onOpen={openTimeline} idSuffix="inspector" paused={status.paused} />
+    </aside>}
+
+    <nav className={`mobile-bottom-nav items-${mobileNavigation.length}`} aria-label={t("common:brandSubtitle")}>{mobileNavigation.map((itemView) => { const Icon = iconForView(itemView); return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => { setSearchTarget(null); void selectView(itemView); }}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>
+    <div id="mobile-tools-panel" className="mobile-tools" role="dialog" aria-modal="true" aria-label={t("common:tools")} hidden={!mobileTools}><button className="button mobile-search-action" onClick={() => { setMobileTools(false); window.dispatchEvent(new Event("relay:open-search")); }}><Search size={17} />{t("common:search.label")}</button><div className="mobile-tools-row mobile-tools-nav"><button className="button" onClick={() => void selectView("incidents")}><ShieldAlert size={17} />{t("common:nav.incidents")}</button><button className="button" onClick={() => void selectView("logs")}><ScrollText size={17} />{t("common:nav.logs")}</button><button className="button" onClick={() => void selectView("captures")}><FileLock2 size={17} />{t("common:nav.captures")}</button></div><ThemeSelector mode={theme.mode} onChange={theme.setMode} /><div className="mobile-tools-row"><LanguageSelector /><button className="button" onClick={() => void logout()}><LogOut size={17} />{t("common:actions.logout")}</button></div></div>
     {timeline && <TimelinePanel record={timeline} onClose={() => setTimeline(null)} />}
+    {confirmation && <ConfirmDialog state={confirmation.options} onConfirm={() => finishConfirmation(true)} onCancel={() => finishConfirmation(false)} />}
   </div>;
 }

@@ -1,9 +1,11 @@
-import { Download, Eye, FileLock2, Play, RefreshCw, Square, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Download, Eye, FileLock2, Play, RefreshCw, Square, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import { formatBytes } from "../format";
 import type { CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config } from "../types";
+import type { ConfirmDialogState } from "../components/ConfirmDialog";
+import { InspectorShell } from "../components/InspectorShell";
 
 interface Props {
   api: ApiClient;
@@ -12,18 +14,28 @@ interface Props {
   onSuccess: (message: string) => void;
   canOperate: boolean;
   canSensitive: boolean;
+  selectedId?: string;
+  confirm: (options: ConfirmDialogState) => Promise<boolean>;
 }
 
-export function CapturesView({ api, config, onError, onSuccess, canOperate, canSensitive }: Props) {
+function durationMinutes(raw: string) {
+  const factors = { ms: 1 / 60_000, s: 1 / 60, m: 1, h: 60 } as const;
+  let minutes = 0; let matched = 0;
+  for (const part of raw.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    minutes += Number(part[1]) * factors[part[2] as keyof typeof factors]; matched += part[0].length;
+  }
+  return matched === raw.length ? Math.min(60, Math.max(1, Math.ceil(minutes))) : 10;
+}
+
+export function CapturesView({ api, config, onError, onSuccess, canOperate, canSensitive, selectedId, confirm }: Props) {
   const { t, i18n } = useTranslation(["captures", "common"]);
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [records, setRecords] = useState<CaptureRecord[]>([]);
   const [keys, setKeys] = useState<CaptureKeyStatus | null>(null);
   const [preview, setPreview] = useState<CapturePreview | null>(null);
   const [requestLimit, setRequestLimit] = useState(config.capture.defaultRequestLimit);
-  const [timeoutMinutes, setTimeoutMinutes] = useState(Math.max(1, Number.parseInt(config.capture.activationTimeout) || 10));
+  const [timeoutMinutes, setTimeoutMinutes] = useState(durationMinutes(config.capture.activationTimeout));
   const [busy, setBusy] = useState(false);
-  const drawer = useRef<HTMLElement>(null);
   const load = useCallback(async () => {
     try {
       const [nextStatus, nextRecords, nextKeys] = await Promise.all([api.captureStatus(), api.captures(), api.captureKeyStatus()]);
@@ -33,12 +45,9 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
 
   useEffect(() => { void load(); const timer = window.setInterval(load, 3000); return () => window.clearInterval(timer); }, [load]);
   useEffect(() => {
-    if (!preview) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setPreview(null); };
-    window.addEventListener("keydown", close);
-    drawer.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => window.removeEventListener("keydown", close);
-  }, [preview]);
+    if (!selectedId) return;
+    void api.capturePreview(selectedId).then(setPreview).catch((reason) => onError(reason instanceof Error ? reason.message : String(reason)));
+  }, [api, onError, selectedId]);
 
   async function start() {
     setBusy(true);
@@ -53,17 +62,17 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
     finally { setBusy(false); }
   }
   async function download(record: CaptureRecord, mode: "filtered" | "raw") {
-    if (mode === "raw" && !window.confirm(t("captures:rawConfirm"))) return;
+    if (mode === "raw" && !await confirm({ title: t("captures:rawConfirmTitle"), description: t("captures:rawConfirm"), confirmLabel: t("captures:rawDownload"), tone: "danger" })) return;
     try { await api.downloadCapture(record.id, mode); onSuccess(t("captures:downloaded")); }
     catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
   }
   async function remove(record: CaptureRecord) {
-    if (!window.confirm(t("captures:deleteConfirm"))) return;
+    if (!await confirm({ title: t("captures:deleteConfirmTitle"), description: t("captures:deleteConfirm"), confirmLabel: t("captures:delete"), tone: "danger" })) return;
     try { await api.deleteCapture(record.id); if (preview?.record.id === record.id) setPreview(null); await load(); }
     catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
   }
   async function rewrapKeys() {
-    if (!window.confirm(t("captures:keys.rewrapConfirm"))) return;
+    if (!await confirm({ title: t("captures:keys.rewrapConfirmTitle"), description: t("captures:keys.rewrapConfirm"), confirmLabel: t("captures:keys.rewrap") })) return;
     setBusy(true);
     try {
       const result = await api.rewrapCaptureKeys();
@@ -103,8 +112,8 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
         <div><span>{t("captures:keys.unresolved")}</span><strong>{keys.unresolved}</strong></div>
       </div>}
     </section>
-    {preview && <div className="drawer-backdrop" onMouseDown={() => setPreview(null)}><aside ref={drawer} className="capture-drawer" role="dialog" aria-modal="true" aria-label={t("captures:preview")} onMouseDown={(e) => e.stopPropagation()}><div className="drawer-header"><div><span className={`status ${preview.record.state}`}>{t(`common:status.${preview.record.state}`, { defaultValue: preview.record.state })}</span><h2>{preview.record.method} {preview.record.path}</h2><p>{preview.record.requestId}</p></div><button className="icon-button" aria-label={t("common:actions.close")} onClick={() => setPreview(null)}><X size={18} /></button></div>
+    {preview && <InspectorShell wide title={`${preview.record.method} ${preview.record.path}`} subtitle={preview.record.requestId} status={<span className={`status ${preview.record.state}`}>{t(`common:status.${preview.record.state}`, { defaultValue: preview.record.state })}</span>} onClose={() => setPreview(null)}>
       <div className="capture-parts">{preview.parts.map((part, index) => <section key={`${part.name}-${part.attempt || index}`}><div><strong>{part.name === "attempt" ? t("captures:attemptPart", { count: part.attempt }) : t(`captures:${part.name}Part`)}</strong><span>{formatBytes(part.originalBytes)}{part.truncated ? ` · ${t("captures:truncated")}` : ""}</span></div><details><summary>{t("captures:headers")}</summary><pre>{JSON.stringify(part.headers || {}, null, 2)}</pre></details><pre className="capture-body">{part.body}</pre></section>)}</div>
-    </aside></div>}
+    </InspectorShell>}
   </div>;
 }

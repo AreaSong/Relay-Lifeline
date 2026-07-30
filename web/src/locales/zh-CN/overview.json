@@ -42,7 +42,8 @@
     "kicker": "实时遥测",
     "title": "链路运行脉冲",
     "complete": "窗口完整",
-    "partial": "数据积累中"
+    "partial": "数据积累中",
+    "observation": "观测状态"
   },
   "charts": {
     "reliability": "可靠性趋势",
@@ -67,6 +68,9 @@
     "kicker": "优先处置",
     "title": "当前态势",
     "incident": "事故优先",
+    "paused": "服务暂停",
+    "waiting": "等待恢复",
+    "alert": "提醒优先",
     "request": "活动请求",
     "stable": "链路稳定",
     "incidentHeadline": "检测到上游连续异常",
@@ -80,6 +84,18 @@
     "started": "持续时间",
     "stableHeadline": "当前没有活动事故",
     "stableDescription": "Relay-Lifeline 自身健康，上游链路处于可用或待命状态。",
+    "pausedHeadline": "请求接收已经暂停",
+    "pausedDescription": "现有请求状态会被保留；恢复服务后将继续按照当前策略处理。",
+    "adviceTitle": "处置建议",
+    "ruleBased": "依据当前状态规则生成",
+    "advice": {
+      "paused": "确认维护窗口结束后再恢复接收请求。",
+      "incident": "先核对主要错误分类，再观察下一次恢复尝试。",
+      "waiting": "保持客户端连接，不要重复发送相同请求。",
+      "request": "请求正在正常处理中，暂时无需介入。",
+      "alert": "查看关联请求或事故，确认提醒是否仍然有效。",
+      "stable": "链路稳定，保持当前策略并继续观察。"
+    },
     "alerts": "未解除提醒"
   },
   "errorCategories": { "transport": "网络传输", "protocol": "响应协议", "auth": "鉴权", "rate_limit": "限流", "client": "客户端请求", "server": "上游服务", "http": "其他 HTTP" },

@@ -3,6 +3,8 @@
   "summary": "{{count}} structured events match the current filters",
   "pause": "Pause refresh",
   "resume": "Resume refresh",
+  "resumeWithCount": "Resume refresh ({{count}})",
+  "newCount": "The view is paused; {{count}} new log entries arrived",
   "download": "Download logs",
   "level": "Level",
   "event": "Event type",

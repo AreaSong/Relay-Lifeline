@@ -21,6 +21,11 @@ func Handler() http.Handler {
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("X-Frame-Options", "DENY")
+		if strings.HasPrefix(request.URL.Path, "/admin/assets/") {
+			writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			writer.Header().Set("Cache-Control", "no-cache")
+		}
 		if request.URL.Path == "/admin" {
 			http.Redirect(writer, request, "/admin/", http.StatusPermanentRedirect)
 			return

@@ -31,7 +31,7 @@ docker build \
 - Viewer cannot mutate, Operator cannot download raw content, and Sensitive Data still requires explicit raw-download confirmation.
 - Completed captures remain readable after upgrade; key status reports zero unresolved records.
 - The prior image starts with its matching prior configuration and can serve health and management endpoints.
-- Desktop 1440x900 and mobile 390x844 views have no blank canvas, overlap, clipped controls, or role leakage.
+- Scaled 4K (3840x2160), MacBook Pro 14-inch (1512x982), low-height desktop (1280x720), and mobile (390x844) views have no blank canvas, overlap, clipped controls, or role leakage.
 
 ## Release assets
 

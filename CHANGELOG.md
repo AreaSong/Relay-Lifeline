@@ -2,6 +2,27 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [2.2.0] - 2026-07-30
+
+### Added
+
+- Add local Source Han Sans CN, Source Sans 3, and Source Code Pro variable fonts with bundled OFL license texts.
+- Add global search, notification center, workspace inspector, confirmation dialogs, and keyboard-accessible focused chart views.
+- Add an interactive Three.js request topology with selection focus, bounded rendering, and a mobile/WebGL fallback.
+
+### Changed
+
+- Rebuild the application shell around grouped navigation, a shared workspace header, consistent design tokens, and responsive role-aware controls.
+- Reorganize the overview into four KPI summaries and a stable 12-column, 8+4 operating layout with a persistent inspector on ultra-wide screens.
+- Improve logs, incidents, captures, and settings with direct search targeting, pause buffering, configuration review sections, and safer unsaved-change handling.
+- Cache fingerprinted frontend assets immutably while requiring the HTML shell and font license files to revalidate.
+
+### Fixed
+
+- Prevent browser history navigation from bypassing unsaved configuration confirmation.
+- Restore saved settings correctly when changes are discarded and parse Go duration values consistently in capture details.
+- Correct desktop and mobile overflow, focus restoration, dialog semantics, text contrast, and Viewer navigation permissions.
+
 ## [2.1.1] - 2026-07-29
 
 ### Fixed

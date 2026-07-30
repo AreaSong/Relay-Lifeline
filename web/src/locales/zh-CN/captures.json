@@ -23,9 +23,11 @@
   "filteredDownload": "下载过滤内容",
   "rawDownload": "下载完整原文",
   "rawConfirm": "完整原文可能包含提示词、模型输出和个人信息。确认下载未过滤的敏感内容吗？",
+  "rawConfirmTitle": "下载敏感原文？",
   "downloaded": "捕获包已开始下载",
   "delete": "删除捕获",
   "deleteConfirm": "确认永久删除这条加密捕获吗？",
+  "deleteConfirmTitle": "永久删除捕获？",
   "requestPart": "原始请求（已过滤）",
   "attemptPart": "第 {{count}} 次 CPA 响应（已过滤）",
   "finalPart": "最终响应（已过滤）",
@@ -41,6 +43,7 @@
     "unresolved": "未解析记录",
     "rewrap": "重包裹到活动密钥",
     "rewrapConfirm": "将所有捕获的数据密钥重包裹到当前活动密钥。确认继续吗？",
+    "rewrapConfirmTitle": "轮换捕获密钥？",
     "rewrapped": "已重包裹 {{count}} 条捕获记录"
   }
 }

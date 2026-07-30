@@ -2,11 +2,11 @@ body {
   color: var(--text);
   background: var(--canvas);
   font-family: var(--font-sans);
-  letter-spacing: -.005em;
+  letter-spacing: 0;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: none; box-shadow: var(--focus); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus-color); outline-offset: 2px; box-shadow: var(--focus); }
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -35,11 +35,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .rail-identity { width: 100%; min-height: 50px; display: flex; align-items: center; gap: 11px; padding: 3px 4px; color: var(--scene-text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
 .rail-brand { width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; color: var(--scene); background: var(--signal); border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
 .rail-copy { min-width: 0; display: grid; gap: 3px; opacity: 1; transition: opacity var(--transition-fast); }
-.rail-copy strong { overflow: hidden; font-size: 13px; font-weight: 650; letter-spacing: -.015em; text-overflow: ellipsis; white-space: nowrap; }
-.rail-copy small { overflow: hidden; color: var(--scene-muted); font: 8px var(--font-mono); letter-spacing: .07em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.rail-copy strong { overflow: hidden; font-size: 13px; font-weight: 650; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+.rail-copy small { overflow: hidden; color: var(--scene-muted); font:  11px var(--font-mono); letter-spacing: 0; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 
 .app-rail nav { width: 100%; display: grid; gap: 3px; margin-top: 26px; }
-.app-rail nav::before { margin: 0 10px 9px; color: var(--scene-muted); content: "CONTROL"; font: 8px var(--font-mono); letter-spacing: .16em; opacity: .7; }
+.app-rail nav::before { margin: 0 10px 9px; color: var(--scene-muted); content: "CONTROL"; font:  11px var(--font-mono); letter-spacing: 0; opacity: .7; }
 .app-rail nav button, .rail-action, .rail-collapse {
   min-width: 0;
   min-height: 41px;
@@ -99,11 +99,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   backdrop-filter: blur(18px);
 }
 .desktop-heading { min-width: 0; }
-.workspace-eyebrow { display: block; margin-bottom: 5px; color: var(--text-faint); font: 8px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; }
+.workspace-eyebrow { display: block; margin-bottom: 5px; color: var(--text-faint); font:  11px var(--font-mono); letter-spacing: 0; text-transform: uppercase; }
 .workspace-title-row { display: flex; align-items: center; gap: 20px; }
-.workspace-header h1 { margin: 0; color: var(--text); font: 620 19px/1.1 var(--font-display); letter-spacing: -.025em; white-space: nowrap; }
+.workspace-header h1 { margin: 0; color: var(--text); font: 620 19px/1.1 var(--font-display); letter-spacing: 0; white-space: nowrap; }
 .health-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.connection { display: inline-flex; align-items: center; gap: 7px; color: var(--text-soft); font-size: 10px; }
+.connection { display: inline-flex; align-items: center; gap: 7px; color: var(--text-soft); font-size: 11px; }
 .connection i { width: 6px; height: 6px; flex: 0 0 auto; background: var(--success); border-radius: 50%; box-shadow: 0 0 0 4px var(--success-soft); }
 .connection.upstream-degraded i { background: var(--warning); box-shadow: 0 0 0 4px var(--warning-soft); }
 .connection.upstream-unknown i { background: var(--text-faint); box-shadow: 0 0 0 4px var(--surface-muted); }
@@ -130,7 +130,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .button:disabled, .icon-button:disabled { cursor: not-allowed; opacity: .5; transform: none; }
 
 .theme-selector { display: inline-grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 3px; background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.theme-selector button { min-height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 4px 9px; color: var(--text-soft); background: transparent; border: 0; border-radius: var(--radius-xs); font-size: 10px; }
+.theme-selector button { min-height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 4px 9px; color: var(--text-soft); background: transparent; border: 0; border-radius: var(--radius-xs); font-size: 11px; }
 .theme-selector button.active { color: var(--text); background: var(--surface-raised); }
 .theme-selector.compact { display: grid; grid-template-columns: 1fr; padding: 0; background: transparent; border: 0; }
 .theme-selector.compact button { width: 100%; height: 36px; min-height: 36px; padding: 0; color: var(--scene-muted); }
@@ -152,12 +152,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .login-wordmark .rail-brand { width: 36px; height: 36px; }
 .login-topology { min-height: 360px; flex: 1; display: grid; align-items: center; }
 .login-statement { max-width: 720px; position: relative; z-index: 2; margin: auto 0 0; }
-.login-statement h1 { max-width: 680px; margin: 0; font: 570 clamp(42px, 5.2vw, 78px)/.94 var(--font-display); letter-spacing: -.055em; }
+.login-statement h1 { max-width: 680px; margin: 0; font: 570 clamp(42px, 5.2vw, 78px)/.94 var(--font-display); letter-spacing: 0; }
 .login-statement strong { display: block; max-width: 600px; margin-top: 18px; color: var(--scene-text); font-size: 19px; font-weight: 500; line-height: 1.25; }
 .login-statement p { max-width: 540px; margin: 18px 0 0; color: var(--scene-muted); font-size: 13px; line-height: 1.65; }
 .login-access { min-height: 100vh; position: relative; display: grid; place-items: center; padding: clamp(24px, 4vw, 58px); color: var(--text); background: var(--surface); border-left: 1px solid var(--border); }
 .login-language { position: absolute; z-index: 3; top: 20px; right: 20px; display: flex; gap: 8px; }
 .login-panel { width: min(390px, 100%); padding: 0; background: transparent; border: 0; }
-.login-panel h2 { margin: 0 0 8px; font: 620 28px var(--font-display); letter-spacing: -.035em; }
+.login-panel h2 { margin: 0 0 8px; font: 620 28px var(--font-display); letter-spacing: 0; }
 .login-panel > p { margin: 0 0 30px; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
 .login-panel .button { width: 100%; margin-top: 18px; }

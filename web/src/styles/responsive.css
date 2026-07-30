@@ -76,9 +76,10 @@
   .mobile-topbar > div { min-width: 0; }
   .mobile-topbar .rail-brand { width: 34px; height: 34px; }
   .mobile-topbar strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-topbar span { display: block; margin-top: 2px; overflow: hidden; color: var(--text-soft); font: 8px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-topbar span { display: block; margin-top: 2px; overflow: hidden; color: var(--text-soft); font:  11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-bottom-nav { min-height: 68px; position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 5px max(5px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); color: var(--text-soft); background: color-mix(in srgb, var(--surface) 96%, transparent); border-top: 1px solid var(--border); backdrop-filter: blur(18px); }
-  .mobile-bottom-nav button { min-width: 0; min-height: 54px; display: grid; place-items: center; align-content: center; gap: 4px; padding: 4px 2px; color: inherit; background: transparent; border: 0; border-radius: var(--radius-sm); font-size: 8px; }
+  .mobile-bottom-nav.items-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .mobile-bottom-nav button { min-width: 0; min-height: 54px; display: grid; place-items: center; align-content: center; gap: 4px; padding: 4px 2px; color: inherit; background: transparent; border: 0; border-radius: var(--radius-sm); font-size: 11px; }
   .mobile-bottom-nav button.active { color: var(--accent); background: var(--accent-soft); }
   .mobile-tools { position: fixed; z-index: 45; right: 8px; bottom: 74px; left: 8px; display: grid; gap: 8px; padding: 13px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-float); }
   .mobile-tools[hidden] { display: none; }
@@ -94,7 +95,7 @@
   .overview-priority { grid-row: 4; min-height: 360px; }
   .signal-hero-copy { top: 20px; left: 16px; }
   .signal-hero h2 { max-width: 340px; font-size: 28px; }
-  .signal-hero-copy p { max-width: 340px; font-size: 10px; }
+  .signal-hero-copy p { max-width: 340px; font-size: 11px; }
   .signal-topology__nodes { right: 5%; bottom: 70px; left: 5%; }
   .signal-topology__summary { right: 14px; bottom: 14px; }
   .signal-context { bottom: 15px; left: 15px; }
@@ -118,7 +119,7 @@
   .responsive-table thead { display: none; }
   .responsive-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 8px; padding: 12px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
   .responsive-table td { min-width: 0; display: block; padding: 0; border: 0; }
-  .responsive-table td::before { display: block; margin-bottom: 4px; color: var(--text-faint); content: attr(data-label); font: 8px var(--font-mono); text-transform: uppercase; }
+  .responsive-table td::before { display: block; margin-bottom: 4px; color: var(--text-faint); content: attr(data-label); font:  11px var(--font-mono); text-transform: uppercase; }
   .responsive-table td:first-child, .responsive-table td:last-child { grid-column: 1 / -1; }
   .responsive-table .row-actions { justify-content: flex-start; }
   .responsive-table .subtle { max-width: 100%; }
@@ -155,7 +156,7 @@
   .signal-hero h2 { font-size: 25px; }
   .signal-hero-copy p { max-width: 300px; }
   .signal-topology__nodes { right: 7px; left: 7px; gap: 4%; }
-  .signal-topology__node strong { font-size: 6px; }
+  .signal-topology__node strong { font-size: 11px; }
   .signal-topology__summary { align-items: flex-end; flex-direction: column; gap: 6px; }
   .signal-context { max-width: 48%; }
   .window-integrity { display: none; }
@@ -168,7 +169,7 @@
   .filter-controls { grid-template-columns: 1fr; }
   .responsive-table tr { grid-template-columns: 1fr; }
   .responsive-table td, .responsive-table td:first-child, .responsive-table td:last-child { grid-column: 1; }
-  .mobile-bottom-nav button { font-size: 7px; }
+  .mobile-bottom-nav button { font-size: 11px; }
   .mobile-bottom-nav svg { width: 18px; height: 18px; }
   .content-section, .settings-stack section { padding-inline: 12px; }
 }

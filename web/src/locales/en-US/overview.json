@@ -42,7 +42,8 @@
     "kicker": "Live telemetry",
     "title": "Relay operations pulse",
     "complete": "Complete window",
-    "partial": "Accumulating data"
+    "partial": "Accumulating data",
+    "observation": "Observed state"
   },
   "charts": {
     "reliability": "Reliability trend",
@@ -67,6 +68,9 @@
     "kicker": "Response priority",
     "title": "Current situation",
     "incident": "Incident first",
+    "paused": "Service paused",
+    "waiting": "Waiting to recover",
+    "alert": "Alert first",
     "request": "Active request",
     "stable": "Path stable",
     "incidentHeadline": "Sustained upstream errors detected",
@@ -80,6 +84,18 @@
     "started": "Elapsed",
     "stableHeadline": "No active incidents",
     "stableDescription": "Relay-Lifeline is healthy and the upstream path is available or standing by.",
+    "pausedHeadline": "Request intake is paused",
+    "pausedDescription": "Existing request state is preserved and processing will continue under the current policy after resume.",
+    "adviceTitle": "Response guidance",
+    "ruleBased": "Generated from current-state rules",
+    "advice": {
+      "paused": "Resume request intake after confirming the maintenance window has ended.",
+      "incident": "Review the dominant error category, then watch the next recovery attempt.",
+      "waiting": "Keep the client connection open and do not submit a duplicate request.",
+      "request": "The request is progressing normally; no intervention is needed yet.",
+      "alert": "Open the related request or incident and confirm the alert is still actionable.",
+      "stable": "The path is stable; keep the current policy and continue observing."
+    },
     "alerts": "Unresolved alerts"
   },
   "errorCategories": { "transport": "Transport", "protocol": "Protocol", "auth": "Authentication", "rate_limit": "Rate limit", "client": "Client request", "server": "Upstream server", "http": "Other HTTP" },

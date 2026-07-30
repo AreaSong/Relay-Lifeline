@@ -21,3 +21,21 @@ func TestHandlerAllowsChartStyleAttributesWithoutRelaxingScripts(t *testing.T) {
 		t.Fatalf("CSP 不应放宽内联脚本: %q", policy)
 	}
 }
+
+func TestHandlerCachesFingerprintedAssetsButRevalidatesShell(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/admin/", want: "no-cache"},
+		{path: "/admin/assets/index-example.js", want: "public, max-age=31536000, immutable"},
+	}
+	for _, test := range tests {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		Handler().ServeHTTP(recorder, request)
+		if got := recorder.Header().Get("Cache-Control"); got != test.want {
+			t.Fatalf("%s Cache-Control = %q, want %q", test.path, got, test.want)
+		}
+	}
+}

@@ -104,7 +104,7 @@ function tooltipStyle(theme: OperationsChartTheme) {
     borderWidth: 1,
     padding: [9, 11],
     confine: true,
-    textStyle: { color: theme.foreground, fontSize: 11 },
+    textStyle: { color: theme.foreground, fontSize: 11, fontFamily: '"Source Sans 3", "Source Han Sans SC", sans-serif' },
     extraCssText: "box-shadow: 0 16px 48px rgba(0,0,0,.22); border-radius: 6px;",
   };
 }
@@ -117,7 +117,7 @@ function categoryAxis(data: string[], theme: OperationsChartTheme, name?: string
     nameTextStyle: { color: theme.muted },
     axisLine: { lineStyle: { color: theme.grid } },
     axisTick: { show: false },
-    axisLabel: { color: theme.muted, hideOverlap: true, fontSize: 10 },
+    axisLabel: { color: theme.muted, hideOverlap: true, fontSize: 11 },
   };
 }
 
@@ -129,7 +129,7 @@ function valueAxis(theme: OperationsChartTheme, name?: string) {
     nameTextStyle: { color: theme.muted },
     axisLine: { show: false },
     axisTick: { show: false },
-    axisLabel: { color: theme.muted, fontSize: 10 },
+    axisLabel: { color: theme.muted, fontSize: 11 },
     splitLine: { lineStyle: { color: theme.grid, type: "dashed", opacity: 0.72 } },
   };
 }
@@ -139,9 +139,9 @@ function baseCartesian(theme: OperationsChartTheme, animated: boolean) {
     animation: animated,
     animationDuration: 360,
     backgroundColor: theme.surface,
-    textStyle: { color: theme.foreground },
+    textStyle: { color: theme.foreground, fontFamily: '"Source Sans 3", "Source Han Sans SC", sans-serif', fontSize: 11 },
     tooltip: { trigger: "axis", axisPointer: { type: "cross", lineStyle: { color: theme.muted, opacity: 0.5 }, crossStyle: { color: theme.muted, opacity: 0.5 } }, ...tooltipStyle(theme) },
-    legend: { top: 0, left: 0, textStyle: { color: theme.muted, fontSize: 10 }, itemWidth: 12, itemHeight: 7, itemGap: 16 },
+    legend: { top: 0, left: 0, textStyle: { color: theme.muted, fontSize: 11 }, itemWidth: 12, itemHeight: 7, itemGap: 16 },
     grid: { top: 44, right: 16, bottom: 22, left: 34, containLabel: true },
   };
 }
@@ -224,15 +224,16 @@ function recoveryOption(data: RecoveryPoint[], labels: OperationsChartLabels, th
   return {
     ...baseCartesian(theme, animated),
     legend: { show: false },
-    grid: { top: 18, right: 18, bottom: 34, left: 42, containLabel: true },
-    xAxis: categoryAxis(data.map((point) => point.bucket), theme, labels.duration),
-    yAxis: valueAxis(theme, labels.requests),
+    grid: { top: 14, right: 24, bottom: 22, left: 18, containLabel: true },
+    xAxis: valueAxis(theme, labels.requests),
+    yAxis: { ...categoryAxis(data.map((point) => point.bucket), theme, labels.duration), inverse: true },
     series: [{
       name: labels.requests,
       type: "bar",
       data: data.map((point) => safeValue(point.count)),
       itemStyle: { color: theme.accent },
-      barMaxWidth: 30,
+      label: { show: true, position: "right", color: theme.muted },
+      barMaxWidth: 18,
     }],
   };
 }
@@ -274,9 +275,10 @@ interface ChartCardProps {
   collapseLabel?: string;
   onToggleExpand?: () => void;
   showHeader?: boolean;
+  modalRef?: RefObject<HTMLElement | null>;
 }
 
-function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef, active = true, expanded = false, expandLabel, collapseLabel, onToggleExpand, showHeader = true }: ChartCardProps) {
+function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef, active = true, expanded = false, expandLabel, collapseLabel, onToggleExpand, showHeader = true, modalRef }: ChartCardProps) {
   const unavailable = loadState === "failed";
   const classes = [
     "operations-chart",
@@ -287,7 +289,7 @@ function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableL
     expanded ? "is-expanded" : "",
     showHeader ? "" : "operations-chart--headerless",
   ].filter(Boolean).join(" ");
-  return <article className={classes} aria-busy={loadState === "loading"} aria-hidden={!active}>
+  return <article ref={modalRef} className={classes} aria-busy={loadState === "loading"} aria-hidden={!active} role={expanded ? "dialog" : undefined} aria-modal={expanded || undefined} aria-label={expanded ? title : undefined} tabIndex={expanded ? -1 : undefined}>
     {showHeader && <header className="operations-chart__header"><h3>{title}</h3>{onToggleExpand && <button className="chart-expand" aria-label={expanded ? collapseLabel : expandLabel} onClick={onToggleExpand}>{expanded ? <X size={16} /> : <Maximize2 size={15} />}</button>}</header>}
     <div className="operations-chart__body">
       <div
@@ -322,6 +324,8 @@ export function OperationsCharts({
   const instancesRef = useRef<ChartInstances>({});
   const optionsRef = useRef<ChartOptions>({ reliability: null, pressure: null, errors: null, recovery: null });
   const secondaryManuallySelected = useRef(false);
+  const reliabilityModalRef = useRef<HTMLElement>(null);
+  const secondaryModalRef = useRef<HTMLElement>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [secondary, setSecondary] = useState<Exclude<ChartKey, "reliability">>(preferredSecondary);
   const [expanded, setExpanded] = useState<"reliability" | "secondary" | null>(null);
@@ -402,9 +406,20 @@ export function OperationsCharts({
 
   useEffect(() => {
     if (!expanded) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(null); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
+    const modal = expanded === "reliability" ? reliabilityModalRef.current : secondaryModalRef.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modal?.querySelector<HTMLElement>("button")?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setExpanded(null); return; }
+      if (event.key !== "Tab" || !modal) return;
+      const focusable = Array.from(modal.querySelectorAll<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])')).filter((element) => !element.hasAttribute("disabled"));
+      if (!focusable.length) { event.preventDefault(); modal.focus(); return; }
+      const first = focusable[0]; const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => { window.removeEventListener("keydown", handleKey); previous?.focus(); };
   }, [expanded]);
 
   const titles = { pressure: labels.pressureTitle, errors: labels.errorsTitle, recovery: labels.recoveryTitle };
@@ -412,8 +427,8 @@ export function OperationsCharts({
 
   return <>
     <div className={["operations-charts", className, expanded ? "has-expanded-chart" : ""].filter(Boolean).join(" ")}>
-      <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} />
-      <article className={`operations-chart-deck${expanded === "secondary" ? " is-expanded" : ""}`}>
+      <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} modalRef={reliabilityModalRef} />
+      <article ref={secondaryModalRef} className={`operations-chart-deck${expanded === "secondary" ? " is-expanded" : ""}`} role={expanded === "secondary" ? "dialog" : undefined} aria-modal={expanded === "secondary" || undefined} aria-label={expanded === "secondary" ? titles[secondary] : undefined} tabIndex={expanded === "secondary" ? -1 : undefined}>
         <header className="operations-chart-deck__header"><div className="chart-tabs" role="tablist" aria-label={labels.pressureTitle}>
           {secondaryKeys.map((key) => <button key={key} role="tab" aria-selected={secondary === key} className={secondary === key ? "active" : ""} onClick={() => { secondaryManuallySelected.current = true; setSecondary(key); }}>{titles[key]}</button>)}
         </div><button className="chart-expand" aria-label={expanded === "secondary" ? labels.collapse : labels.expand} onClick={() => setExpanded((value) => value === "secondary" ? null : "secondary")}>{expanded === "secondary" ? <X size={16} /> : <Maximize2 size={15} />}</button></header>
