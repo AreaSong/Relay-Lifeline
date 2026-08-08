@@ -1,5 +1,5 @@
 import { RadioTower } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { OperationsCharts, operationsChartTheme } from "../components/OperationsCharts";
 import { OverviewMetrics } from "../components/OverviewMetrics";
@@ -21,6 +21,9 @@ export function OverviewView({ status, metrics, errors, alerts, incidents, windo
   selectedRequestId?: string;
 }) {
   const { t } = useTranslation(["common", "overview"]);
+  const [activeSelectedId, setActiveSelectedId] = useState<string | null>(null);
+  const currentSelectedId = activeSelectedId || selectedRequestId;
+
   const nextRetryAt = useMemo(() => status.requests.map((request) => request.nextRetryAt).filter(Boolean).sort()[0], [status.requests]);
   const state = status.upstream.state;
   const heroTitle = t(`overview:signal.${state}Title`);
@@ -63,13 +66,31 @@ export function OverviewView({ status, metrics, errors, alerts, incidents, windo
         nextRetryAt={nextRetryAt}
         locale={locale}
         labels={topologyLabels}
-        onSelect={onOpen}
-        selectedRequestId={selectedRequestId}
+        onSelect={(id) => {
+          if (!id) {
+            setActiveSelectedId(null);
+            onOpen("");
+          } else {
+            setActiveSelectedId(id);
+            onOpen(id);
+          }
+        }}
+        selectedRequestId={currentSelectedId}
       />
       <div className="signal-context" aria-hidden="true"><span>{t("overview:incident.dominant")}</span><strong>{dominantError ? t(`overview:errorCategories.${dominantError}`, { defaultValue: dominantError }) : t("overview:incident.stable")}</strong></div>
     </section>
 
-    <OverviewPriorityPanel alerts={alerts} incidents={incidents} requests={status.requests} locale={locale} onOpen={onOpen} idSuffix="main" paused={status.paused} />
+    <OverviewPriorityPanel
+      alerts={alerts}
+      incidents={incidents}
+      requests={status.requests}
+      locale={locale}
+      onOpen={onOpen}
+      idSuffix="main"
+      paused={status.paused}
+      selectedRequestId={currentSelectedId}
+      onClearSelected={() => setActiveSelectedId(null)}
+    />
 
     <OperationsCharts
       reliability={metrics?.series || []}

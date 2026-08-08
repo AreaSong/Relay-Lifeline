@@ -16,53 +16,149 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .app-shell.rail-collapsed { grid-template-columns: var(--rail-collapsed) minmax(0, 1fr); }
 
+.app-shel.app-rail-container {
+  padding: 14px 0 14px 14px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
 .app-shell > aside.app-rail {
   width: 100%;
-  height: 100vh;
-  min-height: 640px;
-  position: sticky;
-  z-index: 30;
-  top: 0;
+  height: calc(100vh - 28px);
   display: flex;
   flex-direction: column;
-  padding: 14px 12px 12px;
+  padding: 16px 14px 14px;
   overflow: hidden;
   color: var(--scene-text);
-  background: var(--scene);
-  border-right: 1px solid var(--scene-line);
+  background: var(--surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3d-panel);
 }
-.app-rail::after { width: 1px; height: 26%; position: absolute; right: -1px; bottom: 8%; content: ""; background: var(--signal); opacity: .5; }
-.rail-identity { width: 100%; min-height: 50px; display: flex; align-items: center; gap: 11px; padding: 3px 4px; color: var(--scene-text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
-.rail-brand { width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; color: var(--scene); background: var(--signal); border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
-.rail-copy { min-width: 0; display: grid; gap: 3px; opacity: 1; transition: opacity var(--transition-fast); }
-.rail-copy strong { overflow: hidden; font-size: 13px; font-weight: 650; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
-.rail-copy small { overflow: hidden; color: var(--scene-muted); font:  11px var(--font-mono); letter-spacing: 0; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 
-.app-rail nav { width: 100%; display: grid; gap: 3px; margin-top: 26px; }
-.app-rail nav::before { margin: 0 10px 9px; color: var(--scene-muted); content: "CONTROL"; font:  11px var(--font-mono); letter-spacing: 0; opacity: .7; }
-.app-rail nav button, .rail-action, .rail-collapse {
-  min-width: 0;
-  min-height: 41px;
+.rail-identity {
+  width: 100%;
+  min-height: 52px;
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 12px;
+  padding: 4px 6px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.rail-brand {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #000;
+  background: linear-gradient(135deg, var(--neon-emerald-bright), var(--neon-emerald));
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 18px var(--neon-emerald-glow);
+}
+
+.rail-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  opacity: 1;
+  transition: opacity var(--transition-fast);
+}
+
+.rail-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-copy small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font: 11px var(--font-mono);
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.app-rail nav {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  margin-top: 24px;
+}
+
+.app-rail nav::before {
+  margin: 0 10px 10px;
+  color: var(--text-faint);
+  content: "CONTROL MENU";
+  font: 10px var(--font-mono);
+  letter-spacing: 0.1em;
+  opacity: 0.7;
+}
+
+.app-rail nav button, .rail-action, .rail-collapse {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   position: relative;
-  padding: 0 11px;
-  color: var(--scene-muted);
+  padding: 0 14px;
+  color: var(--text-soft);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  border-radius: var(--radius-md);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-bounce);
 }
+
 .app-rail nav button svg, .rail-action svg, .rail-collapse svg { flex: 0 0 auto; }
-.app-rail nav button:hover, .app-rail nav button.active, .rail-action:hover, .rail-collapse:hover { color: var(--scene-text); background: var(--scene-raised); border-color: var(--scene-line); }
-.app-rail nav button.active { color: var(--signal); }
-.app-rail nav button.active::before { width: 2px; height: 19px; position: absolute; left: -13px; content: ""; background: var(--signal); box-shadow: 0 0 16px rgba(105, 227, 159, .65); }
-.rail-label { overflow: hidden; font-size: 11px; font-weight: 540; text-overflow: ellipsis; white-space: nowrap; }
+
+.app-rail nav button:hover, .rail-action:hover, .rail-collapse:hover {
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--glass-rim);
+  transform: translateX(2px);
+}
+
+.app-rail nav button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: inset 0 0 12px var(--neon-emerald-soft);
+  font-weight: 600;
+}
+
+.app-rail nav button.active::before {
+  width: 3px;
+  height: 22px;
+  position: absolute;
+  left: 0;
+  content: "";
+  background: var(--neon-emerald);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 12px var(--neon-emerald);
+}
+
+.rail-label { overflow: hidden; font-size: 13px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .rail-footer { width: 100%; display: grid; gap: 8px; margin-top: auto; }
-.rail-utilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding-bottom: 8px; border-bottom: 1px solid var(--scene-line); }
-.rail-utilities .theme-selector, .rail-utilities .language-selector, .rail-utilities .rail-action { width: 100%; height: 36px; }
-.rail-utilities .rail-action { min-height: 36px; justify-content: center; padding: 0; }
+.rail-utilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.rail-utilities .theme-selector, .rail-utilities .language-selector, .rail-utilities .rail-action { width: 100%; height: 38px; }
+.rail-utilities .rail-action { min-height: 38px; justify-content: center; padding: 0; }
 .rail-collapse { width: 100%; }
 
 .rail-collapsed .app-rail { padding-inline: 10px; }

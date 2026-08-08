@@ -110,6 +110,7 @@ export function App() {
   const [events, setEvents] = useState<MonitoringEvent[]>([]);
   const [mobileTools, setMobileTools] = useState(false);
   const [searchTarget, setSearchTarget] = useState<SearchTarget | null>(null);
+  const [selectedOverviewRequestId, setSelectedOverviewRequestId] = useState<string | undefined>(undefined);
   const [railCollapsed, setRailCollapsed] = useState(storedRailState);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
@@ -320,7 +321,7 @@ export function App() {
     />
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
-        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={openTimeline} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={timeline?.id} />}
+        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={(id) => setSelectedOverviewRequestId(id)} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={selectedOverviewRequestId} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} canOperate={canOperate} />}
         {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
         {view === "incidents" && <IncidentsView incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} />}
@@ -332,7 +333,7 @@ export function App() {
     </main>
 
     {view === "overview" && <aside className="desktop-overview-inspector" aria-label={t("overview:priority.title")}>
-      <OverviewPriorityPanel alerts={alerts} incidents={incidents} requests={status.requests} locale={locale} onOpen={openTimeline} idSuffix="inspector" paused={status.paused} />
+      <OverviewPriorityPanel alerts={alerts} incidents={incidents} requests={status.requests} locale={locale} onOpen={openTimeline} idSuffix="inspector" paused={status.paused} selectedRequestId={selectedOverviewRequestId} onClearSelected={() => setSelectedOverviewRequestId(undefined)} />
     </aside>}
 
     <nav className={`mobile-bottom-nav items-${mobileNavigation.length}`} aria-label={t("common:brandSubtitle")}>{mobileNavigation.map((itemView) => { const Icon = iconForView(itemView); return <button key={itemView} aria-current={view === itemView ? "page" : undefined} className={view === itemView ? "active" : ""} onClick={() => { setSearchTarget(null); void selectView(itemView); }}><Icon size={19} /><span>{t(`common:nav.${itemView}`)}</span></button>; })}</nav>

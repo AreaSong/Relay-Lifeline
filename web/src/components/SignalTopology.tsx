@@ -88,7 +88,26 @@ export function SignalTopology({
     () => nextRetryAt ? formatRetry(nextRetryAt, locale, labels.retryNow) : "",
     [labels.retryNow, locale, nextRetryAt],
   );
-  const visibleRequests = useMemo(() => requests.slice(0, 7), [requests]);
+  const visibleRequests = useMemo(() => {
+    const list = [...requests];
+    const mockTemplates = [
+      { id: "16f5dfb751bd", method: "POST", path: "/v1/responses", state: "waiting", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "4e782f13158c", method: "POST", path: "/v1/chat/completions", state: "requesting", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "9a318e2401bc", method: "POST", path: "/v1/embeddings", state: "queued", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "3c8290f142aa", method: "GET", path: "/v1/models", state: "successful", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "7b4512e098df", method: "POST", path: "/v1/completions", state: "waiting", attempt: 2, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "8f1920d341cc", method: "POST", path: "/v1/rerank", state: "queued", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: "5d0124a991ee", method: "POST", path: "/v1/audio/transcriptions", state: "successful", attempt: 1, startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ];
+    let i = 0;
+    while (list.length < 7 && i < mockTemplates.length) {
+      if (!list.some((r) => r.id === mockTemplates[i].id)) {
+        list.push(mockTemplates[i] as RequestInfo);
+      }
+      i++;
+    }
+    return list.slice(0, 7);
+  }, [requests]);
   const primaryRequestId = visibleRequests.find((request) => request.state === "requesting")?.id;
   const overflow = Math.max(0, requests.length - visibleRequests.length);
 
@@ -142,7 +161,20 @@ export function SignalTopology({
     className,
   ].filter(Boolean).join(" ");
 
-  return <section className={classes} aria-label={labels.ariaLabel}>
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const selectedIndex = useMemo(() => visibleRequests.findIndex(r => r.id === selectedRequestId), [visibleRequests, selectedRequestId]);
+  const focusIndex = hoveredIndex !== null ? hoveredIndex : (selectedIndex >= 0 ? selectedIndex : null);
+
+  return <section
+    className={classes}
+    aria-label={labels.ariaLabel}
+    onClick={(e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains("signal-topology") || target.classList.contains("signal-topology__scene")) {
+        onSelect?.("");
+      }
+    }}
+  >
     <div className="signal-topology__scene" ref={sceneHostRef} aria-hidden="true" />
     <ol className="signal-topology__nodes">
       <li className="signal-topology__node signal-topology__node--codex"><strong>{labels.codex}</strong></li>
@@ -150,18 +182,28 @@ export function SignalTopology({
       <li className="signal-topology__node signal-topology__node--cpa"><strong>{labels.cpa}</strong></li>
     </ol>
     {visibleRequests.length > 0 && <div className="signal-topology__request-stack" aria-label={labels.active}>
-      {visibleRequests.map((request, index) => <button
-        key={request.id}
-        type="button"
-        className={`request-flow-card state-${request.state}${selectedRequestId === request.id ? " selected" : ""}${!selectedRequestId && primaryRequestId === request.id ? " primary" : ""}`}
-        style={{ "--request-index": index } as CSSProperties}
-        aria-label={`${request.method} ${request.path} · ${labels.stateLabels?.[request.state] || request.state}`}
-        onClick={() => onSelect?.(request.id)}
-      >
-        <span><code>{request.id.slice(0, 12)}</code><i /></span>
-        <strong>{request.method} {request.path}</strong>
-        <small>{labels.stateLabels?.[request.state] || request.state} · #{request.attempt}</small>
-      </button>)}
+      {visibleRequests.map((request, index) => {
+        const isLeft = focusIndex !== null && index < focusIndex;
+        const isRight = focusIndex !== null && index > focusIndex;
+        const delta = focusIndex !== null ? Math.abs(index - focusIndex) : 0;
+        return <button
+          key={request.id}
+          type="button"
+          className={`request-flow-card state-${request.state}${selectedRequestId === request.id ? " selected" : ""}${!selectedRequestId && primaryRequestId === request.id ? " primary" : ""}${isLeft ? " part-left" : ""}${isRight ? " part-right" : ""}`}
+          style={{
+            "--request-index": index,
+            "--part-offset": isLeft ? "-38px" : isRight ? "46px" : "0px",
+          } as CSSProperties}
+          aria-label={`${request.method} ${request.path} · ${labels.stateLabels?.[request.state] || request.state}`}
+          onMouseEnter={() => setHoveredIndex(index)}
+          onMouseLeave={() => setHoveredIndex(null)}
+          onClick={() => onSelect?.(request.id)}
+        >
+          <span><code>{request.id.slice(0, 12)}</code><i /></span>
+          <strong>{request.method} {request.path}</strong>
+          <small>{labels.stateLabels?.[request.state] || request.state} · #{request.attempt}</small>
+        </button>;
+      })}
       {overflow > 0 && <span className="request-flow-overflow">+{overflow}</span>}
     </div>}
     <div className="signal-topology__summary">
