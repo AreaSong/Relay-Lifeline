@@ -23,8 +23,10 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
+	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -295,6 +297,95 @@ func TestLifecycleIdempotencyConfiguration(t *testing.T) {
 	prepareIdempotencyKey(header, config.LifecycleConfig{})
 	if header.Get("Idempotency-Key") != "" {
 		t.Fatal("关闭保留与生成后仍透传幂等键")
+	}
+}
+
+func TestGatewayRepeatExecutionPreservesOrRegeneratesIdempotencyKey(t *testing.T) {
+	keys := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		keys <- request.Header.Get("Idempotency-Key")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"status":"completed"}`)
+	}))
+	defer upstream.Close()
+	gateway, _ := testGateway(t, upstream.URL)
+	template := repeat.Template{
+		Method: http.MethodPost, Path: "/v1/responses", Headers: http.Header{"Idempotency-Key": []string{"client-key"}},
+		Body: []byte(`{"stream":false}`),
+	}
+	preserved := gateway.ExecuteRepeat(context.Background(), template, "preserve", "preserved")
+	regenerated := gateway.ExecuteRepeat(context.Background(), template, "regenerate", "regenerated")
+	if !preserved.Success || !regenerated.Success {
+		t.Fatalf("持续任务执行结果异常: preserved=%+v regenerated=%+v", preserved, regenerated)
+	}
+	preservedKey, regeneratedKey := <-keys, <-keys
+	if preservedKey != "client-key" {
+		t.Fatalf("保留模式修改了客户端幂等键: %q", preservedKey)
+	}
+	if regeneratedKey == "client-key" || !strings.HasPrefix(regeneratedKey, "lifeline-") {
+		t.Fatalf("重新生成模式未生成新幂等键: %q", regeneratedKey)
+	}
+}
+
+func TestGatewayRetryPolicyOverridesAttemptLimitAndExpires(t *testing.T) {
+	var attempts atomic.Int32
+	firstAttempt := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			close(firstAttempt)
+			<-releaseFirst
+		}
+		http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+	gateway, registry := testGateway(t, upstream.URL)
+	cfg := gateway.store.Get()
+	cfg.Retry.MaxAttempts = 1
+	gateway.store = config.NewStore("", cfg)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":false}`))
+		if err == nil {
+			_, _ = io.ReadAll(response.Body)
+			err = response.Body.Close()
+		}
+		done <- err
+	}()
+	select {
+	case <-firstAttempt:
+	case <-time.After(time.Second):
+		t.Fatal("首轮上游请求未开始")
+	}
+	snapshot := registry.Snapshot(false)
+	if len(snapshot.Requests) != 1 || !registry.SetRetryPolicy(snapshot.Requests[0].ID, 40*time.Millisecond, 5*time.Millisecond) {
+		t.Fatalf("无法给活动请求设置限时恢复: %+v", snapshot.Requests)
+	}
+	close(releaseFirst)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("限时恢复请求未在截止后结束")
+	}
+	if attempts.Load() <= 1 {
+		t.Fatalf("限时恢复未覆盖全局最大尝试次数: %d", attempts.Load())
+	}
+	history := registry.History()
+	if len(history) != 1 || history[0].State != string(lifecycle.StateExpired) {
+		t.Fatalf("限时恢复截止终态异常: %+v", history)
+	}
+	foundExpired := false
+	for _, event := range history[0].Events {
+		foundExpired = foundExpired || event.Type == "retry_window_expired"
+	}
+	if !foundExpired {
+		t.Fatalf("时间线缺少限时恢复到期事件: %+v", history[0].Events)
 	}
 }
 

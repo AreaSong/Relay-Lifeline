@@ -1,4 +1,4 @@
-import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
+import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RepeatTask, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -263,6 +263,26 @@ export class ApiClient {
 
   retry(id: string) {
     return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}/retry`, { method: "POST" });
+  }
+
+  setRetryPolicy(id: string, duration: string, interval: string) {
+    return this.request<{ accepted: boolean; retryDeadline: string; retryIntervalMilliseconds: number }>(`/requests/${encodeURIComponent(id)}/retry-policy`, { method: "POST", body: JSON.stringify({ duration, interval }) });
+  }
+
+  repeatTasks() {
+    return this.request<RepeatTask[]>("/repeat-tasks", undefined, (value) => expectArray(value, "repeatTasks"));
+  }
+
+  createRepeatTask(id: string, input: { interval: string; duration: string; idempotency: "preserve" | "regenerate"; confirmForever: boolean }) {
+    return this.request<RepeatTask>(`/requests/${encodeURIComponent(id)}/repeat`, { method: "POST", body: JSON.stringify(input) }, (value) => expectObject(value, "repeatTask"));
+  }
+
+  repeatTaskAction(id: string, action: "pause" | "resume" | "run") {
+    return this.request<RepeatTask>(`/repeat-tasks/${encodeURIComponent(id)}/${action}`, { method: "POST" }, (value) => expectObject(value, "repeatTask"));
+  }
+
+  stopRepeatTask(id: string) {
+    return this.request<RepeatTask>(`/repeat-tasks/${encodeURIComponent(id)}`, { method: "DELETE" }, (value) => expectObject(value, "repeatTask"));
   }
 
   cancel(id: string) {

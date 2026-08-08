@@ -24,6 +24,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
+	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -341,6 +342,82 @@ func TestManagementRolesSeparateReadOperateAndSensitiveAccess(t *testing.T) {
 	if operatorSession.Code != http.StatusOK || !strings.Contains(operatorSession.Body.String(), `"role":"operator"`) || !strings.Contains(operatorSession.Body.String(), "operate") || strings.Contains(operatorSession.Body.String(), "sensitive") {
 		t.Fatalf("Operator 会话能力异常: %d %s", operatorSession.Code, operatorSession.Body.String())
 	}
+}
+
+func TestRepeatTaskAndRetryPolicyAPIs(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	t.Setenv("RELAY_LIFELINE_VIEWER_KEY", "viewer-key-12345678901234")
+	registry := state.NewRegistry()
+	requestID, _ := registry.Add("POST", "/v1/responses", func() {})
+	manager, err := repeat.New(nil, func(_ context.Context, _ repeat.Template, _ string, id string) repeat.Execution {
+		return repeat.Execution{ID: id, Success: true, Completed: time.Now()}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	manager.RegisterSource(requestID, repeat.Template{Method: "POST", Path: "/v1/responses", Headers: make(http.Header)})
+	handler := New(config.NewStore("", config.Default()), registry, state.NewController())
+	handler.SetRepeatManager(manager)
+
+	viewer := repeatAPIRequest(handler, "viewer-key-12345678901234", http.MethodPost, "/admin/api/requests/"+requestID+"/retry-policy", `{"duration":"1m","interval":"5s"}`)
+	if viewer.Code != http.StatusForbidden {
+		t.Fatalf("Viewer 不应修改请求策略: %d %s", viewer.Code, viewer.Body.String())
+	}
+	policy := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/requests/"+requestID+"/retry-policy", `{"duration":"1m","interval":"5s"}`)
+	if policy.Code != http.StatusOK {
+		t.Fatalf("设置限时恢复失败: %d %s", policy.Code, policy.Body.String())
+	}
+	storedPolicy, ok := registry.RetryPolicy(requestID)
+	if !ok || storedPolicy.Interval != 5*time.Second {
+		t.Fatalf("限时恢复策略未生效: %+v", storedPolicy)
+	}
+	missing := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/requests/missing/retry-policy", `{"duration":"1m","interval":"5s"}`)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("非活动请求应返回 404: %d %s", missing.Code, missing.Body.String())
+	}
+
+	invalid := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/requests/"+requestID+"/repeat", `{"interval":"5s","duration":"invalid","idempotency":"preserve","confirmForever":true}`)
+	if invalid.Code != http.StatusBadRequest || len(manager.List()) != 0 {
+		t.Fatalf("无效时长不应创建任务: code=%d tasks=%+v", invalid.Code, manager.List())
+	}
+	forever := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/requests/"+requestID+"/repeat", `{"interval":"5s","duration":"","idempotency":"preserve","confirmForever":false}`)
+	if forever.Code != http.StatusBadRequest || len(manager.List()) != 0 {
+		t.Fatalf("永久任务未经确认不应创建: code=%d tasks=%+v", forever.Code, manager.List())
+	}
+	created := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/requests/"+requestID+"/repeat", `{"interval":"5s","duration":"1m","idempotency":"preserve"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("创建持续任务失败: %d %s", created.Code, created.Body.String())
+	}
+	var task repeat.Task
+	if err := json.NewDecoder(created.Body).Decode(&task); err != nil {
+		t.Fatal(err)
+	}
+	listed := repeatAPIRequest(handler, "viewer-key-12345678901234", http.MethodGet, "/admin/api/repeat-tasks", "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), task.ID) {
+		t.Fatalf("Viewer 应可读取持续任务: %d %s", listed.Code, listed.Body.String())
+	}
+	for _, action := range []string{"pause", "resume", "run"} {
+		response := repeatAPIRequest(handler, "123456789012345678901234", http.MethodPost, "/admin/api/repeat-tasks/"+task.ID+"/"+action, "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("持续任务操作 %s 失败: %d %s", action, response.Code, response.Body.String())
+		}
+	}
+	stopped := repeatAPIRequest(handler, "123456789012345678901234", http.MethodDelete, "/admin/api/repeat-tasks/"+task.ID, "")
+	if stopped.Code != http.StatusOK || !strings.Contains(stopped.Body.String(), `"state":"stopped"`) {
+		t.Fatalf("停止持续任务失败: %d %s", stopped.Code, stopped.Body.String())
+	}
+}
+
+func repeatAPIRequest(handler http.Handler, key, method, path, body string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+key)
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	return recorder
 }
 
 func TestAdminMonitoringAPIsAndSecurityEventCursor(t *testing.T) {

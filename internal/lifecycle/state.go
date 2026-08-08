@@ -36,7 +36,7 @@ const (
 var transitions = map[State]map[State]bool{
 	StateReceived:   allow(StateQueued, StateRejected, StateCanceled, StateExpired),
 	StateQueued:     allow(StateForwarding, StateRejected, StateCanceled, StateExpired),
-	StateForwarding: allow(StateBuffering, StateUncertain, StateWaiting, StateCanceled, StateFailed),
+	StateForwarding: allow(StateBuffering, StateUncertain, StateWaiting, StateCanceled, StateFailed, StateExpired),
 	StateUncertain:  allow(StateWaiting, StateCanceled, StateFailed, StateExpired),
 	StateWaiting:    allow(StateForwarding, StateCanceled, StateFailed, StateExpired),
 	StateBuffering:  allow(StateDelivering, StateWaiting, StateCanceled, StateFailed, StateExpired),

@@ -22,5 +22,18 @@
     "config.reload": "配置已重新载入",
     "config.save": "配置已保存"
   },
-  "errorDetail": { "title": "上游错误详情", "type": "类型", "code": "错误码", "requestId": "上游请求 ID", "retryAfter": "Retry-After", "responseBytes": "响应大小", "structured": "上游返回了结构化错误", "unparsed": "上游返回了无法安全解析的错误响应" }
+  "errorDetail": { "title": "上游错误详情", "type": "类型", "code": "错误码", "requestId": "上游请求 ID", "retryAfter": "Retry-After", "responseBytes": "响应大小", "structured": "上游返回了结构化错误", "unparsed": "上游返回了无法安全解析的错误响应" },
+  "repeat": {
+    "action": "设置请求策略", "title": "请求执行策略", "mode": "执行模式", "retryMode": "限时恢复", "repeatMode": "持续重复",
+    "retryDescription": "仅在失败时继续尝试，首次成功或到达截止时间后结束。", "repeatDescription": "原请求正常返回；后台任务无论成功或失败都会继续执行。",
+    "interval": "执行间隔", "duration": "最长持续时间", "idempotency": "幂等键策略", "preserve": "保留原幂等键（推荐）", "regenerate": "每轮生成新幂等键",
+    "forever": "一直运行，直到手动停止", "warning": "持续执行可能重复产生模型费用或业务副作用。凭据只保存在当前进程内，服务重启后任务不会自动恢复。",
+    "apply": "应用策略", "confirmTitle": "确认持续执行", "confirmDescription": "该操作可能重复调用上游并产生费用。请确认间隔、持续时间和幂等键策略均符合预期。", "confirmAction": "确认启动",
+    "retryCreated": "限时恢复策略已生效", "taskCreated": "持续任务已创建", "tasksTitle": "持续任务", "tasksDescription": "安全摘要会保留；认证信息仅存在于当前进程内。",
+    "task": "任务", "results": "执行结果", "nextRun": "下次执行", "inFlight": "正在执行", "successCount": "成功 {{count}}", "failureCount": "失败 {{count}}",
+    "total": "总计", "success": "成功", "failure": "失败", "activeCount": "{{count}} 个运行任务", "noActive": "当前没有运行中的持续任务", "endedTasks": "已结束任务 · {{count}}",
+    "pause": "暂停任务", "resume": "恢复任务", "runNow": "立即执行", "stop": "停止任务", "memoryOnly": "服务重启时，仍在运行或暂停的任务会标记为已中断，不会自动重新发送。",
+    "states": { "running": "运行中", "paused": "已暂停", "stopped": "已停止", "expired": "已到期", "interrupted": "已中断" },
+    "values": { "5s": "5 秒", "15s": "15 秒", "30s": "30 秒", "60s": "1 分钟", "5m": "5 分钟", "15m": "15 分钟", "30m": "30 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" }
+  }
 }

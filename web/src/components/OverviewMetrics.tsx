@@ -25,8 +25,7 @@ export function OverviewMetrics({ status, metrics, window }: {
   return <section className="overview-metrics" aria-label={t("overview:cockpit.title")}>
     {items.map(({ key, icon: Icon, value, tone, scope }) => <article className={`metric-card tone-${tone}`} key={key}>
       <header><span>{t(`overview:stats.${key}`, { defaultValue: key === "recoveryTime" ? "平均恢复耗时" : key })}</span><i><Icon size={16} /></i></header>
-      <strong>{value}</strong>
-      <footer><span className={key === "active" || key === "recovering" ? "live" : ""}>{scope}</span><small>{t("overview:cockpit.observation")}</small></footer>
+      <div className="metric-reading"><strong>{value}</strong><span className={key === "active" || key === "recovering" ? "live" : ""}>{scope}</span></div>
     </article>)}
   </section>;
 }

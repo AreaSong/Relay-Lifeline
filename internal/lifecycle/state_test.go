@@ -19,3 +19,9 @@ func TestRequestLifecycleRejectsTerminalReplay(t *testing.T) {
 		t.Fatal("终态判断异常")
 	}
 }
+
+func TestRequestLifecycleAllowsForwardingToExpire(t *testing.T) {
+	if err := ValidateTransition(StateForwarding, StateExpired); err != nil {
+		t.Fatalf("转发中的限时恢复请求应允许到期: %v", err)
+	}
+}

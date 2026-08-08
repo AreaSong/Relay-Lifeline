@@ -22,6 +22,13 @@ export function formatTime(value: string) {
   return new Date(value).toLocaleTimeString(normalizeLocale(i18n.resolvedLanguage), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+export function formatOptionalTime(value: string | undefined, locale: string | undefined, fallback = "—") {
+	if (!value) return fallback;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime()) || date.getUTCFullYear() <= 1) return fallback;
+	return date.toLocaleTimeString(locale);
+}
+
 export function formatBytes(value: number) {
 	if (value < 1024) return `${value} B`;
 	if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;

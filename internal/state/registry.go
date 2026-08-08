@@ -26,6 +26,13 @@ type RequestInfo struct {
 	LastError        string          `json:"lastError,omitempty"`
 	LastErrorCode    string          `json:"lastErrorCode,omitempty"`
 	LastErrorDetails map[string]any  `json:"lastErrorDetails,omitempty"`
+	RetryDeadline    time.Time       `json:"retryDeadline,omitempty"`
+	RetryIntervalMs  int64           `json:"retryIntervalMilliseconds,omitempty"`
+}
+
+type RetryPolicy struct {
+	Deadline time.Time
+	Interval time.Duration
 }
 
 type trackedRequest struct {
@@ -179,6 +186,32 @@ func (r *Registry) RetryNow(id string) bool {
 	default:
 	}
 	return true
+}
+
+func (r *Registry) SetRetryPolicy(id string, duration, interval time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	request, ok := r.requests[id]
+	if !ok {
+		return false
+	}
+	request.info.RetryDeadline = time.Now().Add(duration)
+	request.info.RetryIntervalMs = interval.Milliseconds()
+	r.timeline.Add(id, timeline.Event{
+		Type: "retry_policy_updated", MessageCode: "timeline.retry_policy_updated",
+		WaitMilliseconds: interval.Milliseconds(),
+	})
+	return true
+}
+
+func (r *Registry) RetryPolicy(id string) (RetryPolicy, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	request, ok := r.requests[id]
+	if !ok || request.info.RetryDeadline.IsZero() {
+		return RetryPolicy{}, false
+	}
+	return RetryPolicy{Deadline: request.info.RetryDeadline, Interval: time.Duration(request.info.RetryIntervalMs) * time.Millisecond}, true
 }
 
 func (r *Registry) RetryWaiting() int {

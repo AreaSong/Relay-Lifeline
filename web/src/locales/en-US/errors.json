@@ -11,6 +11,11 @@
     "ENDPOINT_NOT_FOUND": "Endpoint not found",
     "INVALID_CONFIG_JSON": "Invalid configuration JSON",
     "TRAILING_CONFIG_JSON": "Configuration JSON contains trailing content",
-    "REQUEST_NOT_FOUND": "Request not found"
+    "REQUEST_NOT_FOUND": "Request not found",
+    "INVALID_RETRY_POLICY": "Invalid timed recovery policy",
+    "INVALID_REPEAT_TASK": "Invalid continuous task settings",
+    "REPEAT_TASK_NOT_FOUND": "Active request or continuous task not found",
+    "REPEAT_TASK_EXISTS": "This request already has an active continuous task",
+    "REPEAT_UNAVAILABLE": "Continuous task service is unavailable"
   }
 }

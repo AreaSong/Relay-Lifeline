@@ -21,6 +21,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/recovery"
+	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -42,13 +43,18 @@ type Handler struct {
 	sessions    *sessionManager
 	incidents   *incident.Store
 	journals    map[string]*journal.Store
+	repeater    *repeat.Manager
 }
 
 func (h *Handler) SetMonitoring(store *monitoring.Store)         { h.monitor = store }
 func (h *Handler) SetRuntimeInfo(provider func() buildinfo.Info) { h.runtimeInfo = provider }
 func (h *Handler) SetIncidents(store *incident.Store)            { h.incidents = store }
-func (h *Handler) SetJournals(requests, incidents *journal.Store) {
+func (h *Handler) SetRepeatManager(manager *repeat.Manager)      { h.repeater = manager }
+func (h *Handler) SetJournals(requests, incidents *journal.Store, repeats ...*journal.Store) {
 	h.journals = map[string]*journal.Store{"requests": requests, "incidents": incidents}
+	if len(repeats) > 0 {
+		h.journals["repeat-tasks"] = repeats[0]
+	}
 }
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
@@ -153,6 +159,12 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.incident(writer, strings.TrimPrefix(path, "/incidents/"), locale, fallback)
 	case request.Method == http.MethodGet && path == "/history":
 		writeJSON(writer, http.StatusOK, timeline.LocalizeRecords(h.registry.History(), locale, fallback))
+	case request.Method == http.MethodGet && path == "/repeat-tasks":
+		if h.repeater == nil {
+			writeJSON(writer, http.StatusOK, []repeat.Task{})
+			return
+		}
+		writeJSON(writer, http.StatusOK, h.repeater.List())
 	case request.Method == http.MethodGet && path == "/runtime-logs":
 		h.runtimeLogs(writer, request)
 	case request.Method == http.MethodGet && path == "/runtime-logs/export":
@@ -200,6 +212,12 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry")
 		h.requestAction(writer, h.registry.RetryNow(id), locale, fallback)
+	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry-policy"):
+		h.setRetryPolicy(writer, request, strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry-policy"), locale, fallback)
+	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/repeat"):
+		h.createRepeatTask(writer, request, strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/repeat"), locale, fallback)
+	case strings.HasPrefix(path, "/repeat-tasks/"):
+		h.repeatTaskAction(writer, request, strings.TrimPrefix(path, "/repeat-tasks/"), locale, fallback)
 	case request.Method == http.MethodDelete && strings.HasPrefix(path, "/requests/"):
 		id := strings.TrimPrefix(path, "/requests/")
 		h.requestAction(writer, h.registry.Cancel(id), locale, fallback)
@@ -213,6 +231,7 @@ type streamSnapshot struct {
 	Alerts    []risk.Alert        `json:"alerts"`
 	Incidents []incident.Incident `json:"incidents"`
 	Metrics   *monitoring.Metrics `json:"metrics,omitempty"`
+	Repeats   []repeat.Task       `json:"repeatTasks"`
 }
 
 func (h *Handler) stream(writer http.ResponseWriter, request *http.Request, locale, fallback string) {
@@ -236,9 +255,13 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request, loca
 			snapshot := h.monitor.Metrics(time.Hour)
 			metrics = &snapshot
 		}
+		repeats := []repeat.Task{}
+		if h.repeater != nil {
+			repeats = h.repeater.List()
+		}
 		payload, err := json.Marshal(streamSnapshot{
 			Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
-			Alerts: risk.Localize(h.risk.Recent(100), locale, fallback), Incidents: incidents, Metrics: metrics,
+			Alerts: risk.Localize(h.risk.Recent(100), locale, fallback), Incidents: incidents, Metrics: metrics, Repeats: repeats,
 		})
 		if err != nil {
 			return err
@@ -787,6 +810,115 @@ func (h *Handler) recordSecurityEvent(event monitoring.SecurityEvent) {
 	if h.monitor != nil {
 		h.monitor.RecordSecurityEvent(event)
 	}
+}
+
+func (h *Handler) setRetryPolicy(writer http.ResponseWriter, request *http.Request, id, locale, fallback string) {
+	var input struct {
+		Duration string `json:"duration"`
+		Interval string `json:"interval"`
+	}
+	if !decodeSmallJSON(request, &input) {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_RETRY_POLICY", l10n.M("api.repeat.invalid_input"), locale, fallback)
+		return
+	}
+	duration, durationErr := time.ParseDuration(input.Duration)
+	interval, intervalErr := time.ParseDuration(input.Interval)
+	if durationErr != nil || intervalErr != nil || duration < 5*time.Second || duration > 24*time.Hour || interval < 5*time.Second || interval > 24*time.Hour {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_RETRY_POLICY", l10n.M("api.repeat.invalid_input"), locale, fallback)
+		return
+	}
+	if !h.registry.SetRetryPolicy(id, duration, interval) {
+		h.writeError(writer, http.StatusNotFound, "REQUEST_NOT_FOUND", l10n.M("api.request.not_found"), locale, fallback)
+		return
+	}
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "request.retry_policy", Outcome: "succeeded", RequestID: id})
+	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "retryDeadline": time.Now().Add(duration), "retryIntervalMilliseconds": interval.Milliseconds()})
+}
+
+func (h *Handler) createRepeatTask(writer http.ResponseWriter, request *http.Request, id, locale, fallback string) {
+	if h.repeater == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "REPEAT_UNAVAILABLE", l10n.M("api.repeat.unavailable"), locale, fallback)
+		return
+	}
+	var input struct {
+		Interval       string `json:"interval"`
+		Duration       string `json:"duration"`
+		Idempotency    string `json:"idempotency"`
+		ConfirmForever bool   `json:"confirmForever"`
+	}
+	if !decodeSmallJSON(request, &input) {
+		h.writeError(writer, http.StatusBadRequest, "INVALID_REPEAT_TASK", l10n.M("api.repeat.invalid_input"), locale, fallback)
+		return
+	}
+	interval, intervalErr := time.ParseDuration(input.Interval)
+	duration, durationErr := time.ParseDuration(input.Duration)
+	if input.Duration == "" {
+		duration, durationErr = 0, nil
+	}
+	if intervalErr != nil || durationErr != nil {
+		h.writeRepeatError(writer, repeat.ErrInvalidInput, locale, fallback)
+		return
+	}
+	task, err := h.repeater.Create(id, repeat.CreateInput{Interval: interval, Duration: duration, Idempotency: input.Idempotency, ConfirmForever: input.ConfirmForever})
+	if err != nil {
+		h.writeRepeatError(writer, err, locale, fallback)
+		return
+	}
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "repeat.task_created", Outcome: "succeeded", RequestID: id})
+	writeJSON(writer, http.StatusCreated, task)
+}
+
+func (h *Handler) repeatTaskAction(writer http.ResponseWriter, request *http.Request, path, locale, fallback string) {
+	if h.repeater == nil {
+		h.writeError(writer, http.StatusServiceUnavailable, "REPEAT_UNAVAILABLE", l10n.M("api.repeat.unavailable"), locale, fallback)
+		return
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		h.writeError(writer, http.StatusNotFound, "REPEAT_TASK_NOT_FOUND", l10n.M("api.repeat.not_found"), locale, fallback)
+		return
+	}
+	var task repeat.Task
+	var err error
+	switch {
+	case request.Method == http.MethodDelete && len(parts) == 1:
+		task, err = h.repeater.Stop(parts[0])
+	case request.Method == http.MethodPost && len(parts) == 2 && parts[1] == "pause":
+		task, err = h.repeater.Pause(parts[0])
+	case request.Method == http.MethodPost && len(parts) == 2 && parts[1] == "resume":
+		task, err = h.repeater.Resume(parts[0])
+	case request.Method == http.MethodPost && len(parts) == 2 && parts[1] == "run":
+		task, err = h.repeater.RunNow(parts[0])
+	default:
+		h.writeError(writer, http.StatusNotFound, "ENDPOINT_NOT_FOUND", l10n.M("api.route.not_found"), locale, fallback)
+		return
+	}
+	if err != nil {
+		h.writeRepeatError(writer, err, locale, fallback)
+		return
+	}
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "repeat.task_updated", Outcome: "succeeded", RequestID: task.SourceRequestID})
+	writeJSON(writer, http.StatusOK, task)
+}
+
+func (h *Handler) writeRepeatError(writer http.ResponseWriter, err error, locale, fallback string) {
+	switch {
+	case errors.Is(err, repeat.ErrSourceNotFound), errors.Is(err, repeat.ErrTaskNotFound):
+		h.writeError(writer, http.StatusNotFound, "REPEAT_TASK_NOT_FOUND", l10n.M("api.repeat.not_found"), locale, fallback)
+	case errors.Is(err, repeat.ErrTaskExists):
+		h.writeError(writer, http.StatusConflict, "REPEAT_TASK_EXISTS", l10n.M("api.repeat.exists"), locale, fallback)
+	default:
+		h.writeError(writer, http.StatusBadRequest, "INVALID_REPEAT_TASK", l10n.M("api.repeat.invalid_input"), locale, fallback)
+	}
+}
+
+func decodeSmallJSON(request *http.Request, destination any) bool {
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return false
+	}
+	return decoder.Decode(&struct{}{}) == io.EOF
 }
 
 func (h *Handler) requestAction(writer http.ResponseWriter, found bool, locale, fallback string) {

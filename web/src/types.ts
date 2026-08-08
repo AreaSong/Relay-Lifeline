@@ -158,6 +158,34 @@ export interface RequestInfo {
   lastError?: string;
   lastErrorCode?: string;
   lastErrorDetails?: Record<string, unknown>;
+  retryDeadline?: string;
+  retryIntervalMilliseconds?: number;
+}
+
+export type RepeatTaskState = "running" | "paused" | "stopped" | "expired" | "interrupted";
+
+export interface RepeatTask {
+  id: string;
+  sourceRequestId: string;
+  method: string;
+  path: string;
+  state: RepeatTaskState;
+  idempotency: "preserve" | "regenerate";
+  intervalMilliseconds: number;
+  durationMilliseconds: number;
+  startedAt: string;
+  deadline?: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  stoppedAt?: string;
+  executions: number;
+  successes: number;
+  failures: number;
+  lastOutcome?: "successful" | "failed";
+  lastStatusCode?: number;
+  lastErrorCode?: string;
+  lastExecutionId?: string;
+  inFlight: boolean;
 }
 
 export interface Status {
@@ -248,6 +276,7 @@ export interface RealtimeSnapshot {
   alerts: Alert[];
   incidents: Incident[];
   metrics?: MetricsSnapshot;
+  repeatTasks: RepeatTask[];
 }
 
 export interface DiagnosticCheck {

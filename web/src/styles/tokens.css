@@ -49,6 +49,16 @@
   --glass-rim: rgba(255, 255, 255, 0.85);
   --glass-inner-glow: inset 0 1px 1px rgba(255, 255, 255, 0.9);
 
+  /* Navigation rail follows the resolved theme instead of the dark scene palette. */
+  --rail: rgba(248, 251, 249, 0.94);
+  --rail-raised: rgba(255, 255, 255, 0.92);
+  --rail-elevated: rgba(234, 240, 236, 0.9);
+  --rail-line: rgba(169, 187, 175, 0.55);
+  --rail-text: #17211a;
+  --rail-muted: #6c7b71;
+  --rail-highlight: rgba(255, 255, 255, 0.7);
+  --rail-shadow: 0 22px 64px rgba(24, 44, 31, 0.12), inset 0 1px rgba(255, 255, 255, 0.9);
+
   --text: #111813;
   --text-soft: #556359;
   --text-faint: #78877d;
@@ -78,6 +88,15 @@
   --surface-pressed: rgba(36, 48, 40, 0.85);
   --glass-rim: rgba(255, 255, 255, 0.09);
   --glass-inner-glow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+
+  --rail: rgba(7, 10, 8, 0.94);
+  --rail-raised: #0f1411;
+  --rail-elevated: #151c17;
+  --rail-line: #222d26;
+  --rail-text: #f3f7f4;
+  --rail-muted: #88958c;
+  --rail-highlight: rgba(255, 255, 255, 0.055);
+  --rail-shadow: 0 28px 80px rgba(0, 0, 0, 0.42), inset 0 1px rgba(255, 255, 255, 0.035);
 
   --text: #edf4ee;
   --text-soft: #9eb0a3;

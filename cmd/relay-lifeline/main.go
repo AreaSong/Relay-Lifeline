@@ -27,6 +27,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/proxy"
 	"github.com/areasong/relay-lifeline/internal/recovery"
+	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -116,7 +117,7 @@ func main() {
 		return timeline.Limits{MaxItems: current.MaxItems, Retention: current.Retention.Duration}
 	}
 	var eventJournal *journal.Store
-	var incidentJournal *journal.Store
+	var incidentJournal, repeatJournal *journal.Store
 	if cfg.Persistence.Enabled && !*doctor {
 		journalPath := filepath.Join(cfg.Persistence.Directory, "requests.jsonl")
 		eventJournal, err = journal.Open(journalPath, cfg.Persistence.SyncWrites)
@@ -131,12 +132,22 @@ func main() {
 			os.Exit(1)
 		}
 		defer incidentJournal.Close()
+		repeatJournal, err = journal.Open(filepath.Join(cfg.Persistence.Directory, "repeat-tasks.jsonl"), cfg.Persistence.SyncWrites)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "open verified repeat task journal: %v\n", err)
+			os.Exit(1)
+		}
+		defer repeatJournal.Close()
 		if _, err := eventJournal.Compact(time.Now().Add(-cfg.Persistence.Retention.Duration)); err != nil {
 			fmt.Fprintf(os.Stderr, "compact request journal: %v\n", err)
 			os.Exit(1)
 		}
 		if _, err := incidentJournal.Compact(time.Now().Add(-cfg.Incidents.Retention.Duration)); err != nil {
 			fmt.Fprintf(os.Stderr, "compact incident journal: %v\n", err)
+			os.Exit(1)
+		}
+		if _, err := repeatJournal.Compact(time.Now().Add(-cfg.Persistence.Retention.Duration)); err != nil {
+			fmt.Fprintf(os.Stderr, "compact repeat task journal: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -163,7 +174,7 @@ func main() {
 	if eventJournal != nil {
 		monitoringStore.SetPersistenceProvider(func() []monitoring.PersistenceMetric {
 			return []monitoring.PersistenceMetric{
-				journalMetric("requests", eventJournal), journalMetric("incidents", incidentJournal),
+				journalMetric("requests", eventJournal), journalMetric("incidents", incidentJournal), journalMetric("repeat-tasks", repeatJournal),
 			}
 		})
 	}
@@ -188,12 +199,20 @@ func main() {
 	gateway.SetRunLog(runLogStore)
 	gateway.SetMonitoring(monitoringStore)
 	gateway.SetIncidents(incidentStore)
+	repeatManager, err := repeat.New(repeatJournal, gateway.ExecuteRepeat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "restore repeat tasks: %v\n", err)
+		os.Exit(1)
+	}
+	defer repeatManager.Close()
+	gateway.SetRepeatManager(repeatManager)
 	diagnosticService := diagnostics.New(store, version, startedAt)
 	diagnosticService.SetJournal(eventJournal)
 	adminHandler := admin.NewWithExtendedServices(store, registry, controller, riskManager, diagnosticService, notifier, captureManager, runLogStore)
 	adminHandler.SetMonitoring(monitoringStore)
 	adminHandler.SetIncidents(incidentStore)
-	adminHandler.SetJournals(eventJournal, incidentJournal)
+	adminHandler.SetRepeatManager(repeatManager)
+	adminHandler.SetJournals(eventJournal, incidentJournal, repeatJournal)
 	adminHandler.SetRuntimeInfo(func() buildinfo.Info { return runtimeInfo.Snapshot(config.CurrentSchemaVersion) })
 
 	mux := http.NewServeMux()
@@ -210,7 +229,10 @@ func main() {
 		if err := eventJournal.Health(); err != nil {
 			return err
 		}
-		return incidentJournal.Health()
+		if err := incidentJournal.Health(); err != nil {
+			return err
+		}
+		return repeatJournal.Health()
 	}))
 	mux.HandleFunc("/favicon.ico", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
@@ -233,7 +255,7 @@ func main() {
 	defer stop()
 	go captureManager.StartCleaner(ctx)
 	if eventJournal != nil {
-		go maintainJournals(ctx, store, logger, eventJournal, incidentJournal)
+		go maintainJournals(ctx, store, logger, eventJournal, incidentJournal, repeatJournal)
 	}
 	go reloadOnSignal(store, logger)
 	shutdownDone := make(chan struct{})
@@ -241,6 +263,7 @@ func main() {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		ready.Store(false)
+		repeatManager.Close()
 		registry.RetryWaiting()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), store.Get().Server.ShutdownTimeout.Duration)
 		defer cancel()
@@ -259,7 +282,7 @@ func main() {
 	}
 }
 
-func maintainJournals(ctx context.Context, store *config.Store, logger *slog.Logger, requestJournal, incidentJournal *journal.Store) {
+func maintainJournals(ctx context.Context, store *config.Store, logger *slog.Logger, requestJournal, incidentJournal, repeatJournal *journal.Store) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -273,6 +296,9 @@ func maintainJournals(ctx context.Context, store *config.Store, logger *slog.Log
 			}
 			if _, err := incidentJournal.Compact(now.Add(-cfg.Incidents.Retention.Duration)); err != nil {
 				logger.Error("compact incident journal", "event", "journal.compaction_failed", "journal", "incidents", "error", err)
+			}
+			if _, err := repeatJournal.Compact(now.Add(-cfg.Persistence.Retention.Duration)); err != nil {
+				logger.Error("compact repeat task journal", "event", "journal.compaction_failed", "journal", "repeat-tasks", "error", err)
 			}
 		}
 	}

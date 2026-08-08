@@ -3,25 +3,32 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import { RequestsTable } from "../components/RequestsTable";
-import type { MetricsSnapshot, Status } from "../types";
+import { RepeatTaskDialog } from "../components/RepeatTaskDialog";
+import { RepeatTasksPanel } from "../components/RepeatTasksPanel";
+import type { ConfirmDialogState } from "../components/ConfirmDialog";
+import type { MetricsSnapshot, RepeatTask, RequestInfo, Status } from "../types";
 
 function sparkline(values: number[]) {
   const maximum = Math.max(1, ...values);
   return values.map((value, index) => `${values.length <= 1 ? 0 : index / (values.length - 1) * 120},${28 - value / maximum * 24}`).join(" ");
 }
 
-export function RequestsView({ status, metrics, api, refresh, onOpen, onError, canOperate }: {
+export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpen, onError, onSuccess, canOperate, confirm }: {
   status: Status;
   metrics: MetricsSnapshot | null;
+  repeatTasks: RepeatTask[];
   api: ApiClient;
   refresh: () => Promise<void>;
   onOpen: (id: string) => void;
   onError: (message: string) => void;
+  onSuccess: (message: string) => void;
   canOperate: boolean;
+  confirm: (state: ConfirmDialogState) => Promise<boolean>;
 }) {
   const { t } = useTranslation(["common", "overview", "requests"]);
   const [query, setQuery] = useState("");
   const [state, setState] = useState("all");
+  const [policyRequest, setPolicyRequest] = useState<RequestInfo | null>(null);
   const requests = useMemo(() => status.requests.filter((request) => {
     const matchesState = state === "all" || request.state === state;
     const needle = query.trim().toLowerCase();
@@ -47,7 +54,9 @@ export function RequestsView({ status, metrics, api, refresh, onOpen, onError, c
           </select></label>
         </div>
       </div>
-      <RequestsTable requests={requests} api={api} refresh={refresh} onOpen={onOpen} onError={onError} canOperate={canOperate} />
+      <RequestsTable requests={requests} api={api} refresh={refresh} onOpen={onOpen} onError={onError} canOperate={canOperate} onPolicy={setPolicyRequest} />
     </section>
+    <RepeatTasksPanel tasks={repeatTasks} api={api} refresh={refresh} onError={onError} canOperate={canOperate} />
+    {policyRequest && <RepeatTaskDialog request={policyRequest} api={api} refresh={refresh} onClose={() => setPolicyRequest(null)} onError={onError} onSuccess={onSuccess} confirm={confirm} />}
   </div>;
 }

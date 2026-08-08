@@ -1,44 +1,48 @@
 /* 全局操作舱骨架：导航、工作区顶部栏、检查器和弹窗。 */
 body, button, input, select, textarea { letter-spacing: 0; }
 
-.app-shell > aside.app-rail {
+.app-rail-container > aside.app-rail {
   margin: 12px 0 12px 12px;
   width: calc(100% - 12px);
   height: calc(100vh - 24px);
   min-height: 616px;
+  position: relative;
+  isolation: isolate;
   padding: 14px 12px;
-  background: color-mix(in srgb, var(--scene) 94%, transparent);
-  border: 1px solid var(--scene-line);
+  color: var(--rail-text);
+  background: var(--rail);
+  border: 1px solid var(--rail-line);
   border-radius: var(--radius-lg);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, .28), inset 0 1px rgba(255, 255, 255, .035);
+  box-shadow: var(--rail-shadow);
   backdrop-filter: blur(20px);
 }
-.app-rail::before { position: absolute; inset: 0; content: ""; border-radius: inherit; pointer-events: none; background: radial-gradient(110% 60% at 30% 0%, rgba(255,255,255,.055), transparent 58%); }
+.app-rail::before { position: absolute; z-index: 0; inset: 0; content: ""; border-radius: inherit; pointer-events: none; background: radial-gradient(110% 60% at 30% 0%, var(--rail-highlight), transparent 58%); }
+.app-rail > * { position: relative; z-index: 1; }
 .app-rail::after { right: 10px; bottom: 9%; }
 .app-rail nav { display: block; margin-top: 22px; overflow-y: auto; scrollbar-width: none; }
 .app-rail nav::before { display: none; }
 .rail-group { display: grid; gap: 3px; margin-bottom: 19px; }
-.rail-group h2 { margin: 0 10px 7px; color: var(--scene-muted); font: 500 11px var(--font-sans); }
+.rail-group h2 { margin: 0 10px 7px; color: var(--rail-muted); font: 500 11px var(--font-sans); }
 .app-rail nav button { min-height: 39px; border-radius: 9px; }
-.app-rail nav button.active { color: var(--scene-text); background: linear-gradient(90deg, rgba(105,227,159,.16), rgba(255,255,255,.045)); border-color: rgba(105,227,159,.24); box-shadow: inset 0 1px rgba(255,255,255,.045), 0 10px 26px rgba(0,0,0,.18); }
+.app-rail nav button.active { color: var(--rail-text); background: color-mix(in srgb, var(--accent-soft) 78%, var(--rail-raised)); border-color: color-mix(in srgb, var(--accent) 28%, var(--rail-line)); box-shadow: inset 3px 0 var(--accent); }
 .app-rail nav button.active svg { color: var(--signal); filter: drop-shadow(0 0 8px rgba(105,227,159,.42)); }
 .app-rail nav button.active::before { left: -13px; }
 .rail-copy small { font-size: 11px; letter-spacing: 0; text-transform: none; }
 
-.environment-identity { min-width: 0; display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 9px; align-items: center; padding: 9px; color: var(--scene-text); background: var(--scene-raised); border: 1px solid var(--scene-line); border-radius: 10px; }
+.environment-identity { min-width: 0; display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 9px; align-items: center; padding: 9px; color: var(--rail-text); background: var(--rail-raised); border: 1px solid var(--rail-line); border-radius: 10px; }
 .environment-icon { width: 30px; height: 30px; display: grid; place-items: center; color: var(--signal); background: var(--signal-soft); border-radius: 7px; }
 .environment-copy { min-width: 0; display: grid; gap: 2px; }
-.environment-copy small { color: var(--scene-muted); font-size: 11px; }
+.environment-copy small { color: var(--rail-muted); font-size: 11px; }
 .environment-copy strong { overflow: hidden; font-size: 12px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
-.environment-copy > span { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--scene-muted); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.environment-copy > span { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--rail-muted); font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .environment-copy i { width: 5px; height: 5px; flex: 0 0 auto; background: var(--signal); border-radius: 50%; box-shadow: 0 0 8px rgba(105,227,159,.55); }
 .environment-identity.compact { display: flex; justify-content: center; padding-inline: 0; }
 .environment-identity.compact .environment-copy, .environment-identity.compact > svg { display: none; }
-.rail-user { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 8px 9px; color: var(--scene-text); }
-.rail-user > span { width: 29px; height: 29px; display: grid; place-items: center; flex: 0 0 auto; background: var(--scene-elevated); border: 1px solid var(--scene-line); border-radius: 50%; }
+.rail-user { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 8px 9px; color: var(--rail-text); }
+.rail-user > span { width: 29px; height: 29px; display: grid; place-items: center; flex: 0 0 auto; background: var(--rail-elevated); border: 1px solid var(--rail-line); border-radius: 50%; }
 .rail-user > div { min-width: 0; display: grid; gap: 1px; }
 .rail-user strong { font-size: 12px; font-weight: 580; }
-.rail-user small { color: var(--scene-muted); font-size: 11px; }
+.rail-user small { color: var(--rail-muted); font-size: 11px; }
 .rail-collapsed .rail-group h2, .rail-collapsed .rail-user > div { display: none; }
 .rail-collapsed .environment-identity { display: flex; justify-content: center; padding-inline: 0; }
 .rail-collapsed .environment-copy, .rail-collapsed .environment-identity > svg { display: none; }
@@ -54,7 +58,7 @@ body, button, input, select, textarea { letter-spacing: 0; }
   justify-content: space-between;
   gap: 20px;
   flex: 0 0 var(--header-height);
-  margin: 0 calc(clamp(18px, 2.25vw, 38px) * -1) 16px;
+  margin: 0 -24px 16px;
   padding: 12px clamp(18px, 2.25vw, 38px);
   background: var(--surface);
   border-bottom: 1px solid var(--glass-rim);
@@ -208,7 +212,7 @@ body, button, input, select, textarea { letter-spacing: 0; }
   .global-search.mobile-open { width: auto; position: fixed; z-index: 90; top: 66px; right: 10px; left: 10px; display: flex; margin: 0; }
   .global-search.mobile-open input { background: var(--surface); box-shadow: var(--shadow-float); }
   .notification-popover { width: min(360px, calc(100vw - 18px)); right: -88px; }
-  .app-shell > .app-rail { margin: 0; }
+  .app-rail-container > .app-rail { margin: 0; }
   .inspector-shell { width: min(560px,100%); }
   .mobile-tools-row.mobile-tools-nav { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .mobile-search-action { width: 100%; }

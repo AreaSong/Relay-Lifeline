@@ -23,6 +23,7 @@ import (
 	"github.com/areasong/relay-lifeline/internal/lifecycle"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
+	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
@@ -46,11 +47,13 @@ type Gateway struct {
 	monitor       *monitoring.Store
 	incidents     *incident.Store
 	resourceCheck func(config.Config) error
+	repeater      *repeat.Manager
 }
 
 func (g *Gateway) SetCaptureManager(manager *capture.Manager) { g.captures = manager }
 func (g *Gateway) SetRunLog(store *runlog.Store)              { g.runLogs = store }
 func (g *Gateway) SetIncidents(store *incident.Store)         { g.incidents = store }
+func (g *Gateway) SetRepeatManager(manager *repeat.Manager)   { g.repeater = manager }
 func (g *Gateway) SetMonitoring(store *monitoring.Store) {
 	g.monitor = store
 	g.recordLoad()
@@ -97,6 +100,13 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	watchDownstreamClose(ctx, writer, onDisconnect)
 	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
+	if g.repeater != nil {
+		g.repeater.RegisterSource(requestID, repeat.Template{
+			Method: request.Method, Path: request.URL.RequestURI(), Headers: request.Header,
+			Body: body, Streaming: streaming,
+		})
+		defer g.repeater.UnregisterSource(requestID)
+	}
 	started := time.Now()
 	outcome := lifecycle.StateFailed
 	finalAttempt := 0
@@ -267,12 +277,23 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		g.publishAlerts(g.risk.EvaluateAttempt(requestID, attempt, started, statusCode, cfg.Risk))
 		g.logger.Warn(g.logText(cfg, "log.upstream_failed"), "event", "upstream.request_failed", "request_id", requestID, "attempt", attempt, "reason_code", reason.ID, "status", statusCode)
 		g.addRunLog("warn", "upstream.request_failed", "上游请求失败", requestID, attempt, statusCode, map[string]any{"reasonCode": reason.ID})
-		if !shouldRetry(cfg, result) || cfg.Retry.MaxAttempts > 0 && attempt >= cfg.Retry.MaxAttempts {
+		policy, policyActive := g.registry.RetryPolicy(requestID)
+		if !g.retryAllowed(cfg, result, attempt, policyActive) {
 			downstream.fail(g.text(clientLocale, cfg.Localization.FallbackLocale, reason))
 			return
 		}
 
 		delay := g.retryDelay(cfg, result.response)
+		if policyActive {
+			delay = retryPolicyDelay(policy.Interval, cfg, result.response)
+			remaining := time.Until(policy.Deadline)
+			if remaining <= 0 {
+				g.finishExpiredRetry(requestID, attempt, downstream, clientLocale, cfg, reason)
+				outcome = lifecycle.StateExpired
+				return
+			}
+			delay = min(delay, remaining)
+		}
 		g.addRunLog("info", "retry.scheduled", "已安排再次请求", requestID, attempt, statusCode, map[string]any{"waitMilliseconds": delay.Milliseconds()})
 		nextRetry := time.Now().Add(delay)
 		g.registry.UpdateMessage(requestID, lifecycle.StateWaiting, attempt, reason, nextRetry)
@@ -289,9 +310,35 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			return
 		}
+		if policyActive && !time.Now().Before(policy.Deadline) {
+			g.finishExpiredRetry(requestID, attempt, downstream, clientLocale, cfg, reason)
+			outcome = lifecycle.StateExpired
+			return
+		}
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "retry_resumed", Attempt: attempt + 1, MessageCode: resumeReason})
 		g.addRunLog("info", "retry.resumed", "重试等待结束", requestID, attempt+1, 0, map[string]any{"reasonCode": resumeReason})
 	}
+}
+
+func (g *Gateway) retryAllowed(cfg config.Config, result attemptResult, attempt int, active bool) bool {
+	if active {
+		return !result.validation.Success
+	}
+	return shouldRetry(cfg, result) && (cfg.Retry.MaxAttempts == 0 || attempt < cfg.Retry.MaxAttempts)
+}
+
+func retryPolicyDelay(interval time.Duration, cfg config.Config, response *http.Response) time.Duration {
+	delay := interval
+	if cfg.Retry.HonorRetryAfter {
+		delay = max(delay, retryAfter(response))
+	}
+	return delay
+}
+
+func (g *Gateway) finishExpiredRetry(id string, attempt int, downstream *downstreamWriter, locale string, cfg config.Config, reason l10n.Message) {
+	g.registry.RecordEvent(id, timeline.Event{Type: "retry_window_expired", Attempt: attempt, MessageCode: "timeline.retry_window_expired"})
+	g.addRunLog("info", "retry.window_expired", "单请求重试窗口已结束", id, attempt, 0, nil)
+	downstream.fail(g.text(locale, cfg.Localization.FallbackLocale, reason))
 }
 
 func checkResources(cfg config.Config) error {
