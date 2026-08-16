@@ -1,7 +1,8 @@
 {
   "columns": { "request": "请求", "result": "结果", "status": "状态", "attempts": "尝试", "duration": "持续时间", "nextRetry": "下次重试", "lastError": "最近错误", "actions": "操作" },
   "emptyActive": "当前没有活动请求",
-  "filters": { "search": "搜索请求 ID 或路径", "state": "状态", "allStates": "全部状态" },
+  "filters": { "search": "搜索请求、Codex 任务 ID 或客户端 ID", "state": "状态", "allStates": "全部状态" },
+  "identity": { "task": "任务 ID（客户端声明）", "client": "客户端 ID（客户端声明）" },
   "summary": { "active": "活动", "requesting": "请求中", "waiting": "等待中", "queued": "排队中" },
   "windowLabels": { "15m": "15 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" },
   "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求", "window": "时间范围", "events": "运行事件", "eventsEmpty": "当前进程还没有运行事件" },

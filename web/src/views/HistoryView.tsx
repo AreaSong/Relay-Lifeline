@@ -45,7 +45,7 @@ export function HistoryView({ records, onOpen, metrics, errors, events, window, 
       {!visibleRecords.length ? <div className="empty-state"><Archive size={24} /><span>{t("requests:history.empty")}</span></div> : <div className="table-wrap history-table responsive-table"><table><thead><tr>
         <th>{t("requests:columns.request")}</th><th>{t("requests:columns.result")}</th><th>{t("requests:columns.attempts")}</th><th>{t("requests:columns.duration")}</th><th>{t("requests:columns.lastError")}</th><th aria-label={t("requests:columns.actions")} />
       </tr></thead><tbody>{visibleRecords.map((record) => <tr key={record.id}>
-        <td data-label={t("requests:columns.request")}><strong>{record.method} {record.path}</strong><span className="subtle">{record.id}</span></td>
+        <td data-label={t("requests:columns.request")}><strong>{record.method} {record.path}</strong><span className="subtle">{record.id}</span>{record.taskId && <span className="subtle client-identity">{t("requests:identity.task")}: {record.taskId}</span>}{record.clientId && <span className="subtle client-identity">{t("requests:identity.client")}: {record.clientId}</span>}</td>
         <td data-label={t("requests:columns.result")}><span className={`status ${record.state}`}>{t(`common:status.${record.state}`, { defaultValue: record.state })}</span></td>
         <td data-label={t("requests:columns.attempts")}>{record.attempt}</td><td data-label={t("requests:columns.duration")}>{formatDuration(record.startedAt, record.completedAt)}</td>
         <td data-label={t("requests:columns.lastError")}><span className="subtle history-error">{record.lastError || t("common:notAvailable")}</span></td>

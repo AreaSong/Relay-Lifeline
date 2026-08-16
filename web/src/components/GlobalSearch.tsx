@@ -84,12 +84,12 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
     if (!normalized) return [];
     const items: SearchResult[] = [];
     requests.forEach((request) => {
-      if (includesQuery([request.id, request.method, request.path, request.state, request.lastErrorCode], normalized)) {
+      if (includesQuery([request.id, request.clientId, request.taskId, request.method, request.path, request.state, request.lastErrorCode], normalized)) {
         items.push({ key: `request-${request.id}`, kind: "request", id: request.id, title: `${request.method} ${request.path}`, detail: request.id });
       }
     });
     history.forEach((record) => {
-      if (includesQuery([record.id, record.method, record.path, record.state, record.lastErrorCode], normalized)) {
+      if (includesQuery([record.id, record.clientId, record.taskId, record.method, record.path, record.state, record.lastErrorCode], normalized)) {
         items.push({ key: `history-${record.id}`, kind: "history", id: record.id, title: `${record.method} ${record.path}`, detail: record.id });
       }
     });
@@ -104,7 +104,7 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
       }
     });
     logs.forEach((entry) => {
-      if (includesQuery([String(entry.id), entry.event, entry.message, entry.requestId, entry.level, JSON.stringify(entry.fields || {})], normalized)) {
+      if (includesQuery([String(entry.id), entry.event, entry.message, entry.requestId, entry.clientId, entry.taskId, entry.level, JSON.stringify(entry.fields || {})], normalized)) {
         items.push({ key: `log-${entry.id}`, kind: "log", id: entry.requestId || "", title: entry.message, detail: entry.event });
       }
     });

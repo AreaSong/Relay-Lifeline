@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function LogsView({ api, onError, initialRequestId = "", initialEvent = "" }: Props) {
-  const { t } = useTranslation(["logs", "common"]);
+  const { t } = useTranslation(["logs", "common", "requests"]);
   const [entries, setEntries] = useState<RuntimeLogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [level, setLevel] = useState("");
@@ -76,7 +76,7 @@ export function LogsView({ api, onError, initialRequestId = "", initialEvent = "
     {paused && newCount > 0 && <div className="log-new-count" role="status">{t("logs:newCount", { count: newCount })}</div>}
     {entries.length === 0 ? <div className="empty-state"><ScrollText />{t("logs:empty")}</div> : <div className="runtime-log" ref={log} aria-live={paused ? "off" : "polite"}>
       {entries.map((entry) => <article className={`log-entry ${entry.level}`} key={entry.id}>
-        <time>{formatTime(entry.time)}</time><span className="log-level">{t(`logs:levels.${entry.level}`, { defaultValue: entry.level })}</span><div><strong>{entry.event}</strong><p>{entry.message}</p>{entry.requestId && <code>{entry.requestId}{entry.attempt ? ` · #${entry.attempt}` : ""}{entry.statusCode ? ` · HTTP ${entry.statusCode}` : ""}</code>}</div>
+        <time>{formatTime(entry.time)}</time><span className="log-level">{t(`logs:levels.${entry.level}`, { defaultValue: entry.level })}</span><div><strong>{entry.event}</strong><p>{entry.message}</p>{entry.requestId && <code>{entry.requestId}{entry.attempt ? ` · #${entry.attempt}` : ""}{entry.statusCode ? ` · HTTP ${entry.statusCode}` : ""}</code>}{(entry.taskId || entry.clientId) && <code>{entry.taskId && `${t("requests:identity.task")}: ${entry.taskId}`}{entry.taskId && entry.clientId ? " · " : ""}{entry.clientId && `${t("requests:identity.client")}: ${entry.clientId}`}</code>}</div>
         {entry.fields && <pre>{JSON.stringify(entry.fields, null, 2)}</pre>}
       </article>)}
     </div>}

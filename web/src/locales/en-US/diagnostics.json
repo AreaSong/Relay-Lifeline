@@ -12,5 +12,18 @@
   "runFailed": "Diagnostics failed",
   "exportFailed": "Export failed",
   "pathTitle": "Execution path",
-  "pathDescription": "Checks run in operational order; no model request or token usage is involved"
+  "pathDescription": "Checks run in operational order; no model request or token usage is involved",
+  "process": {
+    "title": "Gateway process resources",
+    "description": "Shows only the Relay-Lifeline process; a container PID is not the host PID",
+    "sampledAt": "Sampled at {{time}}",
+    "pid": "Process PID",
+    "parentPid": "Parent PID {{pid}}",
+    "scheduler": "Go goroutines",
+    "schedulerDetail": "{{cpu}} CPUs · GOMAXPROCS {{gomaxprocs}}",
+    "heap": "Allocated heap",
+    "heapInuse": "In-use spans {{value}}",
+    "systemMemory": "Go system memory",
+    "gcCycles": "{{count}} completed GC cycles"
+  }
 }

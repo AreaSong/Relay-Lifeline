@@ -39,6 +39,8 @@ Configuration writes validate the complete versioned document and use an atomic 
 
 The control-plane contract has an explicit API response header and runtime metadata endpoint. Build version, revision, timestamp, image reference, process start time, Go platform, Admin API version, and configuration schema version are therefore observable without inspecting the container filesystem.
 
+Runtime metadata also includes the PID and parent PID in the current process namespace, Go goroutines, GOMAXPROCS, and a Go memory snapshot. It never mounts host `/proc` or the Docker socket to obtain a host process list. Clients may declare client and task IDs through bounded allowlisted headers. Values are format-validated before entering the timeline and removed before upstream forwarding. Codex app-server `threadId` is a logical conversation identifier; a background terminal's `processId` is an app-server-level process identifier with a separate `osPid` field that may be null. Neither is a host operating-system PID. These fields are correlation metadata, not authentication.
+
 On termination, readiness immediately switches to draining, waiting requests receive one immediate retry opportunity, and the main process synchronously waits for HTTP handlers until the configured shutdown deadline. A forced termination cannot preserve downstream TCP connections across processes; incomplete captures are finalized as `interrupted` on the next start.
 
 ## In-memory monitoring

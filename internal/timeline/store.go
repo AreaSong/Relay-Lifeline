@@ -49,6 +49,8 @@ type Event struct {
 
 type Record struct {
 	ID               string         `json:"id"`
+	ClientID         string         `json:"clientId,omitempty"`
+	TaskID           string         `json:"taskId,omitempty"`
 	Method           string         `json:"method"`
 	Path             string         `json:"path"`
 	State            string         `json:"state"`
@@ -95,8 +97,12 @@ func NewPersistent(limits func() Limits, eventJournal *journal.Store) (*Store, e
 }
 
 func (s *Store) Start(id, method, path string) {
+	s.StartWithIdentity(id, method, path, "", "")
+}
+
+func (s *Store) StartWithIdentity(id, method, path, clientID, taskID string) {
 	now := s.now()
-	record := &Record{ID: id, Method: method, Path: path, State: "queued", StartedAt: now}
+	record := &Record{ID: id, ClientID: clientID, TaskID: taskID, Method: method, Path: path, State: "queued", StartedAt: now}
 	record.Events = []Event{{Time: now, Type: "received", MessageCode: "timeline.received"}}
 	s.mu.Lock()
 	s.appendJournal(id, journalStart, record)

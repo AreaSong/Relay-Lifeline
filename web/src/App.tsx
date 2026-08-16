@@ -147,10 +147,10 @@ export function App() {
     setStatus(nextStatus); setAlerts(nextAlerts); setIncidents(nextIncidents); setRepeatTasks(nextRepeats);
   }, [api]);
   const refreshMonitoring = useCallback(async () => {
-    const [nextMetrics, nextErrors, nextEvents] = await Promise.all([
-      api.metrics(metricsWindow), api.metricErrors(metricsWindow), api.events(0, 200),
+    const [nextMetrics, nextErrors, nextEvents, nextRuntimeInfo] = await Promise.all([
+      api.metrics(metricsWindow), api.metricErrors(metricsWindow), api.events(0, 200), api.runtimeInfo(),
     ]);
-    setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events);
+    setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events); setRuntimeInfo(nextRuntimeInfo);
   }, [api, metricsWindow]);
 
   const confirmSettingsLeave = useCallback(async () => {
@@ -328,7 +328,7 @@ export function App() {
         {view === "incidents" && <IncidentsView incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} />}
         {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} initialRequestId={searchTarget?.kind === "log" ? searchTarget.id : undefined} initialEvent={searchTarget?.kind === "log" ? searchTarget.detail : undefined} />}
         {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} confirm={requestConfirmation} selectedId={searchTarget?.kind === "capture" ? searchTarget.id : undefined} />}
-        {view === "diagnostics" && <DiagnosticsView report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
+        {view === "diagnostics" && <DiagnosticsView runtimeInfo={runtimeInfo} report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
         {view === "settings" && canOperate && <SettingsView config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
       </ViewErrorBoundary>
     </main>

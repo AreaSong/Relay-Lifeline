@@ -3,6 +3,8 @@ package monitoring
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -53,6 +55,14 @@ func (s *Store) Prometheus() string {
 	for _, category := range errors.Categories {
 		fmt.Fprintf(&output, "relay_lifeline_failed_attempts_by_category_24h{category=%q} %d\n", category.Code, category.Count)
 	}
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	writeMetric("relay_lifeline_process_pid", "PID in the current process namespace.", "gauge", os.Getpid())
+	writeMetric("relay_lifeline_process_goroutines", "Current Go goroutine count.", "gauge", runtime.NumGoroutine())
+	writeMetric("relay_lifeline_process_heap_alloc_bytes", "Bytes currently allocated on the Go heap.", "gauge", memory.HeapAlloc)
+	writeMetric("relay_lifeline_process_heap_inuse_bytes", "Bytes in spans currently used by the Go heap.", "gauge", memory.HeapInuse)
+	writeMetric("relay_lifeline_process_system_memory_bytes", "Total bytes obtained from the operating system by the Go runtime.", "gauge", memory.Sys)
+	writeMetric("relay_lifeline_process_gc_cycles", "Completed Go garbage collection cycles.", "counter", memory.NumGC)
 	s.mu.Lock()
 	persistenceProvider := s.persistence
 	s.mu.Unlock()

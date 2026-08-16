@@ -176,8 +176,9 @@ td strong { display: block; font-weight: 580; white-space: nowrap; }
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .drawer-header h2 { margin: 10px 0 4px; font-size: 18px; font-weight: 620; overflow-wrap: anywhere; }
 .drawer-header p { margin: 0; color: var(--text-soft); font:  11px var(--font-mono); }
-.timeline-summary { display: flex; gap: 22px; margin: 16px 0; padding: 12px; color: var(--text-soft); background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; }
+.timeline-summary { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 16px 0; padding: 12px; color: var(--text-soft); background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; }
 .timeline-summary strong { margin-left: 4px; color: var(--text); font-weight: 570; }
+.client-identity { max-width: min(420px, 70vw); overflow: hidden; font-family: var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .timeline-list { display: grid; }
 .timeline-event { min-height: 68px; position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 10px; }
 .timeline-event::before { width: 1px; position: absolute; top: 30px; bottom: 0; left: 15px; content: ""; background: var(--border); }

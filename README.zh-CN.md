@@ -35,6 +35,8 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - 提供 `15m`、`1h`、`6h`、`24h` 窗口的内存可靠性、压力、错误分类和恢复指标。
 - 对结构化上游错误进行白名单提取、脱敏和长度限制。
 - 可筛选、暂停刷新和下载的实时结构化运行日志，不包含请求或响应正文。
+- 展示当前网关 PID、Go 协程、调度器和内存快照；容器 PID 不会伪装成宿主机 PID。
+- 可通过显式客户端 Header 关联 Codex 任务/会话 ID，并确保这些本地标识不转发到上游。
 - 主动开启的临时诊断捕获：加密保存请求、每次 CPA 响应和最终响应，支持过滤预览、过滤下载与完整原文下载。
 - 独立 Webhook 队列、事件过滤和投递重试。
 - UI、管理 API、CLI、日志、诊断和 Webhook 全部支持中英文。
@@ -123,6 +125,7 @@ retry:
 - 修改重试、流、队列、历史、风险、通知、日志和语言设置。
 - 保存前无落盘校验配置，明确显示热更新与需重启区段，再原子保存或从磁盘重新加载。
 - 查看运行版本、revision、构建时间、镜像引用、运行时长、管理 API 版本和配置 schema 版本。
+- 查看当前 Relay-Lifeline 进程的 PID、Go 协程、CPU 调度和内存资源快照。
 - 查看实时结构化日志；按级别、事件或请求 ID 筛选并下载。
 - 临时捕获接下来的指定数量请求，查看过滤正文，或下载过滤/完整原文 ZIP。
 
@@ -139,7 +142,9 @@ Signal Continuity 只展示网关实际观测到的状态，不会额外发送�
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>`：读取有界运行事件环。响应包含 `nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，客户端可据此续读或发现旧事件已被覆盖。
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>`：读取最新结构化日志；也可使用 `after` 游标续读。响应包含 `entries`、`nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，筛选值和级别均有严格边界。
 
-Prometheus 端点提供 `relay_lifeline_journal_*` 指标，包括条目数、字节数、启动回放、最近压实、写入健康和压实健康状态。
+Prometheus 端点提供 `relay_lifeline_journal_*` 指标，包括条目数、字节数、启动回放、最近压实、写入健康和压实健康状态；`relay_lifeline_process_*` 提供 PID、Go 协程、堆内存、系统内存和 GC 次数。
+
+客户端可选传入 `X-Relay-Lifeline-Client-ID` 与 `X-Relay-Lifeline-Task-ID`。为兼容 Codex 包装器，也接受 `X-Codex-Session-ID` 与 `X-Codex-Thread-ID`。值必须不超过 128 字节且只能包含安全标识字符；它们会作为“客户端声明、未经验证”的关联元数据进入活动请求、历史和运行日志，但不会转发到上游。不要把密钥或 Token 放入这些 Header。响应会返回 `X-Relay-Lifeline-Request-ID`，用于与网关自己的时间线关联。Codex app-server 的 `threadId` 是会话逻辑 ID，不是操作系统 PID；后台终端返回的 `processId` 是 app-server 层的进程标识，另有可能为空的 `osPid` 字段，二者都不能直接当作宿主机进程号。Codex 未显式发送这些 Header 时，网关无法从 HTTP 流量推导任务 ID，也无法从 Docker 容器内可靠获得宿主机 Codex PID。
 
 诊断 ZIP 分别包含脱敏配置、诊断、时间线、运行日志、指标、事故、恢复检查、Journal 摘要和配置备份元数据。它不包含请求/响应正文、安全错误详情、备份正文或密钥。单请求时间线最多保留 100 条事件；超限时保留首事件和最近事件，并通过 `eventsTruncated`、`droppedEvents` 明确报告省略数量。
 

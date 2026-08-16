@@ -16,6 +16,8 @@ import (
 
 type RequestInfo struct {
 	ID               string          `json:"id"`
+	ClientID         string          `json:"clientId,omitempty"`
+	TaskID           string          `json:"taskId,omitempty"`
 	Method           string          `json:"method"`
 	Path             string          `json:"path"`
 	State            lifecycle.State `json:"state"`
@@ -28,6 +30,11 @@ type RequestInfo struct {
 	LastErrorDetails map[string]any  `json:"lastErrorDetails,omitempty"`
 	RetryDeadline    time.Time       `json:"retryDeadline,omitempty"`
 	RetryIntervalMs  int64           `json:"retryIntervalMilliseconds,omitempty"`
+}
+
+type RequestIdentity struct {
+	ClientID string `json:"clientId,omitempty"`
+	TaskID   string `json:"taskId,omitempty"`
 }
 
 type RetryPolicy struct {
@@ -82,18 +89,35 @@ func NewRegistry(stores ...*timeline.Store) *Registry {
 }
 
 func (r *Registry) Add(method, path string, cancel context.CancelFunc) (string, <-chan struct{}) {
+	return r.AddWithIdentity(method, path, cancel, RequestIdentity{})
+}
+
+func (r *Registry) AddWithIdentity(method, path string, cancel context.CancelFunc, identity RequestIdentity) (string, <-chan struct{}) {
 	now := time.Now()
 	id := newID()
 	retryNow := make(chan struct{}, 1)
 	r.mu.Lock()
 	r.requests[id] = &trackedRequest{
-		info:   RequestInfo{ID: id, Method: method, Path: path, State: lifecycle.StateQueued, StartedAt: now, UpdatedAt: now},
+		info: RequestInfo{
+			ID: id, ClientID: identity.ClientID, TaskID: identity.TaskID,
+			Method: method, Path: path, State: lifecycle.StateQueued, StartedAt: now, UpdatedAt: now,
+		},
 		cancel: cancel, retryNow: retryNow,
 	}
 	r.mu.Unlock()
 	r.total.Add(1)
-	r.timeline.Start(id, method, path)
+	r.timeline.StartWithIdentity(id, method, path, identity.ClientID, identity.TaskID)
 	return id, retryNow
+}
+
+func (r *Registry) Identity(id string) (RequestIdentity, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	request, ok := r.requests[id]
+	if !ok {
+		return RequestIdentity{}, false
+	}
+	return RequestIdentity{ClientID: request.info.ClientID, TaskID: request.info.TaskID}, true
 }
 
 func (r *Registry) Update(id string, status lifecycle.State, attempt int, lastError string, nextRetry time.Time) {

@@ -99,7 +99,9 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	watchDownstreamClose(ctx, writer, onDisconnect)
-	requestID, retryNow := g.registry.Add(request.Method, request.URL.Path, cancel)
+	identity := clientIdentityFromHeaders(request.Header)
+	requestID, retryNow := g.registry.AddWithIdentity(request.Method, request.URL.Path, cancel, identity)
+	writer.Header().Set("X-Relay-Lifeline-Request-ID", requestID)
 	if g.repeater != nil {
 		g.repeater.RegisterSource(requestID, repeat.Template{
 			Method: request.Method, Path: request.URL.RequestURI(), Headers: request.Header,
@@ -395,7 +397,12 @@ func (g *Gateway) addRunLog(level, event, message, requestID string, attempt, st
 	if g.runLogs == nil {
 		return
 	}
-	g.runLogs.Add(runlog.Entry{Level: level, Event: event, Message: message, RequestID: requestID, Attempt: attempt, StatusCode: statusCode, Fields: fields})
+	identity, _ := g.registry.Identity(requestID)
+	g.runLogs.Add(runlog.Entry{
+		Level: level, Event: event, Message: message, RequestID: requestID,
+		ClientID: identity.ClientID, TaskID: identity.TaskID,
+		Attempt: attempt, StatusCode: statusCode, Fields: fields,
+	})
 }
 
 func readRequestBody(writer http.ResponseWriter, request *http.Request, limit int64, locale, fallback string) ([]byte, error) {

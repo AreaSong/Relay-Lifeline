@@ -1,7 +1,8 @@
 {
   "columns": { "request": "Request", "result": "Result", "status": "Status", "attempts": "Attempts", "duration": "Duration", "nextRetry": "Next retry", "lastError": "Latest error", "actions": "Actions" },
   "emptyActive": "No active requests",
-  "filters": { "search": "Search request ID or path", "state": "State", "allStates": "All states" },
+  "filters": { "search": "Search request, Codex task ID, or client ID", "state": "State", "allStates": "All states" },
+  "identity": { "task": "Task ID (client-declared)", "client": "Client ID (client-declared)" },
   "summary": { "active": "Active", "requesting": "Requesting", "waiting": "Waiting", "queued": "Queued" },
   "windowLabels": { "15m": "15 min", "1h": "1 hr", "6h": "6 hr", "24h": "24 hr" },
   "history": { "title": "Request history", "description": "Only redacted metadata from this process is retained", "empty": "No completed requests yet", "window": "Time window", "events": "Operational events", "eventsEmpty": "No operational events in this process" },

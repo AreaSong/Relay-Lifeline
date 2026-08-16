@@ -1,6 +1,7 @@
 package buildinfo
 
 import (
+	"os"
 	"runtime"
 	"time"
 )
@@ -26,6 +27,21 @@ type Info struct {
 	UptimeSeconds       int64     `json:"uptimeSeconds"`
 	AdminAPIVersion     string    `json:"adminApiVersion"`
 	ConfigSchemaVersion int       `json:"configSchemaVersion"`
+	Process             Process   `json:"process"`
+}
+
+type Process struct {
+	PID               int       `json:"pid"`
+	ParentPID         int       `json:"parentPid"`
+	Goroutines        int       `json:"goroutines"`
+	CPUCount          int       `json:"cpuCount"`
+	GOMAXPROCS        int       `json:"gomaxprocs"`
+	HeapAllocBytes    uint64    `json:"heapAllocBytes"`
+	HeapInuseBytes    uint64    `json:"heapInuseBytes"`
+	StackInuseBytes   uint64    `json:"stackInuseBytes"`
+	SystemMemoryBytes uint64    `json:"systemMemoryBytes"`
+	GCCycles          uint32    `json:"gcCycles"`
+	SampledAt         time.Time `json:"sampledAt"`
 }
 
 func New(version, revision, builtAt, imageRef string, startedAt time.Time) Provider {
@@ -42,6 +58,19 @@ func (p Provider) Snapshot(configSchemaVersion int) Info {
 		GoVersion: runtime.Version(), Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		ImageRef: p.imageRef, StartedAt: p.startedAt, UptimeSeconds: int64(uptime.Seconds()),
 		AdminAPIVersion: AdminAPIVersion, ConfigSchemaVersion: configSchemaVersion,
+		Process: processSnapshot(),
+	}
+}
+
+func processSnapshot() Process {
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	return Process{
+		PID: os.Getpid(), ParentPID: os.Getppid(), Goroutines: runtime.NumGoroutine(),
+		CPUCount: runtime.NumCPU(), GOMAXPROCS: runtime.GOMAXPROCS(0),
+		HeapAllocBytes: memory.HeapAlloc, HeapInuseBytes: memory.HeapInuse,
+		StackInuseBytes: memory.StackInuse, SystemMemoryBytes: memory.Sys,
+		GCCycles: memory.NumGC, SampledAt: time.Now(),
 	}
 }
 

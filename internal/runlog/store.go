@@ -17,6 +17,8 @@ type Entry struct {
 	Event      string         `json:"event"`
 	Message    string         `json:"message"`
 	RequestID  string         `json:"requestId,omitempty"`
+	ClientID   string         `json:"clientId,omitempty"`
+	TaskID     string         `json:"taskId,omitempty"`
 	Attempt    int            `json:"attempt,omitempty"`
 	StatusCode int            `json:"statusCode,omitempty"`
 	Fields     map[string]any `json:"fields,omitempty"`

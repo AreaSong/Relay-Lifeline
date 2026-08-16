@@ -52,6 +52,25 @@ func TestRegistryRetryAndCancel(t *testing.T) {
 	}
 }
 
+func TestRegistryCarriesClientIdentityIntoHistory(t *testing.T) {
+	registry := NewRegistry()
+	identity := RequestIdentity{ClientID: "codex-session", TaskID: "codex-thread"}
+	id, _ := registry.AddWithIdentity("POST", "/v1/responses", func() {}, identity)
+	snapshot := registry.Snapshot(false)
+	if len(snapshot.Requests) != 1 || snapshot.Requests[0].ClientID != identity.ClientID || snapshot.Requests[0].TaskID != identity.TaskID {
+		t.Fatalf("活动请求缺少客户端关联标识: %+v", snapshot.Requests)
+	}
+	stored, ok := registry.Identity(id)
+	if !ok || stored != identity {
+		t.Fatalf("请求关联标识查询异常: %+v ok=%v", stored, ok)
+	}
+	registry.Remove(id, lifecycle.StateCanceled)
+	history := registry.History()
+	if len(history) != 1 || history[0].ClientID != identity.ClientID || history[0].TaskID != identity.TaskID {
+		t.Fatalf("历史记录缺少客户端关联标识: %+v", history)
+	}
+}
+
 func TestRetryWaitingOnlySignalsWaitingRequests(t *testing.T) {
 	registry := NewRegistry()
 	waitingID, waitingRetry := registry.Add("POST", "/v1/responses", func() {})

@@ -141,7 +141,7 @@ func buildTargetURL(baseURL string, incoming *url.URL) (string, error) {
 
 func copyHeaders(destination, source http.Header) {
 	for key, values := range source {
-		if isHopByHopHeader(key) {
+		if isHopByHopHeader(key) || isClientIdentityHeader(key) {
 			continue
 		}
 		for _, value := range values {

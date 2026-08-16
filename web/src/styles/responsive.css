@@ -135,6 +135,7 @@
   .timeline-drawer, .capture-drawer { width: min(100%, 560px); padding: 18px; }
   .diagnostic-path { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .diagnostic-node:nth-child(2n)::after { display: none; }
+  .process-grid { grid-template-columns: 1fr 1fr; }
   .logs-heading, .captures-heading { align-items: flex-start; flex-direction: column; padding-block: 12px; }
   .log-filters, .capture-controls, .capture-key-grid { grid-template-columns: 1fr; }
   .runtime-log { max-height: none; }
@@ -172,6 +173,8 @@
   .mobile-bottom-nav button { font-size: 11px; }
   .mobile-bottom-nav svg { width: 18px; height: 18px; }
   .content-section, .settings-stack section { padding-inline: 12px; }
+  .process-grid { grid-template-columns: 1fr; }
+  .process-snapshot > .section-heading { align-items: flex-start; flex-direction: column; }
 }
 
 @media (prefers-reduced-motion: reduce) {

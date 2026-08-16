@@ -174,6 +174,15 @@
 .event-marker time { display: block; margin-top: 5px; font:  11px var(--font-mono); }
 
 .diagnostic-summary { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 12px 14px; color: var(--success); background: var(--success-soft); border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border)); border-radius: var(--radius-sm); }
+.process-snapshot { margin-bottom: 18px; padding: 0; }
+.process-snapshot > .section-heading { min-height: 50px; }
+.process-sampled { color: var(--text-faint); font: 11px var(--font-mono); white-space: nowrap; }
+.process-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.process-grid > div { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 9px; padding: 12px; background: var(--surface-raised); }
+.process-grid svg { grid-row: 1 / span 3; color: var(--info); }
+.process-grid span, .process-grid small { overflow: hidden; color: var(--text-soft); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.process-grid strong { overflow: hidden; color: var(--text); font: 600 16px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.process-grid small { color: var(--text-faint); font-family: var(--font-mono); }
 .diagnostic-summary.unhealthy { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); }
 .diagnostic-summary strong { font-size: 12px; }
 .diagnostic-summary span { font-size: 11px; }

@@ -57,6 +57,9 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 		if request.Header.Get("Authorization") != "Bearer test-key" {
 			t.Errorf("Authorization 未透传")
 		}
+		if request.Header.Get("X-Codex-Thread-ID") != "" || request.Header.Get("X-Codex-Session-ID") != "" {
+			t.Errorf("本地 Codex 关联标识泄露到上游")
+		}
 		body, _ := io.ReadAll(request.Body)
 		if string(body) != `{"model":"test","stream":true}` {
 			t.Errorf("请求体发生变化: %s", body)
@@ -81,6 +84,8 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer test-key")
 	request.Header.Set("Idempotency-Key", "stable-client-key")
+	request.Header.Set("X-Codex-Session-ID", "codex-session")
+	request.Header.Set("X-Codex-Thread-ID", "codex-thread")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -107,8 +112,11 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 		t.Fatalf("等待期间缺少心跳: %s", body)
 	}
 	history := registry.History()
-	if len(history) != 1 || history[0].State != "successful" || history[0].Attempt != 3 {
+	if len(history) != 1 || history[0].State != "successful" || history[0].Attempt != 3 || history[0].ClientID != "codex-session" || history[0].TaskID != "codex-thread" {
 		t.Fatalf("请求历史异常: %+v", history)
+	}
+	if response.Header.Get("X-Relay-Lifeline-Request-ID") != history[0].ID {
+		t.Fatalf("响应缺少稳定请求关联 Header: headers=%v history=%+v", response.Header, history[0])
 	}
 	failed, waiting, completed := 0, 0, 0
 	for _, event := range history[0].Events {
@@ -127,6 +135,9 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 	events := map[string]bool{}
 	for _, entry := range runtimeLogs.List(0, "", "", "") {
 		events[entry.Event] = true
+		if entry.ClientID != "codex-session" || entry.TaskID != "codex-thread" {
+			t.Fatalf("运行日志缺少客户端关联标识: %+v", entry)
+		}
 	}
 	for _, event := range []string{"queue.entered", "queue.acquired", "downstream.heartbeat", "retry.scheduled", "retry.resumed", "request.succeeded"} {
 		if !events[event] {

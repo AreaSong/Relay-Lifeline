@@ -35,6 +35,8 @@ The public project name is **Relay-Lifeline**, and the official image is `ghcr.i
 - In-memory reliability, pressure, error-category, and recovery telemetry across `15m`, `1h`, `6h`, and `24h` windows.
 - Safe extraction of structured upstream error details with redaction and size limits.
 - Filterable, pausable, downloadable structured runtime logs without request or response bodies.
+- Current gateway PID, Go goroutines, scheduler, and memory snapshots without presenting a container PID as the host PID.
+- Optional Codex task/session correlation through explicit client headers that are never forwarded upstream.
 - Explicit temporary diagnostic capture for requests, every CPA response, and the final response, with filtered preview plus filtered and full-raw downloads.
 - Asynchronous Webhook delivery with event filters and retry.
 - Chinese and English UI, API messages, CLI text, logs, diagnostics, and Webhooks.
@@ -123,6 +125,7 @@ The console can:
 - Change retry, stream, queue, history, risk, notification, logging, and locale settings.
 - Validate configuration without persistence, show hot-reload and restart sections, save atomically, and reload it from disk.
 - Display runtime version, revision, build time, image reference, uptime, Admin API version, and configuration schema version.
+- Inspect the current Relay-Lifeline PID, Go goroutines, CPU scheduler, and memory resource snapshot.
 - Filter and download live structured runtime logs.
 - Capture the next bounded set of requests, preview filtered bodies, and download filtered or full-raw ZIP archives.
 
@@ -138,7 +141,9 @@ The authenticated management API exposes:
 - `GET /admin/api/metrics/errors?window=15m|1h|6h|24h` for the stable error distribution. The default window is `24h`.
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>` for the bounded operational event ring. Responses include `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap` so clients can resume or detect overwritten events.
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>` for the latest structured log entries, or use an `after` cursor for incremental reads. Responses include `entries`, `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap`, with strict bounds on levels and filters.
-- The Prometheus endpoint includes `relay_lifeline_journal_*` gauges for entry count, bytes, startup replay, latest compaction, write health, and compaction health.
+- The Prometheus endpoint includes `relay_lifeline_journal_*` gauges for entry count, bytes, startup replay, latest compaction, write health, and compaction health. `relay_lifeline_process_*` exposes the PID, Go goroutines, heap memory, system memory, and GC cycles.
+
+Clients may optionally send `X-Relay-Lifeline-Client-ID` and `X-Relay-Lifeline-Task-ID`. `X-Codex-Session-ID` and `X-Codex-Thread-ID` are accepted for Codex wrappers. Values must be no longer than 128 bytes and contain only safe identifier characters. They are retained as unverified client-declared correlation metadata in active requests, history, and runtime logs, but are never forwarded upstream. Never put a key or token in these headers. Responses include `X-Relay-Lifeline-Request-ID` for correlation with the gateway timeline. In Codex app-server, `threadId` is a logical conversation ID, not an operating-system PID; a background terminal's `processId` is an app-server-level process identifier, with a separate `osPid` field that may be null, and neither should be treated as a host process number. If Codex does not explicitly send these headers, the gateway cannot infer a task ID from HTTP traffic or reliably obtain a host Codex PID from inside the Docker container.
 
 Diagnostic ZIP exports include separate redacted configuration, diagnostics, timeline, runtime log, metric, incident, recovery-check, journal-summary, and configuration-backup metadata files. They never include request/response bodies, safe error details, backup contents, or secrets. Each request timeline retains at most 100 events; on overflow it preserves the first and most recent events and reports `eventsTruncated` and `droppedEvents`.
 

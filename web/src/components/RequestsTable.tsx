@@ -28,7 +28,7 @@ export function RequestsTable({ requests, api, refresh, onOpen, onError, canOper
   return <div className="table-wrap responsive-table"><table><thead><tr>
     <th>{t("requests:columns.request")}</th><th>{t("requests:columns.status")}</th><th>{t("requests:columns.attempts")}</th><th>{t("requests:columns.duration")}</th><th>{t("requests:columns.nextRetry")}</th><th aria-label={t("requests:columns.actions")} />
   </tr></thead><tbody>{requests.map((request) => <tr key={request.id}>
-    <td data-label={t("requests:columns.request")}><strong>{request.method} {request.path}</strong><span className="subtle">{request.id}</span></td>
+    <td data-label={t("requests:columns.request")}><strong>{request.method} {request.path}</strong><span className="subtle">{request.id}</span>{request.taskId && <span className="subtle client-identity">{t("requests:identity.task")}: {request.taskId}</span>}{request.clientId && <span className="subtle client-identity">{t("requests:identity.client")}: {request.clientId}</span>}</td>
     <td data-label={t("requests:columns.status")}><span className={`status ${request.state}`}>{t(`common:status.${request.state}`, { defaultValue: request.state })}</span>{request.lastError && <span className="subtle">{request.lastError}</span>}</td>
     <td data-label={t("requests:columns.attempts")}>{request.attempt}</td><td data-label={t("requests:columns.duration")}>{formatAge(request.startedAt)}</td>
     <td data-label={t("requests:columns.nextRetry")}>{formatOptionalTime(request.nextRetryAt, i18n.resolvedLanguage, t("common:notAvailable"))}</td>

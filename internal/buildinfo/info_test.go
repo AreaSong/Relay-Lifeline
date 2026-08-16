@@ -14,4 +14,10 @@ func TestSnapshotContainsStableContractIdentity(t *testing.T) {
 	if info.GoVersion == "" || info.Platform == "" || info.UptimeSeconds < 1 {
 		t.Fatalf("运行环境信息不完整: %+v", info)
 	}
+	if info.Process.PID < 1 || info.Process.Goroutines < 1 || info.Process.CPUCount < 1 || info.Process.GOMAXPROCS < 1 {
+		t.Fatalf("进程身份信息不完整: %+v", info.Process)
+	}
+	if info.Process.SystemMemoryBytes == 0 || info.Process.SampledAt.IsZero() {
+		t.Fatalf("进程资源快照不完整: %+v", info.Process)
+	}
 }

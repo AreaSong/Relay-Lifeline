@@ -32,7 +32,7 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
   const requests = useMemo(() => status.requests.filter((request) => {
     const matchesState = state === "all" || request.state === state;
     const needle = query.trim().toLowerCase();
-    return matchesState && (!needle || request.id.toLowerCase().includes(needle) || request.path.toLowerCase().includes(needle));
+    return matchesState && (!needle || [request.id, request.path, request.clientId, request.taskId].some((value) => value?.toLowerCase().includes(needle)));
   }), [query, state, status.requests]);
   const pressure = (metrics?.series || []).slice(-30).map((point) => point.active + point.waiting + point.queued);
 

@@ -124,6 +124,19 @@ export interface RuntimeInfo {
   uptimeSeconds: number;
   adminApiVersion: string;
   configSchemaVersion: number;
+  process: {
+    pid: number;
+    parentPid: number;
+    goroutines: number;
+    cpuCount: number;
+    gomaxprocs: number;
+    heapAllocBytes: number;
+    heapInuseBytes: number;
+    stackInuseBytes: number;
+    systemMemoryBytes: number;
+    gcCycles: number;
+    sampledAt: string;
+  };
 }
 
 export interface SessionInfo {
@@ -148,6 +161,8 @@ export interface ConfigSaveResult extends ConfigChangePlan {
 
 export interface RequestInfo {
   id: string;
+  clientId?: string;
+  taskId?: string;
   method: string;
   path: string;
   state: string;
@@ -231,6 +246,8 @@ export interface ErrorDetail {
 
 export interface HistoryRecord {
   id: string;
+  clientId?: string;
+  taskId?: string;
   method: string;
   path: string;
   state: "successful" | "failed" | "canceled" | string;
@@ -305,6 +322,8 @@ export interface RuntimeLogEntry {
   event: string;
   message: string;
   requestId?: string;
+  clientId?: string;
+  taskId?: string;
   attempt?: number;
   statusCode?: number;
   fields?: Record<string, unknown>;

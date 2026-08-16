@@ -97,7 +97,7 @@ func TestPersistentTimelineReplaysCompletedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.Start("request", "POST", "/v1/responses")
+	store.StartWithIdentity("request", "POST", "/v1/responses", "codex-session", "codex-thread")
 	store.Add("request", Event{Type: "attempt_started", Attempt: 1})
 	store.Finish("request", "successful")
 	if err := eventJournal.Close(); err != nil {
@@ -114,7 +114,7 @@ func TestPersistentTimelineReplaysCompletedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, ok := replayed.Request("request")
-	if !ok || record.State != "successful" || record.Attempt != 1 || len(record.Events) != 2 {
+	if !ok || record.State != "successful" || record.Attempt != 1 || len(record.Events) != 2 || record.ClientID != "codex-session" || record.TaskID != "codex-thread" {
 		t.Fatalf("持久化时间线回放异常: %+v", record)
 	}
 }

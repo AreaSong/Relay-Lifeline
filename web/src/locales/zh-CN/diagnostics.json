@@ -12,5 +12,18 @@
   "runFailed": "诊断失败",
   "exportFailed": "导出失败",
   "pathTitle": "执行路径",
-  "pathDescription": "按真实运行顺序检查，不会发起模型请求或消耗额度"
+  "pathDescription": "按真实运行顺序检查，不会发起模型请求或消耗额度",
+  "process": {
+    "title": "网关进程资源",
+    "description": "仅展示当前 Relay-Lifeline 进程；容器 PID 不等同于宿主机 PID",
+    "sampledAt": "采样于 {{time}}",
+    "pid": "进程 PID",
+    "parentPid": "父 PID {{pid}}",
+    "scheduler": "Go 协程",
+    "schedulerDetail": "{{cpu}} CPU · GOMAXPROCS {{gomaxprocs}}",
+    "heap": "已分配堆内存",
+    "heapInuse": "在用跨度 {{value}}",
+    "systemMemory": "Go 系统内存",
+    "gcCycles": "已完成 {{count}} 次 GC"
+  }
 }

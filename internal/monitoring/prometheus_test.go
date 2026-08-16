@@ -28,6 +28,9 @@ func TestPrometheusHandlerExportsBoundedMetrics(t *testing.T) {
 		`relay_lifeline_journal_entries{journal="requests"} 12`,
 		`relay_lifeline_journal_size_bytes{journal="requests"} 4096`,
 		`relay_lifeline_journal_healthy{journal="requests"} 1`,
+		"relay_lifeline_process_pid ",
+		"relay_lifeline_process_goroutines ",
+		"relay_lifeline_process_heap_alloc_bytes ",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Prometheus 输出缺少 %q:\n%s", expected, body)

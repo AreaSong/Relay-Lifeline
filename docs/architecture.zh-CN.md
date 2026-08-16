@@ -39,6 +39,8 @@ AI 客户端 -> 数据面 -> OpenAI-compatible 中转站 -> 模型提供商
 
 控制面契约提供明确的 API 版本响应 Header 和运行元数据接口，因此无需进入容器即可查看构建版本、revision、构建时间、镜像引用、进程启动时间、Go 平台、管理 API 版本和配置 schema 版本。
 
+运行元数据同时包含当前进程命名空间内的 PID、父 PID、Go 协程、GOMAXPROCS 和 Go 内存快照。它不会尝试通过挂载宿主机 `/proc` 或 Docker socket 获取宿主机进程表。客户端可以通过有界白名单 Header 声明客户端和任务 ID；标识会在进入时间线前完成格式校验，并在转发上游前移除。Codex app-server 的 `threadId` 是逻辑会话标识，后台终端 `processId` 是 app-server 层的进程标识（另有可能为空的 `osPid`），两者都不等同于宿主机操作系统 PID。该信息只用于关联，不构成身份认证。
+
 收到退出信号后，Readiness 立即切换为 draining，等待中的请求会获得一次立即重试机会，主进程同步等待 HTTP Handler 排空到配置的关闭期限。强制终止无法跨进程保留下游 TCP 连接；未完成捕获会在下次启动时标记为 `interrupted`。
 
 ## 内存监控
