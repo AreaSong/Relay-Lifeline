@@ -1,4 +1,4 @@
-import type { Alert, BatchActionResponse, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RepeatTask, RetryPolicyInput, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
+import type { Alert, BatchActionResponse, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryPage, HistoryRecord, IncidentDetail, IncidentPage, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, NotificationDelivery, NotificationStatus, RealtimeEvent, RepeatTask, RetryPolicyInput, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -111,7 +111,7 @@ export class ApiClient {
   config() {
     return this.request<Config>("/config", undefined, (value) => {
       const config = expectObject<Config>(value, "config");
-      if (config.schemaVersion !== 2) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
+      if (config.schemaVersion !== 3) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
       return config;
     });
   }
@@ -120,22 +120,48 @@ export class ApiClient {
     return this.request<Alert[]>("/alerts", undefined, (value) => expectArray(value, "alerts"));
   }
 
-  incidents() {
-    return this.request<Incident[]>("/incidents", undefined, (value) => expectArray(value, "incidents"));
+	notificationStatus() {
+		return this.request<NotificationStatus>("/notifications/status", undefined, (value) => expectObject(value, "notificationStatus"));
+	}
+
+	notificationDeliveries(limit = 20) {
+		return this.request<NotificationDelivery[]>(`/notifications/deliveries?limit=${limit}`, undefined, (value) => expectArray(value, "notificationDeliveries"));
+	}
+
+	testNotification() {
+		return this.request<{ queued: boolean }>("/notifications/test", { method: "POST" }, (value) => expectObject(value, "notificationTest"));
+	}
+
+	incidents(filters: { cursor?: string; limit?: number; from?: string; to?: string; state?: string; q?: string } = {}) {
+		const query = new URLSearchParams();
+		Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+		return this.request<IncidentPage>(`/incidents?${query}`, undefined, (value) => expectObjectArrays(value, "incidents", ["items"]));
+	}
+
+	incident(id: string) {
+		return this.request<IncidentDetail>(`/incidents/${encodeURIComponent(id)}`, undefined, (value) => expectObjectArrays(value, "incidentDetail", ["requests"]));
   }
 
-  subscribe(onSnapshot: (snapshot: RealtimeSnapshot) => void, onError: () => void) {
+	subscribe(onEvent: (event: RealtimeEvent) => void, onError: () => void) {
     const source = new EventSource(`/admin/api/stream?locale=${encodeURIComponent(this.locale)}`);
-    source.addEventListener("snapshot", (event) => {
-      try { onSnapshot(expectObject<RealtimeSnapshot>(JSON.parse((event as MessageEvent).data), "streamSnapshot")); }
-      catch { onError(); }
-    });
+		const receive = (message: Event) => {
+			try {
+				const event = expectObject<RealtimeEvent>(JSON.parse((message as MessageEvent).data), "realtimeEvent");
+				if (event.version !== 1 || !Number.isSafeInteger(event.sequence) || typeof event.type !== "string") throw new ApiError("INVALID_API_RESPONSE", "Invalid realtime event");
+				onEvent(event);
+			} catch { onError(); }
+		};
+		source.addEventListener("sync", receive);
+		source.addEventListener("reset", receive);
+		source.addEventListener("update", receive);
     source.onerror = onError;
     return () => source.close();
   }
 
-  history() {
-    return this.request<HistoryRecord[]>("/history", undefined, (value) => expectArray(value, "history"));
+	history(filters: { cursor?: string; limit?: number; from?: string; to?: string; state?: string; q?: string } = {}) {
+		const query = new URLSearchParams();
+		Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+		return this.request<HistoryPage>(`/history?${query}`, undefined, (value) => expectObjectArrays(value, "history", ["items"]));
   }
 
   metrics(window: MetricsWindow = "1h") {
@@ -298,7 +324,7 @@ export class ApiClient {
     return this.request<RepeatTask[]>("/repeat-tasks", undefined, (value) => expectArray(value, "repeatTasks"));
   }
 
-  createRepeatTask(id: string, input: { interval: string; duration: string; idempotency: "preserve" | "regenerate"; confirmForever: boolean }) {
+  createRepeatTask(id: string, input: { interval: string; duration: string; idempotency: "preserve" | "regenerate"; confirmForever: boolean; maxExecutions: number; maxFailures: number; failureThreshold: number; maxTokens: number }) {
     return this.request<RepeatTask>(`/requests/${encodeURIComponent(id)}/repeat`, { method: "POST", body: JSON.stringify(input) }, (value) => expectObject(value, "repeatTask"));
   }
 

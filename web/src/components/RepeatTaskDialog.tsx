@@ -21,6 +21,10 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
   const [duration, setDuration] = useState("1h");
   const [idempotency, setIdempotency] = useState<"preserve" | "regenerate">("preserve");
   const [forever, setForever] = useState(false);
+	const [maxExecutions, setMaxExecutions] = useState(100);
+	const [maxFailures, setMaxFailures] = useState(20);
+	const [failureThreshold, setFailureThreshold] = useState(5);
+	const [maxTokens, setMaxTokens] = useState(100000);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -46,7 +50,10 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
     })) return;
     setBusy(true);
     try {
-      await api.createRepeatTask(request.id, { interval, duration: forever ? "" : duration, idempotency, confirmForever: forever });
+		await api.createRepeatTask(request.id, {
+			interval, duration: forever ? "" : duration, idempotency, confirmForever: forever,
+			maxExecutions, maxFailures, failureThreshold, maxTokens,
+		});
       await refresh();
       onSuccess(t("requests:repeat.taskCreated"));
       onClose();
@@ -66,6 +73,10 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
           <label className="field"><span>{t("requests:repeat.interval")}</span><select value={interval} onChange={(event) => setIntervalValue(event.target.value)}>{["5s", "15s", "30s", "60s", "5m", "15m"].map((value) => <option key={value} value={value}>{t(`requests:repeat.values.${value}`)}</option>)}</select></label>
           <label className="field"><span>{t("requests:repeat.duration")}</span><select value={duration} disabled={forever} onChange={(event) => setDuration(event.target.value)}>{["5m", "15m", "30m", "1h", "6h", "24h"].map((value) => <option key={value} value={value}>{t(`requests:repeat.values.${value}`)}</option>)}</select></label>
           <label className="field wide"><span>{t("requests:repeat.idempotency")}</span><select value={idempotency} onChange={(event) => setIdempotency(event.target.value as "preserve" | "regenerate")}><option value="preserve">{t("requests:repeat.preserve")}</option><option value="regenerate">{t("requests:repeat.regenerate")}</option></select></label>
+			<label className="field"><span>{t("requests:repeat.maxExecutions")}</span><input type="number" min="1" max="100000" value={maxExecutions} onChange={(event) => setMaxExecutions(Number(event.target.value))} required /></label>
+			<label className="field"><span>{t("requests:repeat.maxFailures")}</span><input type="number" min="1" max="100000" value={maxFailures} onChange={(event) => setMaxFailures(Number(event.target.value))} required /></label>
+			<label className="field wide"><span>{t("requests:repeat.failureThreshold")}</span><input type="number" min="1" max={maxFailures} value={failureThreshold} onChange={(event) => setFailureThreshold(Number(event.target.value))} required /></label>
+			<label className="field wide"><span>{t("requests:repeat.maxTokens")}</span><input type="number" min="1" max="1000000000000" value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} required /> <small className="field-hint">{t("requests:repeat.maxTokensHint")}</small></label>
         </div>
         <label className="repeat-checkbox"><input type="checkbox" checked={forever} onChange={(event) => setForever(event.target.checked)} /><span>{t("requests:repeat.forever")}</span></label>
         <div className="repeat-warning"><ShieldAlert size={17} /><span>{t("requests:repeat.warning")}</span></div>

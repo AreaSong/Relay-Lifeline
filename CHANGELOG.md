@@ -2,6 +2,36 @@
 
 All notable changes are documented here. This project follows Semantic Versioning.
 
+## [Unreleased]
+
+## [2.3.0] - 2026-08-19
+
+### Added
+
+- Add decoded per-response and process-wide response-cache limits, continuous minimum-free-disk enforcement, and matching hot-reloadable settings.
+- Add schema 3 migration from schemas 1 and 2 with safe response-cache defaults.
+- Add endpoint-aware completion rules for non-streaming Responses and Chat Completions payloads.
+- Add execution limits, consecutive-failure circuit breaking, and bounded per-run audit records for continuous tasks.
+- Add Webhook health, queue metrics, bounded delivery history, and operator test delivery.
+- Add cursor-paginated history and incident queries with server-side filters and bounded related-request drill-down.
+- Add versioned incremental management events with cursor replay and explicit reset after retention gaps.
+- Add Vitest, Testing Library, and desktop/mobile Playwright coverage to the release gates.
+- Add mandatory Webhook HMAC-SHA256 signing for configured Webhooks with fail-closed environment validation and Key ID rotation metadata.
+- Add strict continuous-task token limits backed only by upstream `usage.total_tokens`; missing usage pauses tasks and cost estimation is intentionally excluded.
+
+### Changed
+
+- Let the Go HTTP transport negotiate and decode gzip instead of forwarding client compression preferences verbatim.
+- Restrict downstream delivery to validated JSON and request-matching SSE; unsupported binary media fails explicitly without retry.
+- Pause non-critical browser polling in background tabs and pin all direct frontend dependencies.
+- Require reusable CI verification, release-version consistency, and `govulncheck` before publishing images or binaries.
+- Build release artifacts with the Go 1.25 toolchain to include current standard-library security fixes.
+
+### Fixed
+
+- Prevent oversized or concurrent upstream responses from exhausting local memory or temporary storage.
+- Reject `in_progress`, missing-status, and empty-object Responses results instead of treating them as complete.
+
 ## [2.2.0] - 2026-07-30
 
 ### Added

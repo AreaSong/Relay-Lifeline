@@ -9,3 +9,6 @@ output/
 data/captures/
 web/node_modules/
 web/*.tsbuildinfo
+web/coverage/
+web/playwright-report/
+web/test-results/

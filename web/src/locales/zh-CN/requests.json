@@ -6,7 +6,7 @@
   "summary": { "active": "活动", "requesting": "请求中", "waiting": "等待中", "queued": "排队中" },
   "batch": { "retryableCount": "可重试 {{count}} 个", "selected": "已选 {{count}} 个", "selectAll": "选择当前筛选结果", "select": "选择", "selectRequest": "选择请求 {{id}}", "clearSelection": "清除选择", "policy": "批量设置策略", "retry": "重试可重试请求（{{count}}）", "retryAction": "确认重试", "retryConfirmTitle": "确认批量重试", "retryUncertainConfirm": "其中包含可能已经到达上游的请求，将对 {{count}} 个请求再次发起调用，可能产生重复副作用。", "retryManyConfirm": "将立即唤醒 {{count}} 个请求，并继续遵守并发和恢复间隔限制。", "retryResult": "已接受 {{accepted}} 个请求，跳过 {{skipped}} 个" },
   "windowLabels": { "15m": "15 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" },
-  "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求", "window": "时间范围", "events": "运行事件", "eventsEmpty": "当前进程还没有运行事件" },
+	"history": { "title": "请求历史", "description": "服务端分页返回脱敏元数据", "empty": "还没有已完成请求", "window": "时间范围", "events": "运行事件", "eventsEmpty": "当前进程还没有运行事件", "loadMore": "加载更早记录" },
   "timeline": { "label": "请求时间线", "attempts": "尝试", "duration": "耗时", "truncated": "该请求时间线过长，已省略 {{count}} 条较早的中间事件；首事件和最近事件已保留。" },
   "operationFailed": "操作失败",
   "timelineLoadFailed": "无法载入时间线",
@@ -32,13 +32,13 @@
   "repeat": {
     "action": "创建持续任务", "title": "创建持续任务", "mode": "执行模式", "retryMode": "限时恢复", "repeatMode": "持续重复",
     "retryDescription": "仅在失败时继续尝试，首次成功或到达截止时间后结束。", "repeatDescription": "原请求正常返回；后台任务无论成功或失败都会继续执行。",
-    "interval": "执行间隔", "duration": "最长持续时间", "idempotency": "幂等键策略", "preserve": "保留原幂等键（推荐）", "regenerate": "每轮生成新幂等键",
-    "forever": "一直运行，直到手动停止", "warning": "持续执行可能重复产生模型费用或业务副作用。凭据只保存在当前进程内，服务重启后任务不会自动恢复。",
+		"interval": "执行间隔", "duration": "最长持续时间", "idempotency": "幂等键策略", "preserve": "保留原幂等键（推荐）", "regenerate": "每轮生成新幂等键", "maxExecutions": "最大执行次数", "maxFailures": "最大失败次数", "failureThreshold": "连续失败熔断阈值", "maxTokens": "严格 Token 上限", "maxTokensHint": "只接受上游 usage.total_tokens；缺失时任务会暂停，不做估算。",
+	    "forever": "一直运行，直到手动停止", "warning": "持续执行可能重复产生模型费用或业务副作用。凭据只保存在当前进程内，服务重启后任务不会自动恢复。Token 预算只按上游权威 usage 计数，不估算费用。",
     "apply": "创建任务", "confirmTitle": "确认持续执行", "confirmDescription": "该操作可能重复调用上游并产生费用。请确认间隔、持续时间和幂等键策略均符合预期。", "confirmAction": "确认启动",
     "retryCreated": "限时恢复策略已生效", "taskCreated": "持续任务已创建", "tasksTitle": "持续任务", "tasksDescription": "安全摘要会保留；认证信息仅存在于当前进程内。",
-    "task": "任务", "results": "执行结果", "nextRun": "下次执行", "inFlight": "正在执行", "successCount": "成功 {{count}}", "failureCount": "失败 {{count}}",
+	    "task": "任务", "results": "执行结果", "nextRun": "下次执行", "inFlight": "正在执行", "successCount": "成功 {{count}}", "failureCount": "失败 {{count}}", "tokens": "Token", "unlimited": "未设置",
     "total": "总计", "success": "成功", "failure": "失败", "activeCount": "{{count}} 个运行任务", "noActive": "当前没有运行中的持续任务", "endedTasks": "已结束任务 · {{count}}",
-    "pause": "暂停任务", "resume": "恢复任务", "runNow": "立即执行", "stop": "停止任务", "memoryOnly": "服务重启时，仍在运行或暂停的任务会标记为已中断，不会自动重新发送。",
+		"pause": "暂停任务", "resume": "恢复任务", "runNow": "立即执行", "stop": "停止任务", "memoryOnly": "服务重启时，仍在运行或暂停的任务会标记为已中断，不会自动重新发送。", "circuitOpen": "连续失败 {{count}} 次，已熔断", "stopReasons": { "deadline": "达到截止时间", "max_executions": "达到执行上限", "max_failures": "达到失败上限", "failure_circuit_open": "连续失败熔断", "max_tokens": "达到 Token 上限", "usage_missing": "缺少权威 usage，任务已暂停" },
     "states": { "running": "运行中", "paused": "已暂停", "stopped": "已停止", "expired": "已到期", "interrupted": "已中断" },
     "values": { "5s": "5 秒", "15s": "15 秒", "30s": "30 秒", "60s": "1 分钟", "5m": "5 分钟", "15m": "15 分钟", "30m": "30 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" }
   }

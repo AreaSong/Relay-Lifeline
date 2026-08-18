@@ -1,4 +1,4 @@
-schema-version: 2
+schema-version: 3
 
 server:
   listen: "127.0.0.1:8318"
@@ -25,6 +25,8 @@ retry:
 stream:
   heartbeat-interval: "15s"
   memory-limit: "64MiB"
+  max-response-body: "512MiB"
+  max-total-cache: "2GiB"
   temp-dir: ""
 
 queue:

@@ -146,6 +146,12 @@
 .incident-row dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 14px 0 0; }
 .incident-row dt { color: var(--text-soft); font-size: 11px; }
 .incident-row dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 12px; }
+.incident-row .link-button { padding: 0; color: var(--accent); border: 0; background: transparent; font: inherit; cursor: pointer; }
+.incident-requests { margin-top: 12px; display: grid; gap: 5px; border-top: 1px solid var(--border); padding-top: 10px; }
+.incident-requests > button { width: 100%; min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); text-align: left; }
+.incident-requests > button > span:nth-child(2) { min-width: 0; display: grid; }
+.incident-requests small { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; }
+.list-load-more { display: flex; justify-content: center; padding-top: 14px; }
 
 .requests-view { gap: 12px; }
 .requests-view > .content-section, .repeat-tasks-section { padding: 0 16px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(10,24,16,.05); }
@@ -233,6 +239,14 @@
 .settings-diff { margin: 14px 0 0; padding: 11px 13px; color: var(--text-soft); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; }
 .settings-diff.dirty { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); }
 .settings-diff strong { display: block; margin-bottom: 5px; color: var(--text); }
+.notification-operations { margin-top: 18px; display: grid; gap: 12px; }
+.notification-health { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.notification-health div { min-width: 0; padding: 10px 12px; background: var(--surface); }
+.notification-health dt { color: var(--text-soft); font-size: 11px; }
+.notification-health dd { margin: 4px 0 0; font-weight: 700; }
+.notification-deliveries { display: grid; border-top: 1px solid var(--border); }
+.notification-deliveries > div { min-width: 0; display: grid; grid-template-columns: 18px minmax(90px, 1fr) auto auto; gap: 8px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.notification-deliveries time { color: var(--text-soft); }
 .runtime-info { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0 0 16px; overflow: hidden; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .runtime-info div { min-width: 0; padding: 11px 13px; background: var(--surface-raised); }
 .runtime-info dt { margin-bottom: 4px; color: var(--text-soft); font-size: 11px; }
@@ -271,7 +285,7 @@
 .repeat-tasks-section { margin-top: 0; }
 .repeat-tasks-section td:nth-child(3) { min-width: 184px; }
 .repeat-tasks-section .subtle svg { display: inline; vertical-align: -2px; }
-.repeat-results { display: grid; grid-template-columns: repeat(3,minmax(44px,1fr)); gap: 4px; }
+.repeat-results { display: grid; grid-template-columns: repeat(4,minmax(44px,1fr)); gap: 4px; }
 .repeat-results span { min-width: 0; display: grid; gap: 2px; }
 .repeat-results small { color: var(--text-faint); font-size: 10px; }
 .repeat-results strong { font: 600 13px var(--font-mono); }

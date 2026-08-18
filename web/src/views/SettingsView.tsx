@@ -1,9 +1,10 @@
-import { Power, RotateCcw, Save, Undo2, Zap } from "lucide-react";
-import { useState } from "react";
+import { Activity, Power, RotateCcw, Save, Send, Undo2, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { errorMessage, type ApiClient } from "../api";
 import { ThemeSelector } from "../components/ThemeSelector";
 import type { ThemeMode } from "../theme";
-import type { Config, RuntimeInfo } from "../types";
+import type { Config, NotificationDelivery, NotificationStatus, RuntimeInfo } from "../types";
 
 type Tab = "general" | "retry" | "traffic" | "continuity" | "safety" | "capture" | "notifications" | "appearance" | "logging";
 type Locale = "zh-CN" | "en-US";
@@ -88,6 +89,7 @@ function LocaleField({ label, value, onChange }: { label: string; value: Locale;
 }
 
 interface Props {
+	api: ApiClient;
   config: Config;
   setConfig: (value: Config) => void;
   save: () => Promise<void>;
@@ -101,9 +103,13 @@ interface Props {
   setThemeMode: (mode: ThemeMode) => void;
 }
 
-export function SettingsView({ config, setConfig, save, reload, discard, dirty, busy, baseline, runtimeInfo, themeMode, setThemeMode }: Props) {
+export function SettingsView({ api, config, setConfig, save, reload, discard, dirty, busy, baseline, runtimeInfo, themeMode, setThemeMode }: Props) {
   const { t } = useTranslation(["settings", "common"]);
   const [tab, setTab] = useState<Tab>("general");
+	const [notificationStatus, setNotificationStatus] = useState<NotificationStatus | null>(null);
+	const [notificationDeliveries, setNotificationDeliveries] = useState<NotificationDelivery[]>([]);
+	const [notificationBusy, setNotificationBusy] = useState(false);
+	const [notificationError, setNotificationError] = useState("");
   const patch = <K extends EditableConfigKey>(key: K, value: Partial<Config[K]>) => setConfig({ ...config, [key]: { ...config[key], ...value } });
   const toggleEvent = (eventType: string, enabled: boolean) => patch("notifications", {
     eventTypes: enabled ? Array.from(new Set([...config.notifications.eventTypes, eventType])) : config.notifications.eventTypes.filter((value) => value !== eventType),
@@ -113,6 +119,30 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
     .filter((key) => JSON.stringify(config[key]) !== JSON.stringify(baseline[key]))
     .map((key) => configTabs[key])));
   const restartHint = <small className="field-hint">{t("settings:restartHint")}</small>;
+	async function refreshNotifications() {
+		try {
+			const [status, deliveries] = await Promise.all([api.notificationStatus(), api.notificationDeliveries()]);
+			setNotificationStatus(status);
+			setNotificationDeliveries(deliveries);
+			setNotificationError("");
+		} catch (reason) {
+			setNotificationError(errorMessage(reason));
+		}
+	}
+	useEffect(() => {
+		if (tab === "notifications") void refreshNotifications();
+	}, [api, tab]);
+	async function sendTestNotification() {
+		setNotificationBusy(true);
+		try {
+			await api.testNotification();
+			await refreshNotifications();
+		} catch (reason) {
+			setNotificationError(errorMessage(reason));
+		} finally {
+			setNotificationBusy(false);
+		}
+	}
 
   return <div className="settings-shell">
     <div className="settings-tabs" role="tablist">{tabs.map((value) => <button role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} key={value} onClick={() => setTab(value)}>{t(`settings:tabs.${value}`)}</button>)}</div>
@@ -147,6 +177,8 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
         <section><div className="section-heading"><div><h2>{t("settings:sections.stream.title")}</h2><p>{t("settings:sections.stream.description")}</p></div></div><div className="form-grid">
           <DurationField label={t("settings:fields.heartbeat")} value={config.stream.heartbeatInterval} onChange={(heartbeatInterval) => patch("stream", { heartbeatInterval })} />
           <ByteSizeField label={t("settings:fields.memoryLimit")} value={config.stream.memoryLimit} onChange={(memoryLimit) => patch("stream", { memoryLimit })} />
+          <ByteSizeField label={t("settings:fields.maxResponseBody")} value={config.stream.maxResponseBody} onChange={(maxResponseBody) => patch("stream", { maxResponseBody })} />
+          <ByteSizeField label={t("settings:fields.maxTotalCache")} value={config.stream.maxTotalCache} onChange={(maxTotalCache) => patch("stream", { maxTotalCache })} />
           <label className="field wide"><span>{t("settings:fields.tempDir")}</span><input value={config.stream.tempDir} onChange={(event) => patch("stream", { tempDir: event.target.value })} placeholder={t("settings:fields.systemDefault")} /></label>
         </div></section>
       </>}
@@ -210,13 +242,18 @@ export function SettingsView({ config, setConfig, save, reload, discard, dirty, 
 		<label className="field"><span>{t("settings:fields.runtimeLogLimit")}</span><input type="number" min="100" max="100000" value={config.capture.logMaxItems} onChange={(event) => patch("capture", { logMaxItems: Number(event.target.value) })} /></label>
 		<DurationField label={t("settings:fields.runtimeLogRetention")} value={config.capture.logRetention} onChange={(logRetention) => patch("capture", { logRetention })} />
 	  </div></section>}
-      {tab === "notifications" && <section><div className="section-heading"><div><h2>{t("settings:sections.notifications.title")}</h2><p>{t("settings:sections.notifications.description")}</p></div></div><div className="form-grid">
+      {tab === "notifications" && <section><div className="section-heading"><div><h2>{t("settings:sections.notifications.title")}</h2><p>{t("settings:sections.notifications.description")}</p></div><button className="button compact" disabled={notificationBusy || !notificationStatus?.configured || !notificationStatus.signingConfigured} onClick={() => void sendTestNotification()}><Send size={15} />{t("settings:notifications.test")}</button></div><div className="form-grid">
         <DurationField label={t("settings:fields.stalledAfter")} value={config.notifications.stalledAfter} onChange={(stalledAfter) => patch("notifications", { stalledAfter })} />
         <label className="field"><span>{t("settings:fields.deliveryAttempts")}</span><input type="number" min="1" max="10" value={config.notifications.deliveryAttempts} onChange={(event) => patch("notifications", { deliveryAttempts: Number(event.target.value) })} /></label>
         <DurationField label={t("settings:fields.deliveryBackoff")} value={config.notifications.deliveryBackoff} onChange={(deliveryBackoff) => patch("notifications", { deliveryBackoff })} />
         <LocaleField label={t("settings:fields.notificationLocale")} value={config.notifications.locale} onChange={(locale) => patch("notifications", { locale })} />
         <label className="field wide"><span>{t("settings:fields.webhook")}</span><input type="url" value={config.notifications.webhookUrl} onChange={(event) => patch("notifications", { webhookUrl: event.target.value })} placeholder="https://" /></label>
-      </div><div className="event-options">{config.notifications.eventTypes.concat(["stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"]).filter((value, index, all) => all.indexOf(value) === index).map((eventType) => <Toggle key={eventType} label={t(`settings:events.${eventType}`, { defaultValue: eventType })} checked={config.notifications.eventTypes.includes(eventType)} onChange={(value) => toggleEvent(eventType, value)} />)}</div><Toggle label={t("settings:fields.notifyOnRecovery")} checked={config.notifications.notifyOnRecovery} onChange={(notifyOnRecovery) => patch("notifications", { notifyOnRecovery })} /></section>}
+      </div><div className="event-options">{config.notifications.eventTypes.concat(["stalled", "recovered", "long_running", "many_attempts", "auth_errors", "queue_pressure", "disk_pressure"]).filter((value, index, all) => all.indexOf(value) === index).map((eventType) => <Toggle key={eventType} label={t(`settings:events.${eventType}`, { defaultValue: eventType })} checked={config.notifications.eventTypes.includes(eventType)} onChange={(value) => toggleEvent(eventType, value)} />)}</div><Toggle label={t("settings:fields.notifyOnRecovery")} checked={config.notifications.notifyOnRecovery} onChange={(notifyOnRecovery) => patch("notifications", { notifyOnRecovery })} />
+		<div className="notification-operations" aria-live="polite">
+			{notificationError && <div className="error-banner">{notificationError}</div>}
+			{notificationStatus && <dl className="notification-health"><div><dt>{t("settings:notifications.queue")}</dt><dd>{notificationStatus.queueDepth} / {notificationStatus.queueCapacity}</dd></div><div><dt>{t("settings:notifications.delivered")}</dt><dd>{notificationStatus.delivered}</dd></div><div><dt>{t("settings:notifications.failed")}</dt><dd>{notificationStatus.failed}</dd></div><div><dt>{t("settings:notifications.dropped")}</dt><dd>{notificationStatus.dropped}</dd></div><div><dt>{t("settings:notifications.signing")}</dt><dd>{notificationStatus.signingConfigured ? t("settings:notifications.signingConfigured") : t("settings:notifications.signingMissing")}{notificationStatus.signingKeyId && <small className="subtle">{notificationStatus.signingKeyId}</small>}</dd></div></dl>}
+			{notificationDeliveries.length > 0 && <div className="notification-deliveries">{notificationDeliveries.slice(0, 10).map((delivery) => <div key={delivery.id}><Activity size={14} /><strong>{delivery.eventType}</strong><span className={`status ${delivery.outcome}`}>{t(`settings:notifications.outcome.${delivery.outcome}`)}</span><time>{new Date(delivery.completedAt).toLocaleString()}</time></div>)}</div>}
+		</div></section>}
       {tab === "appearance" && <section><div className="section-heading"><div><h2>{t("settings:sections.appearance.title")}</h2><p>{t("settings:sections.appearance.description")}</p></div></div><ThemeSelector mode={themeMode} onChange={setThemeMode} /><dl className="font-stack-summary"><div><dt>{t("settings:fonts.interface")}</dt><dd>Source Sans 3 · Source Han Sans SC</dd></div><div><dt>{t("settings:fonts.technical")}</dt><dd>Source Code Pro</dd></div><div><dt>{t("settings:fonts.delivery")}</dt><dd>{t("settings:fonts.selfHosted")}</dd></div></dl></section>}
       {tab === "logging" && <section><div className="section-heading"><div><h2>{t("settings:sections.logging.title")}</h2><p>{t("settings:sections.logging.description")}</p></div></div><div className="form-grid">
         <label className="field"><span>{t("settings:fields.logLevel")}</span><select value={config.logging.level} onChange={(event) => patch("logging", { level: event.target.value })}><option value="debug">{t("settings:logLevels.debug")}</option><option value="info">{t("settings:logLevels.info")}</option><option value="warn">{t("settings:logLevels.warn")}</option><option value="error">{t("settings:logLevels.error")}</option></select>{restartHint}</label>

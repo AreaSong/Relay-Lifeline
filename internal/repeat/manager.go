@@ -2,8 +2,6 @@ package repeat
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,6 +13,7 @@ import (
 )
 
 const journalSnapshot = "repeat.snapshot"
+const maxExecutionAudit = 100
 
 var (
 	ErrSourceNotFound = errors.New("active request source not found")
@@ -42,44 +41,74 @@ type Template struct {
 }
 
 type CreateInput struct {
-	Interval       time.Duration
-	Duration       time.Duration
-	Idempotency    string
-	ConfirmForever bool
+	Interval         time.Duration
+	Duration         time.Duration
+	Idempotency      string
+	ConfirmForever   bool
+	MaxExecutions    int
+	MaxFailures      int
+	FailureThreshold int
+	MaxTokens        int64
 }
 
 type Execution struct {
-	ID         string
-	Success    bool
-	StatusCode int
-	ErrorCode  string
-	Completed  time.Time
+	ID                   string
+	Success              bool
+	StatusCode           int
+	ErrorCode            string
+	Completed            time.Time
+	DurationMilliseconds int64
+	UsageTokens          int64
+	UsageAvailable       bool
+}
+
+type ExecutionAudit struct {
+	ID                   string    `json:"id"`
+	StartedAt            time.Time `json:"startedAt"`
+	Completed            time.Time `json:"completedAt"`
+	Success              bool      `json:"success"`
+	StatusCode           int       `json:"statusCode,omitempty"`
+	ErrorCode            string    `json:"errorCode,omitempty"`
+	DurationMilliseconds int64     `json:"durationMilliseconds"`
+	UsageTokens          int64     `json:"usageTokens,omitempty"`
+	UsageAvailable       bool      `json:"usageAvailable"`
 }
 
 type Executor func(context.Context, Template, string, string) Execution
 
 type Task struct {
-	ID                   string    `json:"id"`
-	SourceRequestID      string    `json:"sourceRequestId"`
-	Method               string    `json:"method"`
-	Path                 string    `json:"path"`
-	State                State     `json:"state"`
-	Idempotency          string    `json:"idempotency"`
-	IntervalMilliseconds int64     `json:"intervalMilliseconds"`
-	DurationMilliseconds int64     `json:"durationMilliseconds"`
-	StartedAt            time.Time `json:"startedAt"`
-	Deadline             time.Time `json:"deadline,omitempty"`
-	NextRunAt            time.Time `json:"nextRunAt,omitempty"`
-	LastRunAt            time.Time `json:"lastRunAt,omitempty"`
-	StoppedAt            time.Time `json:"stoppedAt,omitempty"`
-	Executions           int       `json:"executions"`
-	Successes            int       `json:"successes"`
-	Failures             int       `json:"failures"`
-	LastOutcome          string    `json:"lastOutcome,omitempty"`
-	LastStatusCode       int       `json:"lastStatusCode,omitempty"`
-	LastErrorCode        string    `json:"lastErrorCode,omitempty"`
-	LastExecutionID      string    `json:"lastExecutionId,omitempty"`
-	InFlight             bool      `json:"inFlight"`
+	ID                   string           `json:"id"`
+	SourceRequestID      string           `json:"sourceRequestId"`
+	Method               string           `json:"method"`
+	Path                 string           `json:"path"`
+	State                State            `json:"state"`
+	Idempotency          string           `json:"idempotency"`
+	IntervalMilliseconds int64            `json:"intervalMilliseconds"`
+	DurationMilliseconds int64            `json:"durationMilliseconds"`
+	StartedAt            time.Time        `json:"startedAt"`
+	Deadline             time.Time        `json:"deadline,omitempty"`
+	NextRunAt            time.Time        `json:"nextRunAt,omitempty"`
+	LastRunAt            time.Time        `json:"lastRunAt,omitempty"`
+	StoppedAt            time.Time        `json:"stoppedAt,omitempty"`
+	Executions           int              `json:"executions"`
+	Successes            int              `json:"successes"`
+	Failures             int              `json:"failures"`
+	LastOutcome          string           `json:"lastOutcome,omitempty"`
+	LastStatusCode       int              `json:"lastStatusCode,omitempty"`
+	LastErrorCode        string           `json:"lastErrorCode,omitempty"`
+	LastExecutionID      string           `json:"lastExecutionId,omitempty"`
+	InFlight             bool             `json:"inFlight"`
+	MaxExecutions        int              `json:"maxExecutions,omitempty"`
+	MaxFailures          int              `json:"maxFailures,omitempty"`
+	FailureThreshold     int              `json:"failureThreshold,omitempty"`
+	ConsecutiveFailures  int              `json:"consecutiveFailures,omitempty"`
+	CircuitOpen          bool             `json:"circuitOpen,omitempty"`
+	StopReason           string           `json:"stopReason,omitempty"`
+	MaxTokens            int64            `json:"maxTokens,omitempty"`
+	TokensUsed           int64            `json:"tokensUsed,omitempty"`
+	LastUsageTokens      int64            `json:"lastUsageTokens,omitempty"`
+	TokenUsageMissing    bool             `json:"tokenUsageMissing,omitempty"`
+	ExecutionAudit       []ExecutionAudit `json:"executionAudit,omitempty"`
 }
 
 type runtimeTask struct {
@@ -146,7 +175,7 @@ func (m *Manager) Create(sourceID string, input CreateInput) (Task, error) {
 		ID: id, SourceRequestID: sourceID, Method: template.Method, Path: template.Path,
 		State: StateRunning, Idempotency: input.Idempotency,
 		IntervalMilliseconds: input.Interval.Milliseconds(), DurationMilliseconds: input.Duration.Milliseconds(),
-		StartedAt: now, NextRunAt: now,
+		StartedAt: now, NextRunAt: now, MaxExecutions: input.MaxExecutions, MaxFailures: input.MaxFailures, FailureThreshold: input.FailureThreshold, MaxTokens: input.MaxTokens,
 	}
 	if input.Duration > 0 {
 		task.Deadline = now.Add(input.Duration)
@@ -171,6 +200,12 @@ func validInput(input CreateInput) bool {
 	if input.Duration == 0 && !input.ConfirmForever {
 		return false
 	}
+	if input.MaxExecutions < 0 || input.MaxExecutions > 100000 || input.MaxFailures < 0 || input.MaxFailures > 100000 || input.FailureThreshold < 0 || input.FailureThreshold > 1000 || input.MaxTokens < 0 || input.MaxTokens > 1_000_000_000_000 {
+		return false
+	}
+	if input.FailureThreshold > 0 && input.MaxFailures > 0 && input.FailureThreshold > input.MaxFailures {
+		return false
+	}
 	return input.Idempotency == "preserve" || input.Idempotency == "regenerate"
 }
 
@@ -190,7 +225,23 @@ func (m *Manager) Pause(id string) (Task, error) {
 }
 
 func (m *Manager) Resume(id string) (Task, error) {
-	return m.changeState(id, StateRunning)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	runtime, ok := m.tasks[id]
+	if !ok || terminal(runtime.task.State) {
+		return Task{}, ErrTaskNotFound
+	}
+	runtime.task.State = StateRunning
+	runtime.task.CircuitOpen = false
+	runtime.task.ConsecutiveFailures = 0
+	runtime.task.StopReason = ""
+	runtime.task.TokenUsageMissing = false
+	runtime.task.NextRunAt = m.now()
+	if err := m.appendLocked(runtime.task); err != nil {
+		return Task{}, err
+	}
+	signal(runtime.wake)
+	return runtime.task, nil
 }
 
 func (m *Manager) changeState(id string, state State) (Task, error) {
@@ -222,6 +273,7 @@ func (m *Manager) RunNow(id string) (Task, error) {
 	}
 	runtime.task.State = StateRunning
 	runtime.task.NextRunAt = m.now()
+	runtime.task.TokenUsageMissing = false
 	if err := m.appendLocked(runtime.task); err != nil {
 		return Task{}, err
 	}
@@ -307,6 +359,10 @@ func (m *Manager) beginExecution(id string) bool {
 	if !ok || runtime.task.State != StateRunning || runtime.task.InFlight {
 		return false
 	}
+	if runtime.task.MaxExecutions > 0 && runtime.task.Executions >= runtime.task.MaxExecutions {
+		m.finishLocked(runtime, StateExpired, "max_executions")
+		return false
+	}
 	if !runtime.task.Deadline.IsZero() && !m.now().Before(runtime.task.Deadline) {
 		m.expireLocked(runtime)
 		return false
@@ -330,12 +386,57 @@ func (m *Manager) finishExecution(id string, result Execution) {
 	runtime.task.LastExecutionID = result.ID
 	runtime.task.LastStatusCode = result.StatusCode
 	runtime.task.LastErrorCode = result.ErrorCode
+	runtime.task.LastUsageTokens = result.UsageTokens
+	if result.Completed.IsZero() {
+		result.Completed = m.now()
+	}
+	runtime.task.ExecutionAudit = append(runtime.task.ExecutionAudit, ExecutionAudit{
+		ID: result.ID, StartedAt: runtime.task.LastRunAt, Completed: result.Completed,
+		Success: result.Success, StatusCode: result.StatusCode, ErrorCode: result.ErrorCode,
+		DurationMilliseconds: result.DurationMilliseconds, UsageTokens: result.UsageTokens, UsageAvailable: result.UsageAvailable,
+	})
+	if len(runtime.task.ExecutionAudit) > maxExecutionAudit {
+		runtime.task.ExecutionAudit = runtime.task.ExecutionAudit[len(runtime.task.ExecutionAudit)-maxExecutionAudit:]
+	}
 	if result.Success {
 		runtime.task.Successes++
 		runtime.task.LastOutcome = "successful"
+		runtime.task.ConsecutiveFailures = 0
+		runtime.task.CircuitOpen = false
+		runtime.task.StopReason = ""
 	} else {
 		runtime.task.Failures++
 		runtime.task.LastOutcome = "failed"
+		runtime.task.ConsecutiveFailures++
+	}
+	if runtime.task.MaxTokens > 0 {
+		if !result.UsageAvailable {
+			runtime.task.TokenUsageMissing = true
+			runtime.task.LastOutcome = "usage_missing"
+			runtime.task.LastErrorCode = "usage_missing"
+			runtime.task.State = StatePaused
+			runtime.task.StopReason = "usage_missing"
+			runtime.task.NextRunAt = time.Time{}
+			_ = m.appendLocked(runtime.task)
+			return
+		}
+		runtime.task.TokenUsageMissing = false
+		runtime.task.TokensUsed += result.UsageTokens
+		if runtime.task.TokensUsed >= runtime.task.MaxTokens {
+			m.finishLocked(runtime, StateExpired, "max_tokens")
+			_ = m.appendLocked(runtime.task)
+			return
+		}
+	}
+	if runtime.task.MaxFailures > 0 && runtime.task.Failures >= runtime.task.MaxFailures {
+		m.finishLocked(runtime, StateExpired, "max_failures")
+	} else if !result.Success && runtime.task.FailureThreshold > 0 && runtime.task.ConsecutiveFailures >= runtime.task.FailureThreshold {
+		runtime.task.State = StatePaused
+		runtime.task.CircuitOpen = true
+		runtime.task.StopReason = "failure_circuit_open"
+		runtime.task.NextRunAt = time.Time{}
+	} else if runtime.task.MaxExecutions > 0 && runtime.task.Executions >= runtime.task.MaxExecutions {
+		m.finishLocked(runtime, StateExpired, "max_executions")
 	}
 	if runtime.task.State == StateRunning {
 		runtime.task.NextRunAt = m.now().Add(time.Duration(runtime.task.IntervalMilliseconds) * time.Millisecond)
@@ -344,12 +445,17 @@ func (m *Manager) finishExecution(id string, result Execution) {
 }
 
 func (m *Manager) expireLocked(runtime *runtimeTask) {
-	runtime.task.State = StateExpired
+	m.finishLocked(runtime, StateExpired, "deadline")
+	_ = m.appendLocked(runtime.task)
+}
+
+func (m *Manager) finishLocked(runtime *runtimeTask, state State, reason string) {
+	runtime.task.State = state
+	runtime.task.StopReason = reason
 	runtime.task.StoppedAt = m.now()
 	runtime.task.NextRunAt = time.Time{}
 	runtime.task.InFlight = false
 	runtime.cancel()
-	_ = m.appendLocked(runtime.task)
 }
 
 func (m *Manager) replay() error {
@@ -396,42 +502,4 @@ func (m *Manager) hasActiveTaskLocked(sourceID string) bool {
 		}
 	}
 	return false
-}
-
-func terminal(state State) bool {
-	return state == StateStopped || state == StateExpired || state == StateInterrupted
-}
-
-func waitFor(ctx context.Context, wake <-chan struct{}, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-wake:
-		return true
-	case <-timer.C:
-		return true
-	}
-}
-
-func signal(channel chan<- struct{}) {
-	select {
-	case channel <- struct{}{}:
-	default:
-	}
-}
-
-func cloneTemplate(template Template) Template {
-	template.Headers = template.Headers.Clone()
-	template.Body = append([]byte(nil), template.Body...)
-	return template
-}
-
-func newID() string {
-	buffer := make([]byte, 8)
-	if _, err := rand.Read(buffer); err != nil {
-		return time.Now().Format("150405.000000")
-	}
-	return hex.EncodeToString(buffer)
 }

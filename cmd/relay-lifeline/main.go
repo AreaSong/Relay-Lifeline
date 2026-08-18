@@ -192,7 +192,12 @@ func main() {
 	captureManager.SetEventSink(func(event, message string, fields map[string]any) {
 		runLogStore.Add(runlog.Entry{Level: "info", Event: event, Message: message, Fields: fields})
 	})
-	notifier := notify.New(store, logger)
+	signing := notify.SigningConfig{KeyID: os.Getenv(notify.SigningKeyIDEnvironment), Secret: os.Getenv(notify.SigningSecretEnvironment)}
+	if err := notify.ValidateSigningConfig(signing, cfg.Notifications.WebhookURL != ""); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	notifier := notify.NewWithSigning(store, logger, signing)
 	defer notifier.Close()
 	gateway := proxy.NewGateway(store, registry, controller, notifier, logger, riskManager)
 	gateway.SetCaptureManager(captureManager)

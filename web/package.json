@@ -1,30 +1,41 @@
 {
   "name": "relay-lifeline-console",
   "private": true,
-  "version": "2.2.0",
+	"version": "2.3.0",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "l10n:check": "node scripts/check-l10n.mjs"
+		"l10n:check": "node scripts/check-l10n.mjs",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:e2e": "playwright test",
+		"release:check": "node ../scripts/check-release-version.mjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "echarts": "^6.1.0",
-    "i18next": "^26.3.6",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "react-i18next": "^17.0.11",
-    "three": "^0.185.1",
-    "vite": "latest"
+		"@vitejs/plugin-react": "6.0.4",
+		"echarts": "6.1.0",
+		"i18next": "26.3.6",
+		"lucide-react": "1.27.0",
+		"react": "19.2.8",
+		"react-dom": "19.2.8",
+		"react-i18next": "17.0.11",
+		"three": "0.185.1",
+		"vite": "8.1.5"
   },
   "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "@types/three": "^0.185.1",
-    "typescript": "latest"
+		"@testing-library/jest-dom": "7.0.1",
+		"@testing-library/react": "16.3.2",
+		"@testing-library/user-event": "14.6.5",
+		"@playwright/test": "1.62.1",
+		"@types/react": "19.2.17",
+		"@types/react-dom": "19.2.3",
+		"@types/three": "0.185.1",
+		"@vitest/coverage-v8": "4.1.11",
+		"jsdom": "27.0.1",
+		"typescript": "7.0.2",
+		"vitest": "4.1.11"
   }
 }

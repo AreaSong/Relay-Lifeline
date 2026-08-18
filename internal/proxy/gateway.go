@@ -48,6 +48,7 @@ type Gateway struct {
 	incidents     *incident.Store
 	resourceCheck func(config.Config) error
 	repeater      *repeat.Manager
+	cacheBudget   cacheBudget
 }
 
 func (g *Gateway) SetCaptureManager(manager *capture.Manager) { g.captures = manager }
@@ -194,7 +195,7 @@ func (g *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		g.registry.RecordEvent(requestID, timeline.Event{Type: "attempt_started", Attempt: attempt, MessageCode: "timeline.attempt_started"})
 		g.addRunLog("info", "upstream.attempt_started", "开始上游请求", requestID, attempt, 0, nil)
 		attemptStarted := time.Now()
-		result := runAttempt(ctx, g.client, cfg, request, body, streaming)
+		result := runAttempt(ctx, g.client, cfg, request, body, streaming, &g.cacheBudget)
 		finalAttempt = attempt
 		if g.captures != nil {
 			var captureBody io.Reader

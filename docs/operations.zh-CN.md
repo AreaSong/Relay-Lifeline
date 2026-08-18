@@ -34,7 +34,7 @@ curl -fsS http://127.0.0.1:8318/readyz
 
 ## 迁移、恢复检查与故障演练
 
-以下命令应针对已停止的实例或文件副本执行。`-recovery-check` 只读；`-config-migrate` 会先生成权限为 `0600` 的备份，再原子写入 schema 2。
+以下命令应针对已停止的实例或文件副本执行。`-recovery-check` 只读；`-config-migrate` 会先生成权限为 `0600` 的备份，再原子写入 schema 3。schema 1 和 2 均可迁移；schema 3 新增响应缓存硬上限。
 
 ```bash
 relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
@@ -98,6 +98,9 @@ retry:
 
 stream:
   heartbeat-interval: "15s"
+  memory-limit: "64MiB"
+  max-response-body: "512MiB"
+  max-total-cache: "2GiB"
 
 queue:
   max-active: 8
@@ -119,6 +122,10 @@ lifecycle:
 ```
 
 `response-body-idle-timeout` 从最后一段上游正文数据开始计时。超过阈值会关闭该次响应并进入重试，防止已收到响应头但正文永久停顿。
+
+`memory-limit` 是转存临时文件的阈值。单个解压后响应超过 `max-response-body`、进程活动缓存超过 `max-total-cache`，或临时目录无法保留 `risk.minimum-free-disk` 时，该请求会立即失败且不会重试。容量字段可在设置页热更新；降低总预算不会删除已有缓存，新尝试会按新预算限制，已开始的尝试使用其启动时配置快照。
+
+生产变更前应分别演练：略高于单响应上限的正文只尝试一次；并发缓存触及总预算后拒绝扩张；gzip JSON 能解压并完成；音频或文件媒体类型被明确拒绝而不是伪装成 JSON。
 
 ## 角色权限
 
@@ -215,6 +222,19 @@ curl -fsS http://127.0.0.1:8318/healthz
 旧版本可能拒绝新字段，因此不能只回滚镜像而保留更新后的配置。配置保存操作会创建最多 10 份 `0600` 回滚副本。
 
 ## 数据与保留
+
+### 控制面游标与通知
+
+- 历史和事故列表默认每页 100 条，最多 200 条；自动化调用必须保存响应的 `nextCursor`，不要把游标解析为业务字段。
+- 管理实时流优先使用浏览器自动发送的 `Last-Event-ID`，非浏览器客户端可传 `after`。收到 `reset` 表示旧游标已超出 512 条事件保留环，应以该事件的全量数据替换本地状态。
+- Webhook 状态和最近投递可分别从 `/admin/api/notifications/status`、`/admin/api/notifications/deliveries` 查看。测试投递会真实调用已配置端点，只允许 Operator 执行；历史最多 100 条且不含 Payload 和目标 URL。
+- 持续任务出现 `circuitOpen` 时不会自动恢复。检查最近执行审计和上游状态后，由 Operator 显式恢复；达到执行/失败上限的 `expired` 任务不能再次运行。
+
+### Webhook 签名与严格 Token 预算
+
+在 Webhook URL 同一运行环境中设置 `RELAY_LIFELINE_WEBHOOK_SIGNING_KEY_ID` 与 `RELAY_LIFELINE_WEBHOOK_SIGNING_SECRET`。Secret 至少需要 32 字节；只配置其中一项时服务会在启动阶段拒绝。发送方对精确的 UTF-8 原始请求体按 `<Unix 时间戳>.<原始 Payload>` 计算 HMAC-SHA256，把 `v1=<hex 摘要>` 放入 `X-Relay-Lifeline-Signature`，并把时间戳和 Key ID 分别放入 `X-Relay-Lifeline-Signature-Timestamp`、`X-Relay-Lifeline-Signature-Key-ID`。接收方应检查时间戳新鲜度，按 Key ID 查找 Secret，并使用常量时间比较摘要。轮换时先让接收方在保留旧密钥的同时加入新 Key ID/Secret，再更新发送方环境变量并重启；确认投递已使用新 Key ID 后，才能移除接收方旧密钥。Secret 不进入 YAML、管理 API、日志或诊断包。
+
+持续任务接受 `maxTokens`。只有存在上游权威 `usage.total_tokens` 时才会执行上限；缺少 usage 会以 `usage_missing` 暂停任务，不做 Token 或费用估算。累计权威值达到上限后，当前正在执行的一轮结束，任务随即到期。
 
 - 请求与事故时间线位于 `/var/lib/relay-lifeline/events` 持久卷，按保留期每小时原子压实，服务重启后恢复；未完成请求只恢复为 `orphaned`，不会自动重放。
 - 指标、运行事件和实时运行日志位于内存，服务重启后清空。

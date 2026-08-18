@@ -23,7 +23,7 @@
     "listen": "监听地址", "requestBodyLimit": "请求体上限", "configBackupDir": "配置回滚目录", "configBackupDefault": "默认使用配置文件旁的 .relay-lifeline-backups", "upstreamBaseUrl": "上游 Base URL", "connectTimeout": "连接超时", "responseHeaderTimeout": "响应头超时", "responseBodyIdleTimeout": "响应正文空闲超时",
     "defaultLocale": "默认语言", "fallbackLocale": "回退语言", "loggingLocale": "日志语言", "notificationLocale": "通知语言",
     "enableRetry": "启用重试", "errorScope": "错误范围", "allErrors": "所有错误", "transientErrors": "仅临时错误", "maxAttempts": "最大尝试次数", "minWait": "最小等待", "maxWait": "最大等待", "honorRetryAfter": "遵循 Retry-After",
-    "heartbeat": "心跳间隔", "memoryLimit": "内存缓存上限", "tempDir": "临时目录", "systemDefault": "系统默认",
+    "heartbeat": "心跳间隔", "memoryLimit": "内存缓存阈值", "maxResponseBody": "单响应正文上限", "maxTotalCache": "响应缓存总预算", "tempDir": "临时目录", "systemDefault": "系统默认",
     "maxActive": "最大活动请求", "maxWaiting": "最大等待请求", "recoverySpacing": "恢复放行间隔", "historyLimit": "历史记录上限", "historyRetention": "历史保留时间",
     "persistenceEnabled": "启用事件持久化", "persistenceDirectory": "事件日志目录", "persistenceRetention": "事件日志保留时间", "syncWrites": "每条事件同步落盘",
     "trackUncertainDelivery": "跟踪不确定交付", "preserveIdempotencyKey": "保留客户端幂等键", "generateIdempotencyKey": "缺失时生成幂等键", "maxRequestDuration": "请求生命周期总时限", "clientDisconnectPolicy": "客户端断开策略", "cancel": "立即取消", "finishAttempt": "完成当前尝试",
@@ -36,6 +36,7 @@
     "captureOnStartup": "服务启动后自动捕获一批请求", "captureStorageDir": "加密存储目录", "captureRetention": "捕获保留时间", "captureRequestLimit": "默认请求数", "captureActivationTimeout": "默认等待窗口", "captureBodyLimit": "单正文上限", "captureTotalLimit": "捕获总容量", "captureAttemptLimit": "单请求正文尝试上限", "captureMinimumDisk": "捕获最低剩余磁盘", "runtimeLogLimit": "运行日志条数", "runtimeLogRetention": "运行日志保留时间"
   },
   "events": { "stalled": "持续故障", "recovered": "恢复成功", "long_running": "长时间运行", "many_attempts": "尝试次数过多", "auth_errors": "鉴权错误", "queue_pressure": "队列压力", "disk_pressure": "磁盘压力" },
+	"notifications": { "test": "发送测试通知", "queue": "队列", "delivered": "已送达", "failed": "失败", "dropped": "丢弃", "signing": "HMAC 签名", "signingConfigured": "已配置", "signingMissing": "未配置", "outcome": { "delivered": "已送达", "failed": "失败", "dropped": "已丢弃" } },
   "logLevels": { "debug": "调试", "info": "信息", "warn": "警告", "error": "错误" },
   "fonts": { "interface": "界面字体", "technical": "技术字段", "delivery": "加载方式", "selfHosted": "本地托管 · SIL OFL 1.1" },
   "saved": "设置已保存并生效",

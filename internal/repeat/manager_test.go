@@ -147,6 +147,120 @@ func TestManagerValidatesBoundariesAndActiveSource(t *testing.T) {
 	}
 }
 
+func TestManagerStopsAtExecutionAndFailureLimits(t *testing.T) {
+	manager, err := New(nil, func(_ context.Context, _ Template, _ string, id string) Execution {
+		return Execution{ID: id, Completed: time.Now(), ErrorCode: "upstream.failed"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	manager.RegisterSource("source", testTemplate())
+	input := validCreateInput()
+	input.MaxExecutions = 10
+	input.MaxFailures = 2
+	task, err := manager.Create("source", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForExecutions(t, manager, task.ID, 1)
+	if _, err := manager.RunNow(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := waitForTask(t, manager, task.ID, func(task Task) bool { return task.State == StateExpired })
+	if result.Executions != 2 || result.StopReason != "max_failures" || len(result.ExecutionAudit) != 2 {
+		t.Fatalf("失败上限未生效: %+v", result)
+	}
+
+	manager.RegisterSource("second", testTemplate())
+	input.MaxFailures = 0
+	input.MaxExecutions = 1
+	second, err := manager.Create("second", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = waitForTask(t, manager, second.ID, func(task Task) bool { return task.State == StateExpired })
+	if result.Executions != 1 || result.StopReason != "max_executions" {
+		t.Fatalf("执行上限未生效: %+v", result)
+	}
+}
+
+func TestManagerCircuitBreakerRequiresExplicitResume(t *testing.T) {
+	var succeed atomic.Bool
+	manager, err := New(nil, func(_ context.Context, _ Template, _ string, id string) Execution {
+		return Execution{ID: id, Success: succeed.Load(), Completed: time.Now()}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	manager.RegisterSource("source", testTemplate())
+	input := validCreateInput()
+	input.FailureThreshold = 1
+	task, err := manager.Create("source", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused := waitForTask(t, manager, task.ID, func(task Task) bool { return task.CircuitOpen })
+	if paused.State != StatePaused || paused.StopReason != "failure_circuit_open" {
+		t.Fatalf("熔断状态异常: %+v", paused)
+	}
+	succeed.Store(true)
+	if _, err := manager.Resume(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := waitForExecutions(t, manager, task.ID, 2)
+	if result.CircuitOpen || result.ConsecutiveFailures != 0 || result.State != StateRunning {
+		t.Fatalf("恢复后熔断未清除: %+v", result)
+	}
+}
+
+func TestManagerStopsAtStrictTokenLimit(t *testing.T) {
+	manager, err := New(nil, func(_ context.Context, _ Template, _ string, id string) Execution {
+		return Execution{ID: id, Success: true, Completed: time.Now(), UsageTokens: 6, UsageAvailable: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	manager.RegisterSource("source", testTemplate())
+	input := validCreateInput()
+	input.MaxTokens = 10
+	task, err := manager.Create("source", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForExecutions(t, manager, task.ID, 1)
+	if _, err := manager.RunNow(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := waitForTask(t, manager, task.ID, func(task Task) bool { return task.State == StateExpired })
+	if result.Executions != 2 || result.TokensUsed != 12 || result.StopReason != "max_tokens" || !result.ExecutionAudit[0].UsageAvailable {
+		t.Fatalf("Token 上限状态异常: %+v", result)
+	}
+}
+
+func TestManagerPausesWhenTokenUsageIsMissing(t *testing.T) {
+	manager, err := New(nil, func(_ context.Context, _ Template, _ string, id string) Execution {
+		return Execution{ID: id, Success: true, Completed: time.Now()}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(manager.Close)
+	manager.RegisterSource("source", testTemplate())
+	input := validCreateInput()
+	input.MaxTokens = 100
+	task, err := manager.Create("source", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitForTask(t, manager, task.ID, func(task Task) bool { return task.StopReason == "usage_missing" })
+	if result.State != StatePaused || !result.TokenUsageMissing || result.LastErrorCode != "usage_missing" || result.TokensUsed != 0 {
+		t.Fatalf("usage 缺失暂停状态异常: %+v", result)
+	}
+}
+
 func TestManagerJournalExcludesTemplateAndInterruptsOnReplay(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "repeat.jsonl")
 	store, err := journal.Open(path, true)

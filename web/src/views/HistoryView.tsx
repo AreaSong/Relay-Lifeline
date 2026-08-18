@@ -8,7 +8,7 @@ import type { HistoryRecord, MetricsErrors, MetricsSnapshot, MetricsWindow, Moni
 const windows: MetricsWindow[] = ["15m", "1h", "6h", "24h"];
 const windowMilliseconds: Record<MetricsWindow, number> = { "15m": 15 * 60_000, "1h": 60 * 60_000, "6h": 6 * 60 * 60_000, "24h": 24 * 60 * 60_000 };
 
-export function HistoryView({ records, onOpen, metrics, errors, events, window, onWindowChange, locale, dark }: {
+export function HistoryView({ records, onOpen, metrics, errors, events, window, onWindowChange, locale, dark, hasMore, onLoadMore }: {
   records: HistoryRecord[];
   onOpen: (record: HistoryRecord) => void;
   metrics: MetricsSnapshot | null;
@@ -18,6 +18,8 @@ export function HistoryView({ records, onOpen, metrics, errors, events, window, 
   onWindowChange: (window: MetricsWindow) => void;
   locale: string;
   dark: boolean;
+	hasMore: boolean;
+	onLoadMore: () => void;
 }) {
   const { t } = useTranslation(["common", "requests", "overview"]);
   const visibleRecords = useMemo(() => {
@@ -50,7 +52,8 @@ export function HistoryView({ records, onOpen, metrics, errors, events, window, 
         <td data-label={t("requests:columns.attempts")}>{record.attempt}</td><td data-label={t("requests:columns.duration")}>{formatDuration(record.startedAt, record.completedAt)}</td>
         <td data-label={t("requests:columns.lastError")}><span className="subtle history-error">{record.lastError || t("common:notAvailable")}</span></td>
         <td data-label={t("requests:columns.actions")}><div className="row-actions"><button className="icon-button" aria-label={t("common:actions.openTimeline")} data-tooltip={t("common:actions.openTimeline")} onClick={() => onOpen(record)}><ListTree size={17} /></button></div></td>
-      </tr>)}</tbody></table></div>}
+		</tr>)}</tbody></table></div>}
+		{hasMore && <div className="list-load-more"><button className="button" onClick={onLoadMore}>{t("requests:history.loadMore")}</button></div>}
     </section>
   </div>;
 }

@@ -29,6 +29,7 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - 校验 Responses API 与 Chat Completions SSE 完成标记。
 - 缓存完整响应期间发送 SSE 保活注释。
 - 完整响应缓存，避免半截输出和重复交付工具调用。
+- 单响应正文、进程总缓存和最小剩余磁盘三重资源保护。
 - 客户端取消传播、并发限制、等待队列和恢复削峰。
 - 请求时间线、有界内存历史、诊断和风险提醒。
 - Signal Continuity（信号连续性）展示 Codex 到中转站的链路、活动请求、等待请求和下次重试；WebGL 不可用时自动降级为静态拓扑。
@@ -38,7 +39,10 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - 展示当前网关 PID、Go 协程、调度器和内存快照；容器 PID 不会伪装成宿主机 PID。
 - 可通过显式客户端 Header 关联 Codex 任务/会话 ID，并确保这些本地标识不转发到上游。
 - 主动开启的临时诊断捕获：加密保存请求、每次 CPA 响应和最终响应，支持过滤预览、过滤下载与完整原文下载。
-- 独立 Webhook 队列、事件过滤和投递重试。
+- 独立 Webhook 队列、事件过滤、投递重试、健康统计、有限投递历史和测试投递。
+- 持续任务支持最大执行/失败次数、连续失败熔断和每轮安全审计摘要。
+- 历史与事故查询支持服务端筛选、稳定游标分页和关联请求钻取。
+- 管理实时流使用版本化增量事件，支持断线游标补偿和保留缺口重置。
 - UI、管理 API、CLI、日志、诊断和 Webhook 全部支持中英文。
 - UI、日志和通知语言独立配置并可热更新。
 - 独立管理密钥和默认仅本机监听。
@@ -92,7 +96,7 @@ upstream:
 
 ## 重试语义
 
-`all-errors` 会重试所有不成功的上游结果，包括 HTTP `4xx`、`5xx`、连接和超时错误、无效或空 JSON、`response.failed`、`response.incomplete` 以及截断的 SSE 流。
+`all-errors` 会重试所有可恢复的不成功上游结果，包括 HTTP `4xx`、`5xx`、连接和超时错误、无效或空 JSON、`response.failed`、`response.incomplete` 以及截断的 SSE 流。本地缓存保护和不受支持的响应媒体类型不会重试。
 
 ```yaml
 retry:
@@ -108,6 +112,18 @@ retry:
 
 网关先缓存并校验上游响应，再向客户端交付，因此流中断时不会暴露半截正文。流式请求等待期间默认每 15 秒发送 SSE 注释；非流式 JSON 使用空白保活，不改变最终 JSON 值。
 
+数据面只交付非流式 JSON 和与请求匹配的 SSE。Responses 非流式响应必须包含 `status: completed`，Chat Completions 非流式响应必须包含 `choices` 数组；音频、图片、文件等二进制响应不会以错误的 JSON 类型透传。客户端压缩偏好不会直接转发，由 Go HTTP Transport 协商并自动解压 gzip 后再校验。
+
+```yaml
+stream:
+  memory-limit: "64MiB"
+  max-response-body: "512MiB"
+  max-total-cache: "2GiB"
+  temp-dir: ""
+```
+
+`memory-limit` 是单响应转存磁盘的阈值，不是硬上限。`max-response-body` 限制解压后的单响应正文，`max-total-cache` 限制当前进程所有活动响应缓存之和；落盘写入还会持续保留 `risk.minimum-free-disk` 指定的磁盘余量。
+
 客户端传入的 `Idempotency-Key` 会在每次尝试中保持不变；Relay-Lifeline 不擅自生成该键，避免上游把第一次错误缓存到同一个键。断联检测同时使用下游请求 Context、连接关闭通知和心跳写入/Flush 错误，客户端离开后会取消活动中的上游调用。
 
 ## 管理控制台
@@ -122,6 +138,7 @@ retry:
 - 查看长时间运行、尝试过多、鉴权错误、队列和磁盘风险。
 - 执行不调用模型的一键诊断，并导出包含恢复检查、Journal 和备份完整性证据的脱敏 ZIP 包。
 - 暂停或恢复全部请求、立即重试或取消指定请求。
+- 创建具有执行上限、失败上限和连续失败熔断的持续任务，并查看最近 100 次执行审计。
 - 修改重试、流、队列、历史、风险、通知、日志和语言设置。
 - 保存前无落盘校验配置，明确显示热更新与需重启区段，再原子保存或从磁盘重新加载。
 - 查看运行版本、revision、构建时间、镜像引用、运行时长、管理 API 版本和配置 schema 版本。
@@ -141,6 +158,10 @@ Signal Continuity 只展示网关实际观测到的状态，不会额外发送�
 - `GET /admin/api/metrics/errors?window=15m|1h|6h|24h`：返回稳定错误分类分布，默认窗口为 `24h`。
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>`：读取有界运行事件环。响应包含 `nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，客户端可据此续读或发现旧事件已被覆盖。
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>`：读取最新结构化日志；也可使用 `after` 游标续读。响应包含 `entries`、`nextAfter`、`oldestAfter`、`hasMore` 和 `hasGap`，筛选值和级别均有严格边界。
+- `GET /admin/api/history?cursor=<cursor>&limit=<1-200>&from=<RFC3339>&to=<RFC3339>&state=<state>&q=<text>`：服务端筛选和稳定游标分页的请求历史。
+- `GET /admin/api/incidents` 使用相同分页参数；`GET /admin/api/incidents/{id}` 返回事故及最多 100 条仍在保留期内的关联请求。
+- `GET /admin/api/notifications/status` 与 `/notifications/deliveries` 返回队列、成功/失败/丢弃统计和最近投递；状态只返回 HMAC 签名状态和 Key ID，不返回 Secret；Operator 可调用 `POST /notifications/test`。
+- `GET /admin/api/stream?after=<cursor>` 首次发送 `sync`，随后只发送 `update`；事件含 `version`、`sequence`、`type` 和 `data`，游标过旧时发送 `reset`。
 
 Prometheus 端点提供 `relay_lifeline_journal_*` 指标，包括条目数、字节数、启动回放、最近压实、写入健康和压实健康状态；`relay_lifeline_process_*` 提供 PID、Go 协程、堆内存、系统内存和 GC 次数。
 
@@ -150,7 +171,7 @@ Prometheus 端点提供 `relay_lifeline_journal_*` 指标，包括条目数、�
 
 这些接口与其他管理 API 使用相同的管理密钥和本地化规则。
 
-每个管理响应都包含兼容 Header `X-Relay-Lifeline-API-Version`。`GET /admin/api/meta` 返回当前构建身份。配置文件使用 `schema-version: 2`；schema 1 配置会在内存中迁移且不会覆盖源文件，未知的未来版本会被拒绝。`POST /admin/api/config/validate` 返回准确的变更计划，不修改内存或磁盘配置。
+每个管理响应都包含兼容 Header `X-Relay-Lifeline-API-Version`。`GET /admin/api/meta` 返回当前构建身份。配置文件使用 `schema-version: 3`；schema 1 和 2 配置会在内存中迁移且不会覆盖源文件，未知的未来版本会被拒绝。`POST /admin/api/config/validate` 返回准确的变更计划，不修改内存或磁盘配置。
 
 ## 双语配置
 
@@ -195,11 +216,13 @@ notifications:
 
 诊断会检查配置、文件访问、管理密钥长度、CPA DNS/TCP 连通性、缓存权限和磁盘容量。上游检查只建立 TCP 连接，不发送模型请求，也不消耗 Token。
 
-Webhook 可通知持续故障、恢复、长时间运行、尝试过多、鉴权错误、队列压力和磁盘压力。Payload 同时包含稳定的 `eventCode`、数值型 `elapsedSeconds` 和本地化文字。通知使用有界独立队列，不阻塞模型请求链路。
+Webhook 可通知持续故障、恢复、长时间运行、尝试过多、鉴权错误、队列压力和磁盘压力。Payload 同时包含稳定的 `eventCode`、数值型 `elapsedSeconds` 和本地化文字。通知使用有界独立队列，不阻塞模型请求链路；管理面只保留最近 100 条投递结果，不保存 Payload 或 Webhook 地址。每个已配置的 Webhook 都必须同时设置 `RELAY_LIFELINE_WEBHOOK_SIGNING_KEY_ID` 与 `RELAY_LIFELINE_WEBHOOK_SIGNING_SECRET`，每次投递都会带上 `X-Relay-Lifeline-Signature-Key-ID`、`X-Relay-Lifeline-Signature-Timestamp` 和 `X-Relay-Lifeline-Signature`；接收方应按 `v1=<hex HMAC-SHA256(timestamp + "." + 原始 Payload)>` 校验后再接受。Secret 只通过进程环境变量提供；Webhook 已配置但签名配置不完整或 Secret 少于 32 字节时，服务拒绝启动。
+
+持续任务支持严格的 `maxTokens` 上限。累计值只来自上游权威 `usage.total_tokens`；缺少 usage 时任务以 `usage_missing` 暂停，不把输入/输出 Token 相加，也不估算费用。达到上限后，当前执行结束即任务到期；Relay-Lifeline 不实现费用估算。
 
 ## 开发
 
-要求 Go 1.22+、Node.js 22+，集成验证还需要 Docker。
+要求 Go 1.25+、Node.js 22+，集成验证还需要 Docker。
 
 ```bash
 make check
@@ -209,7 +232,7 @@ make docker-build
 ./scripts/container-smoke.sh relay-lifeline:dev
 ```
 
-部分新版 macOS/Xcode 环境运行 Go 1.22 测试二进制时需要外部链接。如果内部链接器报告缺少 `LC_UUID`，执行 `go test -ldflags=-linkmode=external ./...`。
+部分 macOS/Xcode 与旧 Go 工具链组合运行测试二进制时需要外部链接。如果内部链接器报告缺少 `LC_UUID`，执行 `go test -ldflags=-linkmode=external ./...`；发布与 CI 固定使用 Go 1.25 系列。
 
 更多信息见[运维手册](docs/operations.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md)、[贡献指南](CONTRIBUTING.zh-CN.md)和[安全策略](SECURITY.zh-CN.md)。
 

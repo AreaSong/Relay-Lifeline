@@ -45,6 +45,9 @@ retry:
   honor-retry-after: true
 stream:
   heartbeat-interval: "15s"
+  memory-limit: "64MiB"
+  max-response-body: "512MiB"
+  max-total-cache: "2GiB"
 queue:
   max-active: 8
   max-waiting: 100
@@ -52,6 +55,10 @@ queue:
 ```
 
 The body-idle timeout starts after the most recent upstream body data. It closes a stalled response and enters the retry loop instead of hanging forever after headers arrive.
+
+`memory-limit` is the temporary-file spill threshold. A decoded response above `max-response-body`, process-wide active cache usage above `max-total-cache`, or a temporary directory unable to preserve `risk.minimum-free-disk` fails immediately without retry. Capacity fields hot-reload from Settings. Lowering the total budget does not remove existing caches; new attempts use the new budget, while an attempt already in progress uses the configuration snapshot from its start.
+
+Before a production change, drill each boundary: a body just above the per-response limit attempts once; concurrent caches stop at the total budget; gzip JSON decodes and completes; and audio or file media types are explicitly rejected instead of mislabeled as JSON.
 
 ## Roles
 
@@ -94,7 +101,7 @@ Readiness returns `503 unavailable` when an enabled request or incident journal 
 
 ## Migration, recovery, and drills
 
-Run these commands against a stopped instance or a copy of its files. `-recovery-check` is read-only; `-config-migrate` first creates a mode-`0600` backup and then atomically writes schema 2.
+Run these commands against a stopped instance or a copy of its files. `-recovery-check` is read-only; `-config-migrate` first creates a mode-`0600` backup and then atomically writes schema 3. Schemas 1 and 2 are migratable; schema 3 adds hard response-cache limits.
 
 ```bash
 relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
@@ -126,3 +133,16 @@ Before upgrading, retain the old image and its matching configuration. After dep
 To roll back, first point clients directly at CPA if immediate bypass is needed. Restore both the old image and its matching config, recreate the container, then verify health, version, diagnostics, and capture readability. An old binary may reject fields introduced by a newer config.
 
 Configuration writes retain the newest ten mode-`0600` backups. Encrypted captures persist across restarts and expire after 72 hours by default. Request and incident journals persist under `/var/lib/relay-lifeline/events`, are compacted hourly according to their retention settings, and must use a persistent volume. Metrics, operational events, and live runtime logs reset on restart.
+
+## Control-plane cursors and notifications
+
+- History and incident pages default to 100 items and permit at most 200. Automation should retain `nextCursor` as opaque data.
+- Browsers resume the management stream with `Last-Event-ID`; non-browser clients may pass `after`. A `reset` means the cursor fell outside the 512-event ring and its complete payload must replace local state.
+- `/admin/api/notifications/status` and `/admin/api/notifications/deliveries` expose current Webhook health and recent outcomes. Operator-only test delivery calls the configured endpoint; the 100-item history contains neither payloads nor target URLs.
+- A continuous task with `circuitOpen` never resumes automatically. Inspect its bounded run audit and upstream health before an Operator resumes it. An `expired` task that reached an execution or failure limit cannot run again.
+
+### Webhook signing and strict token budgets
+
+Set `RELAY_LIFELINE_WEBHOOK_SIGNING_KEY_ID` and `RELAY_LIFELINE_WEBHOOK_SIGNING_SECRET` alongside the Webhook URL. The secret must be at least 32 bytes; partial configuration is rejected at startup. The sender signs the exact UTF-8 request body with HMAC-SHA256 over `<unix timestamp>.<raw payload>`, sends `v1=<hex digest>` in `X-Relay-Lifeline-Signature`, and includes the timestamp and Key ID in `X-Relay-Lifeline-Signature-Timestamp` and `X-Relay-Lifeline-Signature-Key-ID`. Receivers should reject stale timestamps, look up the secret by Key ID, and compare the digest in constant time. For rotation: first add the new Key ID/secret to the receiver while retaining the old key, then update the sender environment and restart, verify deliveries use the new Key ID, and only then remove the old receiver key. Secrets never enter YAML, the management API, logs, or diagnostics.
+
+Continuous tasks accept `maxTokens`. The limit is enforced only with upstream `usage.total_tokens`; a missing authoritative usage pauses the task as `usage_missing`, and no token or currency estimate is made. Once the accumulated authoritative count reaches the limit, the task expires after the in-flight execution completes.

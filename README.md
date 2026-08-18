@@ -29,6 +29,7 @@ The public project name is **Relay-Lifeline**, and the official image is `ghcr.i
 - Responses API and Chat Completions SSE completion validation.
 - SSE keepalive comments while a complete response is being buffered.
 - Full-response buffering to avoid partial output and duplicate tool delivery.
+- Per-response, process-wide cache, and minimum-free-disk resource protection.
 - Client cancellation propagation, bounded concurrency, waiting queue, and recovery pacing.
 - Per-request timeline, bounded in-memory history, diagnostics, and risk alerts.
 - Signal Continuity view of the Codex-to-relay path, active work, waiting requests, and the next retry, with a static fallback when WebGL is unavailable.
@@ -38,7 +39,10 @@ The public project name is **Relay-Lifeline**, and the official image is `ghcr.i
 - Current gateway PID, Go goroutines, scheduler, and memory snapshots without presenting a container PID as the host PID.
 - Optional Codex task/session correlation through explicit client headers that are never forwarded upstream.
 - Explicit temporary diagnostic capture for requests, every CPA response, and the final response, with filtered preview plus filtered and full-raw downloads.
-- Asynchronous Webhook delivery with event filters and retry.
+- Asynchronous Webhook delivery with filters, retries, health counters, bounded delivery history, and test delivery.
+- Continuous-task execution/failure limits, consecutive-failure circuit breaking, and bounded per-run audits.
+- Server-filtered cursor pagination for history and incidents, including related-request drill-down.
+- Versioned incremental management events with cursor replay and explicit retention-gap resets.
 - Chinese and English UI, API messages, CLI text, logs, diagnostics, and Webhooks.
 - Separate UI, log, and notification locales with hot-reloadable configuration.
 - Independent admin key and secure-by-default local binding.
@@ -92,7 +96,7 @@ upstream:
 
 ## Retry Semantics
 
-`all-errors` retries every unsuccessful upstream result, including HTTP `4xx` and `5xx`, connection and timeout errors, malformed or empty JSON, `response.failed`, `response.incomplete`, and truncated SSE streams.
+`all-errors` retries every recoverable unsuccessful upstream result, including HTTP `4xx` and `5xx`, connection and timeout errors, malformed or empty JSON, `response.failed`, `response.incomplete`, and truncated SSE streams. Local cache protection failures and unsupported response media types are not retried.
 
 ```yaml
 retry:
@@ -108,6 +112,18 @@ retry:
 
 The gateway buffers an upstream response before delivering it. This allows it to retry an interrupted stream without exposing partial output. During a streaming request it emits SSE comments every 15 seconds by default. For non-streaming JSON, whitespace keepalives preserve the connection without changing the eventual JSON value.
 
+The data plane delivers only non-streaming JSON and request-matching SSE. A non-streaming Responses result must contain `status: completed`, while a non-streaming Chat Completions result must contain a `choices` array. Binary audio, image, and file responses are rejected instead of being mislabeled as JSON. Client compression preferences are not forwarded directly; the Go HTTP transport negotiates and decodes gzip before validation.
+
+```yaml
+stream:
+  memory-limit: "64MiB"
+  max-response-body: "512MiB"
+  max-total-cache: "2GiB"
+  temp-dir: ""
+```
+
+`memory-limit` is the per-response spill threshold, not a hard limit. `max-response-body` bounds the decoded body for one response, `max-total-cache` bounds all active response caches in the process, and disk writes continue to preserve the space configured by `risk.minimum-free-disk`.
+
 An `Idempotency-Key` supplied by the client is forwarded unchanged on every attempt; Relay-Lifeline does not invent one because an upstream may cache an error under that key. Disconnect detection combines the downstream request context, connection-close notification, and heartbeat write/flush errors so active upstream work is canceled when the client is gone.
 
 ## Administration
@@ -122,6 +138,7 @@ The console can:
 - View non-blocking alerts for long-running requests, repeated attempts, authentication failures, queue pressure, and disk pressure.
 - Run diagnostics without calling the model API and export a redacted ZIP bundle with recovery, journal, and backup-integrity evidence.
 - Pause or resume all requests, retry immediately, or cancel a request.
+- Create continuous tasks with execution/failure limits and circuit breaking, and inspect the latest 100 run audits.
 - Change retry, stream, queue, history, risk, notification, logging, and locale settings.
 - Validate configuration without persistence, show hot-reload and restart sections, save atomically, and reload it from disk.
 - Display runtime version, revision, build time, image reference, uptime, Admin API version, and configuration schema version.
@@ -141,6 +158,10 @@ The authenticated management API exposes:
 - `GET /admin/api/metrics/errors?window=15m|1h|6h|24h` for the stable error distribution. The default window is `24h`.
 - `GET /admin/api/events?after=<cursor>&limit=<1-200>` for the bounded operational event ring. Responses include `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap` so clients can resume or detect overwritten events.
 - `GET /admin/api/runtime-logs?tail=true&limit=<1-500>` for the latest structured log entries, or use an `after` cursor for incremental reads. Responses include `entries`, `nextAfter`, `oldestAfter`, `hasMore`, and `hasGap`, with strict bounds on levels and filters.
+- `GET /admin/api/history?cursor=<cursor>&limit=<1-200>&from=<RFC3339>&to=<RFC3339>&state=<state>&q=<text>` for server-side filters and stable cursor pagination.
+- `GET /admin/api/incidents` accepts the same pagination fields; `GET /admin/api/incidents/{id}` returns the incident and at most 100 retained related requests.
+- `GET /admin/api/notifications/status` and `/notifications/deliveries` expose queue and outcome counters plus recent deliveries; the status includes only HMAC signing state and Key ID, never the secret. Operators can call `POST /notifications/test`.
+- `GET /admin/api/stream?after=<cursor>` sends one `sync` followed by changed-domain `update` events. Each event carries `version`, `sequence`, `type`, and `data`; an overwritten cursor produces `reset`.
 - The Prometheus endpoint includes `relay_lifeline_journal_*` gauges for entry count, bytes, startup replay, latest compaction, write health, and compaction health. `relay_lifeline_process_*` exposes the PID, Go goroutines, heap memory, system memory, and GC cycles.
 
 Clients may optionally send `X-Relay-Lifeline-Client-ID` and `X-Relay-Lifeline-Task-ID`. `X-Codex-Session-ID` and `X-Codex-Thread-ID` are accepted for Codex wrappers. Values must be no longer than 128 bytes and contain only safe identifier characters. They are retained as unverified client-declared correlation metadata in active requests, history, and runtime logs, but are never forwarded upstream. Never put a key or token in these headers. Responses include `X-Relay-Lifeline-Request-ID` for correlation with the gateway timeline. In Codex app-server, `threadId` is a logical conversation ID, not an operating-system PID; a background terminal's `processId` is an app-server-level process identifier, with a separate `osPid` field that may be null, and neither should be treated as a host process number. If Codex does not explicitly send these headers, the gateway cannot infer a task ID from HTTP traffic or reliably obtain a host Codex PID from inside the Docker container.
@@ -149,7 +170,7 @@ Diagnostic ZIP exports include separate redacted configuration, diagnostics, tim
 
 The browser exchanges a management key once for a short-lived HttpOnly SameSite session cookie. Mutating calls require the per-session CSRF token. Bearer authentication remains available for CLI compatibility.
 
-Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 2`; schema 1 files migrate in memory without overwriting the source file, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
+Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 3`; schema 1 and 2 files migrate in memory without overwriting the source file, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
 
 ## Localization
 
@@ -195,11 +216,13 @@ Do not expose the admin endpoint directly to the public internet. Put TLS, acces
 
 Diagnostics verify configuration, file access, admin-key length, CPA DNS/TCP reachability, cache permissions, and disk capacity. The upstream check opens a TCP connection only; it does not send a model request or consume tokens.
 
-Webhooks can report stalled, recovered, long-running, many-attempt, authentication-error, queue-pressure, and disk-pressure events. Payloads contain stable `eventCode` and numeric `elapsedSeconds` fields alongside localized text. Delivery uses a bounded queue and never blocks the model request path.
+Webhooks can report stalled, recovered, long-running, many-attempt, authentication-error, queue-pressure, and disk-pressure events. Payloads contain stable `eventCode` and numeric `elapsedSeconds` fields alongside localized text. Delivery uses a bounded queue and never blocks the model request path; the management plane retains only the latest 100 outcomes, never payloads or target URLs. Every configured Webhook must also set `RELAY_LIFELINE_WEBHOOK_SIGNING_KEY_ID` and `RELAY_LIFELINE_WEBHOOK_SIGNING_SECRET`; each delivery includes `X-Relay-Lifeline-Signature-Key-ID`, `X-Relay-Lifeline-Signature-Timestamp`, and `X-Relay-Lifeline-Signature`. Verify `v1=<hex HMAC-SHA256(timestamp + "." + raw payload)>` before accepting it. The secret is supplied only through the process environment, and a configured Webhook refuses to start with a partial or short secret.
+
+Continuous tasks support a strict `maxTokens` limit. The counter advances only from an upstream-authoritative `usage.total_tokens`; missing usage pauses the task with `usage_missing` instead of estimating input/output tokens or currency. Reaching the limit expires the task after the current execution completes; Relay-Lifeline does not implement cost estimation.
 
 ## Development
 
-Requirements: Go 1.22+, Node.js 22+, and Docker for integration verification.
+Requirements: Go 1.25+, Node.js 22+, and Docker for integration verification.
 
 ```bash
 make check
@@ -209,7 +232,7 @@ make docker-build
 ./scripts/container-smoke.sh relay-lifeline:dev
 ```
 
-On some recent macOS/Xcode combinations, Go 1.22 test binaries require external linking. Use `go test -ldflags=-linkmode=external ./...` if the internal linker reports a missing `LC_UUID` load command.
+Some macOS/Xcode and older Go combinations require external linking for test binaries. Use `go test -ldflags=-linkmode=external ./...` if the internal linker reports a missing `LC_UUID` load command; releases and CI use Go 1.25.x.
 
 See the [Operations Guide](docs/operations.md), [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [Security](SECURITY.md).
 

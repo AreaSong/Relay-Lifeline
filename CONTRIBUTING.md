@@ -4,7 +4,7 @@
 
 ## Development environment
 
-- Go 1.22 or newer
+- Go 1.25 or newer
 - Node.js 22 or newer
 - Docker for image and integration checks
 
@@ -14,7 +14,7 @@ Run the complete local gate before submitting a change:
 make check
 ```
 
-On a recent macOS/Xcode combination, use external linking if Go 1.22 reports a missing `LC_UUID` load command:
+On macOS, use external linking if the Go linker reports a missing `LC_UUID` load command:
 
 ```bash
 go test -ldflags=-linkmode=external ./...

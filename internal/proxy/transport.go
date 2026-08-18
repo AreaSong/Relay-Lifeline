@@ -39,7 +39,7 @@ func newHTTPClient(cfg config.Config) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, source *http.Request, body []byte, streaming bool) attemptResult {
+func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, source *http.Request, body []byte, streaming bool, budget *cacheBudget) attemptResult {
 	target, err := buildTargetURL(cfg.Upstream.BaseURL, source.URL)
 	if err != nil {
 		return attemptResult{err: err, phase: lifecycle.PhasePrepare, validation: Validation{Message: l10n.M("proxy.upstream_url_invalid")}}
@@ -62,15 +62,29 @@ func runAttempt(ctx context.Context, client *http.Client, cfg config.Config, sou
 		return attemptResult{err: err, phase: phase, wroteRequest: wroteRequest, validation: Validation{Message: classifyTransportError(err)}}
 	}
 	defer response.Body.Close()
-	buffer := NewReplayBuffer(int64(cfg.Stream.MemoryLimit), cfg.Stream.TempDir)
+	buffer := newLimitedReplayBuffer(
+		int64(cfg.Stream.MemoryLimit), int64(cfg.Stream.MaxResponseBody), int64(cfg.Stream.MaxTotalCache),
+		int64(cfg.Risk.MinimumFreeDisk), cfg.Stream.TempDir, budget,
+	)
 	if err := copyResponseBody(ctx, buffer, response.Body, cfg.Upstream.ResponseBodyIdleTimeout.Duration); err != nil {
 		message := l10n.M("proxy.response_interrupted")
-		if errors.Is(err, errResponseBodyIdleTimeout) {
+		permanent := false
+		switch {
+		case errors.Is(err, errResponseBodyIdleTimeout):
 			message = l10n.M("proxy.response_body_timeout")
+		case errors.Is(err, errResponseBodyTooLarge):
+			message = l10n.M("proxy.response_body_too_large", map[string]any{"Limit": config.FormatByteSize(int64(cfg.Stream.MaxResponseBody))})
+			permanent = true
+		case errors.Is(err, errCacheBudgetExceeded):
+			message = l10n.M("proxy.cache_budget_exceeded", map[string]any{"Limit": config.FormatByteSize(int64(cfg.Stream.MaxTotalCache))})
+			permanent = true
+		case errors.Is(err, errCacheDiskSpace):
+			message = l10n.M("proxy.cache_disk_low")
+			permanent = true
 		}
-		return attemptResult{response: response, buffer: buffer, err: err, phase: lifecycle.PhaseResponseBody, wroteRequest: wroteRequest, validation: Validation{Message: message}}
+		return attemptResult{response: response, buffer: buffer, err: err, phase: lifecycle.PhaseResponseBody, wroteRequest: wroteRequest, validation: Validation{Message: message, Permanent: permanent}}
 	}
-	return attemptResult{response: response, buffer: buffer, phase: lifecycle.PhaseProtocol, wroteRequest: wroteRequest, validation: validateResponse(response, buffer, streaming)}
+	return attemptResult{response: response, buffer: buffer, phase: lifecycle.PhaseProtocol, wroteRequest: wroteRequest, validation: validateResponse(response, buffer, responseProfile(source.URL.Path), streaming)}
 }
 
 type activityWriter struct {
@@ -141,7 +155,7 @@ func buildTargetURL(baseURL string, incoming *url.URL) (string, error) {
 
 func copyHeaders(destination, source http.Header) {
 	for key, values := range source {
-		if isHopByHopHeader(key) || isClientIdentityHeader(key) {
+		if isHopByHopHeader(key) || isClientIdentityHeader(key) || http.CanonicalHeaderKey(key) == "Accept-Encoding" {
 			continue
 		}
 		for _, value := range values {
@@ -186,7 +200,7 @@ func retryAfter(response *http.Response) time.Duration {
 }
 
 func shouldRetry(cfg config.Config, result attemptResult) bool {
-	if !cfg.Retry.Enabled {
+	if !cfg.Retry.Enabled || result.validation.Permanent {
 		return false
 	}
 	if cfg.Retry.Mode == "all-errors" {

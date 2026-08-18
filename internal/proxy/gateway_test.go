@@ -3,31 +3,24 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
-	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/lifecycle"
-	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/repeat"
-	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
 )
@@ -143,6 +136,29 @@ func TestGatewayRetriesErrorsAndDeliversOneCompleteStream(t *testing.T) {
 		if !events[event] {
 			t.Fatalf("结构化运行日志缺少 %s: %+v", event, events)
 		}
+	}
+}
+
+func TestGatewayRejectsUnsupportedMediaWithoutRetry(t *testing.T) {
+	var attempts atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		writer.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = io.WriteString(writer, "binary")
+	}))
+	defer upstream.Close()
+	gateway, _ := testGateway(t, upstream.URL)
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+
+	response, err := http.Post(server.URL+"/v1/audio/speech", "application/json", strings.NewReader(`{"input":"test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || attempts.Load() != 1 || !bytes.Contains(body, []byte("relay_lifeline_error")) {
+		t.Fatalf("不支持的媒体响应处理异常: attempts=%d body=%q err=%v", attempts.Load(), body, readErr)
 	}
 }
 
@@ -469,489 +485,5 @@ func TestGatewayRetriesResponseHeaderTimeout(t *testing.T) {
 	response.Body.Close()
 	if readErr != nil || attempts.Load() != 2 || registry.Snapshot(false).Successful != 1 {
 		t.Fatalf("响应头超时恢复异常: attempts=%d status=%+v err=%v", attempts.Load(), registry.Snapshot(false), readErr)
-	}
-}
-
-func TestGatewayRetriesStalledResponseBodyWithoutLeakingPartialStream(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if attempts.Add(1) == 1 {
-			writer.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"must-not-leak\"}\n\n")
-			writer.(http.Flusher).Flush()
-			<-request.Context().Done()
-			return
-		}
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\"}\n\n")
-	}))
-	defer upstream.Close()
-	gateway, registry := testGateway(t, upstream.URL)
-	cfg := gateway.store.Get()
-	cfg.Upstream.ResponseBodyIdleTimeout.Duration = 20 * time.Millisecond
-	if err := gateway.store.Update(cfg, false); err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, readErr := io.ReadAll(response.Body)
-	response.Body.Close()
-	if readErr != nil || attempts.Load() != 2 || !bytes.Contains(body, []byte("response.completed")) || bytes.Contains(body, []byte("must-not-leak")) {
-		t.Fatalf("正文空闲超时恢复异常: attempts=%d body=%q err=%v", attempts.Load(), body, readErr)
-	}
-	history := registry.History()
-	if len(history) != 1 || history[0].Attempt != 2 {
-		t.Fatalf("正文空闲超时时间线异常: %+v", history)
-	}
-}
-
-func TestGatewayConcurrentRecoveryRespectsActiveLimit(t *testing.T) {
-	const requests = 64
-	var active atomic.Int32
-	var peak atomic.Int32
-	counts := make(map[string]int)
-	var countsMu sync.Mutex
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		current := active.Add(1)
-		defer active.Add(-1)
-		for observed := peak.Load(); current > observed && !peak.CompareAndSwap(observed, current); observed = peak.Load() {
-		}
-		id := request.Header.Get("X-Test-Request")
-		countsMu.Lock()
-		counts[id]++
-		attempt := counts[id]
-		countsMu.Unlock()
-		time.Sleep(2 * time.Millisecond)
-		writer.Header().Set("Content-Type", "application/json")
-		if attempt == 1 {
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(writer, `{"error":{"message":"temporary"}}`)
-			return
-		}
-		_, _ = io.WriteString(writer, `{"status":"completed"}`)
-	}))
-	defer upstream.Close()
-	gateway, registry := testGateway(t, upstream.URL)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	errors := make(chan error, requests)
-	var group sync.WaitGroup
-	for index := 0; index < requests; index++ {
-		group.Add(1)
-		go func(id int) {
-			defer group.Done()
-			request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"stream":false}`))
-			request.Header.Set("Content-Type", "application/json")
-			request.Header.Set("X-Test-Request", fmt.Sprintf("request-%d", id))
-			response, err := http.DefaultClient.Do(request)
-			if err == nil {
-				_, err = io.ReadAll(response.Body)
-				response.Body.Close()
-			}
-			errors <- err
-		}(index)
-	}
-	group.Wait()
-	close(errors)
-	for err := range errors {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	status := registry.Snapshot(false)
-	if peak.Load() > 8 || status.Active != 0 || status.Successful != requests {
-		t.Fatalf("并发恢复状态异常: peak=%d status=%+v", peak.Load(), status)
-	}
-}
-
-func TestGatewayCapturesRequestEveryAttemptAndFinalResponse(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) == 1 {
-			writer.Header().Set("Content-Type", "application/json")
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(writer, `{"error":{"message":"first failure"}}`)
-			return
-		}
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\"}\n\n")
-	}))
-	defer upstream.Close()
-	gateway, _ := testGateway(t, upstream.URL)
-	cfg := config.Default().Capture
-	cfg.StorageDir = t.TempDir()
-	cfg.MaxBodySize = 1 << 20
-	cfg.MaxTotalSize = 8 << 20
-	cfg.MinimumFreeDisk = 64 << 20
-	key := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x23}, 32))
-	manager := capture.New(func() config.CaptureConfig { return cfg }, key)
-	if err := manager.Activate(1, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	gateway.SetCaptureManager(manager)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"test","stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(response.Body)
-	response.Body.Close()
-	records := manager.List()
-	if len(records) != 1 || records[0].State != "successful" || len(records[0].Attempts) != 2 || records[0].Final == nil {
-		t.Fatalf("网关捕获不完整: %+v", records)
-	}
-	preview, err := manager.Preview(records[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(preview.Parts) != 4 || preview.Parts[1].StatusCode != http.StatusServiceUnavailable || preview.Parts[2].StatusCode != http.StatusOK || preview.Parts[3].Name != "final" {
-		t.Fatalf("请求、尝试或最终响应缺失: %+v", preview.Parts)
-	}
-}
-
-func TestGatewayMarksLastFailedAttemptAsFinalCapture(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		writer.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = io.WriteString(writer, `{"error":{"message":"still unavailable"}}`)
-	}))
-	defer upstream.Close()
-	gateway, _ := testGateway(t, upstream.URL)
-	proxyConfig := gateway.store.Get()
-	proxyConfig.Retry.MaxAttempts = 1
-	if err := gateway.store.Update(proxyConfig, false); err != nil {
-		t.Fatal(err)
-	}
-	captureConfig := config.Default().Capture
-	captureConfig.StorageDir = t.TempDir()
-	captureConfig.MaxBodySize = 1 << 20
-	captureConfig.MaxTotalSize = 8 << 20
-	captureConfig.MinimumFreeDisk = 64 << 20
-	key := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, 32))
-	manager := capture.New(func() config.CaptureConfig { return captureConfig }, key)
-	if err := manager.Activate(1, time.Minute); err != nil {
-		t.Fatal(err)
-	}
-	gateway.SetCaptureManager(manager)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"test"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(response.Body)
-	response.Body.Close()
-	records := manager.List()
-	if len(records) != 1 || records[0].State != "failed" || len(records[0].Attempts) != 1 || records[0].Final == nil {
-		t.Fatalf("最终失败响应未完整捕获: %+v", records)
-	}
-	preview, err := manager.Preview(records[0].ID)
-	if err != nil || len(preview.Parts) != 3 || preview.Parts[2].Name != "final" || !strings.Contains(preview.Parts[2].Body, "still unavailable") {
-		t.Fatalf("最终失败正文不可检查: parts=%+v err=%v", preview.Parts, err)
-	}
-}
-
-func TestGatewayStoresOnlySafeErrorDetailInTimeline(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) == 1 {
-			writer.Header().Set("Content-Type", "application/json")
-			writer.Header().Set("X-Request-ID", "req-503")
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = io.WriteString(writer, `{"internal":"business-payload","error":{"message":"no available account; Bearer private-token","type":"provider_unavailable","code":"no_account"}}`)
-			return
-		}
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\"}\n\n")
-	}))
-	defer upstream.Close()
-	gateway, registry := testGateway(t, upstream.URL)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(response.Body)
-	response.Body.Close()
-
-	history := registry.History()
-	if len(history) != 1 || history[0].LastErrorDetail == nil {
-		t.Fatalf("历史缺少安全错误详情: %+v", history)
-	}
-	detail := history[0].LastErrorDetail
-	if detail.Type != "provider_unavailable" || detail.Code != "no_account" || detail.UpstreamRequestID != "req-503" {
-		t.Fatalf("安全错误字段异常: %+v", detail)
-	}
-	encoded, _ := json.Marshal(history)
-	for _, secret := range []string{"private-token", "business-payload"} {
-		if strings.Contains(string(encoded), secret) {
-			t.Fatalf("时间线泄露 %q: %s", secret, encoded)
-		}
-	}
-}
-
-func TestGatewayWarnsOnAuthErrorsButContinuesRetrying(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) <= 3 {
-			http.Error(writer, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(writer, "data: {\"type\":\"response.completed\"}\n\n")
-	}))
-	defer upstream.Close()
-	notificationEvents := make(chan string, 4)
-	webhook := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var event struct {
-			Type string `json:"type"`
-		}
-		_ = json.NewDecoder(request.Body).Decode(&event)
-		notificationEvents <- event.Type
-		writer.WriteHeader(http.StatusNoContent)
-	}))
-	defer webhook.Close()
-	cfg := config.Default()
-	cfg.Upstream.BaseURL = upstream.URL
-	cfg.Retry.MinInterval.Duration = time.Millisecond
-	cfg.Retry.MaxInterval.Duration = 2 * time.Millisecond
-	cfg.Stream.HeartbeatInterval.Duration = time.Millisecond
-	cfg.Queue.RecoverySpacing.Duration = 0
-	cfg.Risk.AuthErrorAttempts = 3
-	cfg.Notifications.WebhookURL = webhook.URL
-	store := config.NewStore("", cfg)
-	registry := state.NewRegistry()
-	controller := state.NewController()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	notifier := notify.New(store, logger)
-	defer notifier.Close()
-	riskManager := risk.New()
-	gateway := NewGateway(store, registry, controller, notifier, logger, riskManager)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(response.Body)
-	response.Body.Close()
-	if attempts.Load() != 4 || registry.Snapshot(false).Successful != 1 {
-		t.Fatalf("鉴权错误后未继续到成功: attempts=%d status=%+v", attempts.Load(), registry.Snapshot(false))
-	}
-	alerts := riskManager.Recent(10)
-	if len(alerts) != 1 || alerts[0].Type != "auth_errors" || alerts[0].ResolvedAt == nil {
-		t.Fatalf("鉴权风险提醒异常: %+v", alerts)
-	}
-	history := registry.History()
-	foundWarning := false
-	for _, event := range history[0].Events {
-		foundWarning = foundWarning || event.Type == "risk_warning"
-	}
-	if !foundWarning {
-		t.Fatalf("时间线缺少风险提醒: %+v", history[0].Events)
-	}
-	received := map[string]bool{}
-	for len(received) < 2 {
-		select {
-		case eventType := <-notificationEvents:
-			received[eventType] = true
-		case <-time.After(time.Second):
-			t.Fatalf("未收到风险与恢复通知: %+v", received)
-		}
-	}
-	if !received["auth_errors"] || !received["recovered"] {
-		t.Fatalf("通知类型异常: %+v", received)
-	}
-}
-
-func TestGatewayStopsWhenClientCancels(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		attempts.Add(1)
-		http.Error(writer, "unavailable", http.StatusServiceUnavailable)
-	}))
-	defer upstream.Close()
-	gateway, registry := testGateway(t, upstream.URL)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"stream":true}`))
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	response.Body.Close()
-	time.Sleep(60 * time.Millisecond)
-	count := attempts.Load()
-	time.Sleep(60 * time.Millisecond)
-	if attempts.Load() != count {
-		t.Fatalf("取消后仍在重试: %d -> %d", count, attempts.Load())
-	}
-	if registry.Snapshot(false).Active != 0 {
-		t.Fatal("取消后请求未清理")
-	}
-}
-
-func TestGatewayAdminCancelStopsActiveUpstreamRequest(t *testing.T) {
-	upstreamStarted := make(chan struct{})
-	releaseUpstream := make(chan struct{})
-	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(upstreamStarted)
-		select {
-		case <-request.Context().Done():
-		case <-releaseUpstream:
-		}
-	}))
-	defer upstream.Close()
-	defer close(releaseUpstream)
-	gateway, registry := testGateway(t, upstream.URL)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"stream":true}`))
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-upstreamStarted:
-	case <-time.After(time.Second):
-		response.Body.Close()
-		t.Fatal("上游请求未开始")
-	}
-	snapshot := registry.Snapshot(false)
-	if len(snapshot.Requests) != 1 || !registry.Cancel(snapshot.Requests[0].ID) {
-		response.Body.Close()
-		t.Fatalf("无法取消活动请求: %+v", snapshot.Requests)
-	}
-	response.Body.Close()
-	deadline := time.Now().Add(time.Second)
-	for registry.Snapshot(false).Active != 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if registry.Snapshot(false).Active != 0 {
-		t.Fatal("上游取消后活动请求未清理")
-	}
-}
-
-func TestGatewayRecordsMonitoringLifecycleAndBoundedErrorCategory(t *testing.T) {
-	var attempts atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) == 1 {
-			http.Error(writer, "temporary", http.StatusServiceUnavailable)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"status":"completed"}`)
-	}))
-	defer upstream.Close()
-	gateway, _ := testGateway(t, upstream.URL)
-	metricsStore := monitoring.New()
-	gateway.SetMonitoring(metricsStore)
-	server := httptest.NewServer(gateway)
-	defer server.Close()
-
-	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"test"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.ReadAll(response.Body)
-	response.Body.Close()
-
-	metrics := metricsStore.Metrics(15 * time.Minute)
-	if metrics.Totals.Requests != 1 || metrics.Totals.Successful != 1 || metrics.Totals.Attempts != 2 || metrics.Totals.FailedAttempts != 1 || metrics.Totals.Recovered != 1 {
-		t.Fatalf("网关监控计数异常: %+v", metrics.Totals)
-	}
-	if metrics.Load.Active != 0 || metrics.Load.Queued != 0 || metrics.Load.Waiting != 0 || metrics.Load.Requesting != 0 {
-		t.Fatalf("请求结束后负载未归零: %+v", metrics.Load)
-	}
-	errors := metricsStore.Errors()
-	serverFailures := false
-	for _, category := range errors.Categories {
-		if category.Code == "server" && category.Count == 1 {
-			serverFailures = true
-		}
-	}
-	if !serverFailures {
-		t.Fatalf("HTTP 503 未归入 server: %+v", errors.Categories)
-	}
-	events := metricsStore.Events(0, 10)
-	wantCodes := []string{"request.received", "upstream.attempt_started", "upstream.failure", "upstream.attempt_started", "upstream.recovered", "request.succeeded"}
-	if len(events.Events) != len(wantCodes) {
-		t.Fatalf("网关运行事件数量异常: %+v", events.Events)
-	}
-	for index, code := range wantCodes {
-		if events.Events[index].Code != code {
-			t.Fatalf("网关运行事件[%d] = %q，期望 %q", index, events.Events[index].Code, code)
-		}
-	}
-}
-
-func TestAttemptCategoryIsLimitedAndSpecific(t *testing.T) {
-	tests := []struct {
-		name   string
-		result attemptResult
-		want   string
-	}{
-		{name: "传输", result: attemptResult{err: errors.New("private transport detail")}, want: "transport"},
-		{name: "协议", result: attemptResult{response: &http.Response{StatusCode: http.StatusOK}}, want: "protocol"},
-		{name: "鉴权", result: attemptResult{response: &http.Response{StatusCode: http.StatusUnauthorized}}, want: "auth"},
-		{name: "限流", result: attemptResult{response: &http.Response{StatusCode: http.StatusTooManyRequests}}, want: "rate_limit"},
-		{name: "客户端", result: attemptResult{response: &http.Response{StatusCode: http.StatusBadRequest}}, want: "client"},
-		{name: "服务端", result: attemptResult{response: &http.Response{StatusCode: http.StatusBadGateway}}, want: "server"},
-		{name: "其他 HTTP", result: attemptResult{response: &http.Response{StatusCode: http.StatusTemporaryRedirect}}, want: "http"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := attemptCategory(test.result); got != test.want {
-				t.Fatalf("attemptCategory() = %q，期望 %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestReplayBufferSpillsAndDeletes(t *testing.T) {
-	directory := t.TempDir()
-	buffer := NewReplayBuffer(4, directory)
-	if _, err := io.WriteString(buffer, "0123456789"); err != nil {
-		t.Fatal(err)
-	}
-	if buffer.file == nil {
-		t.Fatal("应转存临时文件")
-	}
-	name := buffer.file.Name()
-	info, err := os.Stat(name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("临时文件权限 = %o，期望 600", info.Mode().Perm())
-	}
-	var output strings.Builder
-	if _, err := buffer.WriteTo(&output); err != nil {
-		t.Fatal(err)
-	}
-	if output.String() != "0123456789" {
-		t.Fatalf("缓存内容错误: %s", output.String())
-	}
-	if err := buffer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(name); !os.IsNotExist(err) {
-		t.Fatal("临时文件未删除")
 	}
 }

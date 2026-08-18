@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-- Go 1.22 或更高版本
+- Go 1.25 或更高版本
 - Node.js 22 或更高版本
 - Docker，用于镜像和集成检查
 
@@ -14,7 +14,7 @@
 make check
 ```
 
-部分新版 macOS/Xcode 组合可能让 Go 1.22 报告缺少 `LC_UUID`，此时使用外部链接：
+在 macOS 上，如果 Go 链接器报告缺少 `LC_UUID`，请使用外部链接：
 
 ```bash
 go test -ldflags=-linkmode=external ./...

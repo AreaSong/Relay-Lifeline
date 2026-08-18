@@ -85,6 +85,9 @@ func (g *Gateway) awaitRetry(
 }
 
 func retryPolicyStop(cfg config.Config, result attemptResult, attempt int, policy state.RetryPolicy, active bool) retryStopReason {
+	if result.validation.Permanent {
+		return retryStopDenied
+	}
 	if active {
 		if !time.Now().Before(policy.Deadline) {
 			return retryStopExpired

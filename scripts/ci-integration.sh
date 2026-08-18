@@ -6,6 +6,15 @@ work="$(mktemp -d)"
 relay_pid=""
 fault_pid=""
 cleanup() {
+  status=$?
+  if [[ "${status}" -ne 0 ]]; then
+    for log in relay.log fault.log; do
+      if [[ -f "${work}/${log}" ]]; then
+        echo "===== ${log} =====" >&2
+        tail -n 100 "${work}/${log}" >&2
+      fi
+    done
+  fi
   if [[ -n "${relay_pid}" ]]; then kill "${relay_pid}" 2>/dev/null || true; fi
   if [[ -n "${fault_pid}" ]]; then kill "${fault_pid}" 2>/dev/null || true; fi
   rm -rf "${work}"
@@ -30,14 +39,28 @@ sed -i.bak \
 rm "${work}/config.yaml.bak"
 
 "${work}/relay-lifeline" -config "${work}/config.yaml" -config-validate
+cp "${work}/config.yaml" "${work}/config-v2.yaml"
+sed -i.bak \
+  -e 's/schema-version: 3/schema-version: 2/' \
+  -e '/max-response-body:/d' \
+  -e '/max-total-cache:/d' \
+  "${work}/config-v2.yaml"
+rm "${work}/config-v2.yaml.bak"
+"${work}/relay-lifeline" -config "${work}/config-v2.yaml" -config-migrate
+grep -q 'schema-version: 3' "${work}/config-v2.yaml"
+grep -q 'max-response-body: 512MiB' "${work}/config-v2.yaml"
 cp "${work}/config.yaml" "${work}/config-v1.yaml"
-sed -i.bak 's/schema-version: 2/schema-version: 1/' "${work}/config-v1.yaml"
+sed -i.bak \
+  -e 's/schema-version: 3/schema-version: 1/' \
+  -e '/max-response-body:/d' \
+  -e '/max-total-cache:/d' \
+  "${work}/config-v1.yaml"
 rm "${work}/config-v1.yaml.bak"
 "${work}/relay-lifeline" -config "${work}/config-v1.yaml" -config-migrate
 "${work}/relay-lifeline" -config "${work}/config-v1.yaml" -recovery-check > "${work}/recovery.json"
 "${work}/relay-lifeline" -journal-verify "${work}/events/not-created.jsonl"
 
-"${work}/fault-upstream" -listen 127.0.0.1:18317 -sequence 401,429,503,invalid-json,truncated-sse,success > "${work}/fault.log" 2>&1 &
+"${work}/fault-upstream" -listen 127.0.0.1:18317 -sequence 401,429,503,invalid-json,truncated-json,success > "${work}/fault.log" 2>&1 &
 fault_pid=$!
 RELAY_LIFELINE_ADMIN_KEY=integration-operator-key-0001 \
 RELAY_LIFELINE_SENSITIVE_KEY=integration-sensitive-key-0001 \

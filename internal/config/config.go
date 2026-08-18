@@ -17,7 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 type Duration struct {
 	time.Duration
@@ -130,6 +130,8 @@ type RetryConfig struct {
 type StreamConfig struct {
 	HeartbeatInterval Duration `yaml:"heartbeat-interval" json:"heartbeatInterval"`
 	MemoryLimit       ByteSize `yaml:"memory-limit" json:"memoryLimit"`
+	MaxResponseBody   ByteSize `yaml:"max-response-body" json:"maxResponseBody"`
+	MaxTotalCache     ByteSize `yaml:"max-total-cache" json:"maxTotalCache"`
 	TempDir           string   `yaml:"temp-dir" json:"tempDir"`
 }
 
@@ -217,6 +219,7 @@ func Default() Config {
 		},
 		Stream: StreamConfig{
 			HeartbeatInterval: duration(15 * time.Second), MemoryLimit: ByteSize(64 << 20),
+			MaxResponseBody: ByteSize(512 << 20), MaxTotalCache: ByteSize(2 << 30),
 		},
 		Queue: QueueConfig{
 			MaxActive: 8, MaxWaiting: 100, RecoverySpacing: duration(2 * time.Second),
@@ -303,7 +306,9 @@ func (c Config) Validate() error {
 	if c.Retry.MaxAttempts < 0 {
 		problems = append(problems, l10n.E("config.retry.max_attempts", nil))
 	}
-	if c.Stream.HeartbeatInterval.Duration <= 0 || c.Stream.MemoryLimit < 1<<20 {
+	if c.Stream.HeartbeatInterval.Duration <= 0 || c.Stream.MemoryLimit < 1<<20 ||
+		c.Stream.MaxResponseBody < c.Stream.MemoryLimit || c.Stream.MaxTotalCache < c.Stream.MaxResponseBody ||
+		c.Stream.TempDir != "" && !filepath.IsAbs(c.Stream.TempDir) {
 		problems = append(problems, l10n.E("config.stream.invalid", nil))
 	}
 	if c.Server.MaxRequestBody < 1<<20 {
@@ -396,6 +401,12 @@ func Migrate(cfg Config) (Config, error) {
 		cfg.Lifecycle = defaults.Lifecycle
 		cfg.ManagementSecurity = defaults.ManagementSecurity
 		cfg.MetricsExport = defaults.MetricsExport
+	}
+	if cfg.SchemaVersion == 2 {
+		defaults := Default()
+		cfg.SchemaVersion = 3
+		cfg.Stream.MaxResponseBody = defaults.Stream.MaxResponseBody
+		cfg.Stream.MaxTotalCache = defaults.Stream.MaxTotalCache
 	}
 	if cfg.SchemaVersion != CurrentSchemaVersion {
 		return Config{}, l10n.E("config.schema.unsupported", nil, map[string]any{"Version": cfg.SchemaVersion, "Current": CurrentSchemaVersion})

@@ -4,5 +4,5 @@
   "count": "{{count}} incidents",
   "empty": "No incidents have been recorded",
   "state": { "open": "Outage ongoing", "recovering": "Recovery observation", "resolved": "Stable recovery" },
-  "failedAttempts": "Failed attempts", "affectedRequests": "Affected requests", "lastFailure": "Last failure", "categories": "Error categories", "statusCodes": "HTTP status", "resolvedAt": "Stable recovery"
+	"failedAttempts": "Failed attempts", "affectedRequests": "Affected requests", "lastFailure": "Last failure", "categories": "Error categories", "statusCodes": "HTTP status", "resolvedAt": "Stable recovery", "viewRequests": "View", "requestsUnavailable": "Related requests are outside the retained history window", "requestsTruncated": "Showing the first 100 related requests", "loadMore": "Load earlier incidents"
 }

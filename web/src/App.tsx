@@ -17,10 +17,11 @@ import { ViewErrorBoundary } from "./components/ViewErrorBoundary";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import type { SearchTarget } from "./components/GlobalSearch";
 import { normalizeLocale } from "./i18n";
+import { mergeHistoryPage } from "./historyPagination";
 import { useTheme } from "./theme";
 import type {
   Alert, Config, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot,
-  MetricsWindow, MonitoringEvent, RepeatTask, RuntimeInfo, SessionInfo, Status,
+	MetricsWindow, MonitoringEvent, RealtimeSnapshot, RepeatTask, RuntimeInfo, SessionInfo, Status,
 } from "./types";
 import { CapturesView } from "./views/CapturesView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
@@ -100,7 +101,11 @@ export function App() {
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
+	const [historyCursor, setHistoryCursor] = useState<string | undefined>();
+	const [historyHasMore, setHistoryHasMore] = useState(false);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+	const [incidentCursor, setIncidentCursor] = useState<string | undefined>();
+	const [incidentsHaveMore, setIncidentsHaveMore] = useState(false);
   const [repeatTasks, setRepeatTasks] = useState<RepeatTask[]>([]);
   const [timeline, setTimeline] = useState<HistoryRecord | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
@@ -110,6 +115,7 @@ export function App() {
   const [metricErrors, setMetricErrors] = useState<MetricsErrors | null>(null);
   const [events, setEvents] = useState<MonitoringEvent[]>([]);
   const [mobileTools, setMobileTools] = useState(false);
+	const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
   const [searchTarget, setSearchTarget] = useState<SearchTarget | null>(null);
   const [selectedOverviewRequestId, setSelectedOverviewRequestId] = useState<string | undefined>(undefined);
   const [railCollapsed, setRailCollapsed] = useState(storedRailState);
@@ -121,7 +127,7 @@ export function App() {
   const confirmationPending = useRef(false);
   const resetAuthentication = useCallback((reason: "required" | "expired" | null) => {
     setAuthenticated(false); setAuthReason(reason); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
-    setAlerts([]); setHistory([]); setIncidents([]); setRepeatTasks([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage(""); setBootstrapError(""); setSearchTarget(null); setMobileTools(false);
+		setAlerts([]); setHistory([]); setHistoryCursor(undefined); setHistoryHasMore(false); setIncidents([]); setIncidentCursor(undefined); setIncidentsHaveMore(false); setRepeatTasks([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage(""); setBootstrapError(""); setSearchTarget(null); setMobileTools(false);
     confirmationPending.current = false;
     setConfirmation((current) => { current?.resolve(false); return null; });
   }, []);
@@ -142,9 +148,23 @@ export function App() {
   const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
     setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
   }, []);
+	const loadHistory = useCallback(async (cursor?: string, preserveLoaded = false) => {
+		const page = await api.history({ cursor, limit: 100 });
+		setHistory((current) => cursor
+			? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]
+			: preserveLoaded ? mergeHistoryPage(current, page.items) : page.items);
+		if (cursor || !preserveLoaded) {
+			setHistoryCursor(page.nextCursor); setHistoryHasMore(page.hasMore);
+		}
+	}, [api]);
+	const loadIncidents = useCallback(async (cursor?: string) => {
+		const page = await api.incidents({ cursor, limit: 100 });
+		setIncidents((current) => cursor ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))] : page.items);
+		setIncidentCursor(page.nextCursor); setIncidentsHaveMore(page.hasMore);
+	}, [api]);
   const refresh = useCallback(async () => {
-    const [nextStatus, nextAlerts, nextIncidents, nextRepeats] = await Promise.all([api.status(), api.alerts(), api.incidents(), api.repeatTasks()]);
-    setStatus(nextStatus); setAlerts(nextAlerts); setIncidents(nextIncidents); setRepeatTasks(nextRepeats);
+		const [nextStatus, nextAlerts, nextIncidents, nextRepeats] = await Promise.all([api.status(), api.alerts(), api.incidents({ limit: 100 }), api.repeatTasks()]);
+		setStatus(nextStatus); setAlerts(nextAlerts); setIncidents(nextIncidents.items); setIncidentCursor(nextIncidents.nextCursor); setIncidentsHaveMore(nextIncidents.hasMore); setRepeatTasks(nextRepeats);
   }, [api]);
   const refreshMonitoring = useCallback(async () => {
     const [nextMetrics, nextErrors, nextEvents, nextRuntimeInfo] = await Promise.all([
@@ -174,8 +194,8 @@ export function App() {
     }
     setView(next); setMobileTools(false); setTimeline(null);
     if (updateHash) window.history.pushState(null, "", `#/${next}`);
-    if (next === "history") await Promise.all([api.history().then(setHistory), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
-  }, [api, canOperate, confirmSettingsLeave, refreshMonitoring, showMessage, view]);
+		if (next === "history") await Promise.all([loadHistory(), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
+	}, [canOperate, confirmSettingsLeave, loadHistory, refreshMonitoring, showMessage, view]);
 
   useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
   useEffect(() => {
@@ -192,35 +212,49 @@ export function App() {
       if (disposed) return;
       setSession(nextSession);
       await Promise.all([
-        refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.history().then(setHistory), api.runtimeInfo().then(setRuntimeInfo),
+			refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), loadHistory(), api.runtimeInfo().then(setRuntimeInfo),
       ]);
     }).catch((reason) => { if (!disposed) setBootstrapError(errorMessage(reason)); });
     setTimeline(null); setDiagnostics(null);
     return () => { disposed = true; };
-  }, [api, authenticated, refresh, showMessage]);
+	}, [api, authenticated, loadHistory, refresh]);
   useEffect(() => {
     if (!authenticated || !session) return;
-    return api.subscribe((snapshot) => {
-      setStatus(snapshot.status); setAlerts(snapshot.alerts); setIncidents(snapshot.incidents); setRepeatTasks(snapshot.repeatTasks || []);
-      if (snapshot.metrics) setMetrics(snapshot.metrics);
+		return api.subscribe((event) => {
+			if (event.type === "sync" || event.type === "reset") {
+				const snapshot = event.data as RealtimeSnapshot;
+				setStatus(snapshot.status); setAlerts(snapshot.alerts); setIncidents(snapshot.incidents); setRepeatTasks(snapshot.repeatTasks || []);
+				if (snapshot.metrics) setMetrics(snapshot.metrics);
+				return;
+			}
+			if (event.type === "status") setStatus(event.data as Status);
+			else if (event.type === "alerts") setAlerts(event.data as Alert[]);
+			else if (event.type === "incidents") setIncidents(event.data as Incident[]);
+			else if (event.type === "metrics") setMetrics(event.data as MetricsSnapshot);
+			else if (event.type === "repeat_tasks") setRepeatTasks(event.data as RepeatTask[]);
     }, () => { void refresh().catch(() => undefined); });
   }, [api, authenticated, refresh, session]);
+	useEffect(() => {
+		const changed = () => setPageVisible(document.visibilityState !== "hidden");
+		document.addEventListener("visibilitychange", changed);
+		return () => document.removeEventListener("visibilitychange", changed);
+	}, []);
   useEffect(() => {
     if (session && !canOperate && view === "settings") {
       setView("overview"); window.history.replaceState(null, "", "#/overview");
     }
   }, [canOperate, session, view]);
   useEffect(() => {
-    if (!authenticated || !session) return;
+		if (!authenticated || !session || !pageVisible) return;
     void refreshMonitoring().catch((reason) => showMessage(errorMessage(reason), "error"));
     const metricsTimer = window.setInterval(() => refreshMonitoring().catch(() => undefined), 10_000);
     return () => window.clearInterval(metricsTimer);
-  }, [authenticated, refreshMonitoring, session, showMessage]);
+	}, [authenticated, pageVisible, refreshMonitoring, session, showMessage]);
   useEffect(() => {
-    if (!authenticated || !session) return;
-    const historyTimer = window.setInterval(() => api.history().then(setHistory).catch(() => undefined), 10_000);
+		if (!authenticated || !session || !pageVisible || view !== "history") return;
+		const historyTimer = window.setInterval(() => loadHistory(undefined, true).catch(() => undefined), 10_000);
     return () => window.clearInterval(historyTimer);
-  }, [api, authenticated, session]);
+	}, [authenticated, loadHistory, pageVisible, session, view]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", warn);
@@ -318,18 +352,18 @@ export function App() {
     <main className={`workspace workspace-${view}`}><WorkspaceHeader
       api={api} config={config} view={view} status={status} session={session} requests={status.requests} history={history} incidents={incidents} alerts={alerts}
       metricsWindow={metricsWindow} canOperate={canOperate} mobileToolsOpen={mobileTools} onWindowChange={setMetricsWindow} onOpen={(id) => void openTimeline(id)}
-      onNavigate={(next, target) => { setSearchTarget(target || null); void selectView(next); }} onRefresh={() => { void refresh(); void refreshMonitoring(); void api.history().then(setHistory).catch(() => undefined); }} onPauseToggle={() => void togglePause()} onMobileTools={() => setMobileTools((open) => !open)}
+		onNavigate={(next, target) => { setSearchTarget(target || null); void selectView(next); }} onRefresh={() => { void refresh(); void refreshMonitoring(); void loadHistory(undefined, true); }} onPauseToggle={() => void togglePause()} onMobileTools={() => setMobileTools((open) => !open)}
     />
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
         {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={(id) => setSelectedOverviewRequestId(id)} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={selectedOverviewRequestId} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} repeatTasks={repeatTasks} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} confirm={requestConfirmation} />}
-        {view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} />}
-        {view === "incidents" && <IncidentsView incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} />}
+		{view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} hasMore={historyHasMore} onLoadMore={() => void loadHistory(historyCursor)} />}
+		{view === "incidents" && <IncidentsView api={api} incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} onOpen={setTimeline} hasMore={incidentsHaveMore} onLoadMore={() => void loadIncidents(incidentCursor)} />}
         {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} initialRequestId={searchTarget?.kind === "log" ? searchTarget.id : undefined} initialEvent={searchTarget?.kind === "log" ? searchTarget.detail : undefined} />}
         {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} confirm={requestConfirmation} selectedId={searchTarget?.kind === "capture" ? searchTarget.id : undefined} />}
         {view === "diagnostics" && <DiagnosticsView runtimeInfo={runtimeInfo} report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
-        {view === "settings" && canOperate && <SettingsView config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
+		{view === "settings" && canOperate && <SettingsView api={api} config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
       </ViewErrorBoundary>
     </main>
 

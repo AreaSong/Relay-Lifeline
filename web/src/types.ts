@@ -27,6 +27,8 @@ export interface Config {
   stream: {
     heartbeatInterval: Duration;
     memoryLimit: string;
+    maxResponseBody: string;
+    maxTotalCache: string;
     tempDir: string;
   };
   queue: {
@@ -262,6 +264,27 @@ export interface RepeatTask {
   lastErrorCode?: string;
   lastExecutionId?: string;
   inFlight: boolean;
+	maxExecutions?: number;
+	maxFailures?: number;
+	failureThreshold?: number;
+	consecutiveFailures?: number;
+	circuitOpen?: boolean;
+	maxTokens?: number;
+	tokensUsed?: number;
+	lastUsageTokens?: number;
+	tokenUsageMissing?: boolean;
+	stopReason?: "deadline" | "max_executions" | "max_failures" | "failure_circuit_open" | string;
+	executionAudit?: Array<{
+		id: string;
+		startedAt: string;
+		completedAt: string;
+		success: boolean;
+		statusCode?: number;
+		errorCode?: string;
+		durationMilliseconds: number;
+		usageTokens?: number;
+		usageAvailable: boolean;
+	}>;
 }
 
 export interface Status {
@@ -349,12 +372,38 @@ export interface Incident {
   statusCodes: Record<string, number>;
 }
 
+export interface HistoryPage {
+	items: HistoryRecord[];
+	nextCursor?: string;
+	hasMore: boolean;
+}
+
+export interface IncidentPage {
+	items: Incident[];
+	nextCursor?: string;
+	hasMore: boolean;
+}
+
+export interface IncidentDetail {
+	incident: Incident;
+	requests: HistoryRecord[];
+	affectedRequestsTruncated: boolean;
+}
+
 export interface RealtimeSnapshot {
   status: Status;
   alerts: Alert[];
   incidents: Incident[];
   metrics?: MetricsSnapshot;
   repeatTasks: RepeatTask[];
+}
+
+export interface RealtimeEvent {
+	version: 1;
+	sequence: number;
+	type: "sync" | "reset" | "status" | "alerts" | "incidents" | "metrics" | "repeat_tasks";
+	generatedAt: string;
+	data: unknown;
 }
 
 export interface DiagnosticCheck {
@@ -550,4 +599,29 @@ export interface MonitoringEvents {
   oldestAfter?: number;
   hasMore: boolean;
   hasGap?: boolean;
+}
+
+export interface NotificationStatus {
+	configured: boolean;
+	signingConfigured: boolean;
+	signingKeyId?: string;
+	queueDepth: number;
+	queueCapacity: number;
+	enqueued: number;
+	delivered: number;
+	failed: number;
+	dropped: number;
+	lastAttemptAt?: string;
+	lastSuccessAt?: string;
+	lastFailureAt?: string;
+}
+
+export interface NotificationDelivery {
+	id: number;
+	eventType: string;
+	requestId?: string;
+	outcome: "delivered" | "failed" | "dropped";
+	attempts: number;
+	statusCode?: number;
+	completedAt: string;
 }

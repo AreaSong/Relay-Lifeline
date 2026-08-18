@@ -25,6 +25,9 @@ func TestLoadMergesDefaultsAndValidates(t *testing.T) {
 	if cfg.History.MaxItems != 500 || cfg.Observability.ErrorDetails != "safe" || cfg.Observability.MaxErrorDetail != 2<<10 || cfg.Risk.WarningAttempts != 10 || cfg.Notifications.DeliveryAttempts != 3 {
 		t.Fatalf("v0.2 默认配置未合并: %+v", cfg)
 	}
+	if cfg.Stream.MaxResponseBody != 512<<20 || cfg.Stream.MaxTotalCache != 2<<30 {
+		t.Fatalf("响应缓存保护默认值未合并: %+v", cfg.Stream)
+	}
 }
 
 func TestExampleConfigurationsLoad(t *testing.T) {
@@ -145,6 +148,35 @@ func TestMigrateAddsCurrentSchemaAndRejectsFutureSchema(t *testing.T) {
 	cfg.SchemaVersion = CurrentSchemaVersion + 1
 	if _, err := Migrate(cfg); err == nil {
 		t.Fatal("应拒绝未来版本的配置 schema")
+	}
+}
+
+func TestMigrateSchema2AddsResponseCacheLimits(t *testing.T) {
+	cfg := Default()
+	cfg.SchemaVersion = 2
+	cfg.Stream.MaxResponseBody = 0
+	cfg.Stream.MaxTotalCache = 0
+	migrated, err := Migrate(cfg)
+	if err != nil || migrated.SchemaVersion != CurrentSchemaVersion || migrated.Stream.MaxResponseBody != 512<<20 || migrated.Stream.MaxTotalCache != 2<<30 {
+		t.Fatalf("schema 2 缓存限制迁移异常: %+v err=%v", migrated.Stream, err)
+	}
+}
+
+func TestConfigValidatesResponseCacheLimits(t *testing.T) {
+	cfg := Default()
+	cfg.Stream.MaxResponseBody = cfg.Stream.MemoryLimit - 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝小于内存阈值的单响应上限")
+	}
+	cfg = Default()
+	cfg.Stream.MaxTotalCache = cfg.Stream.MaxResponseBody - 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝小于单响应上限的总缓存预算")
+	}
+	cfg = Default()
+	cfg.Stream.TempDir = "relative/cache"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("应拒绝相对缓存目录")
 	}
 }
 

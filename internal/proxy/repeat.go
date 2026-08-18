@@ -47,9 +47,17 @@ func (g *Gateway) runRepeatAttempt(ctx context.Context, cfg config.Config, templ
 	}
 	started := time.Now()
 	g.recordRepeatStart(executionID)
-	attempt := runAttempt(ctx, g.client, cfg, source, template.Body, template.Streaming)
+	attempt := runAttempt(ctx, g.client, cfg, source, template.Body, template.Streaming, &g.cacheBudget)
 	g.captureRepeat(executionID, template, attempt, started)
-	result := repeat.Execution{ID: executionID, Success: attempt.validation.Success, StatusCode: attemptStatus(attempt), Completed: time.Now()}
+	completed := time.Now()
+	result := repeat.Execution{
+		ID: executionID, Success: attempt.validation.Success, StatusCode: attemptStatus(attempt), Completed: completed,
+		DurationMilliseconds: completed.Sub(started).Milliseconds(),
+	}
+	if attempt.validation.Usage != nil {
+		result.UsageTokens = attempt.validation.Usage.TotalTokens
+		result.UsageAvailable = true
+	}
 	if !result.Success {
 		result.ErrorCode = describeAttempt(attempt).ID
 	}

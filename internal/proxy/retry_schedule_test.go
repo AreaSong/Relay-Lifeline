@@ -47,6 +47,15 @@ func TestExponentialDelayCapsWithoutOverflow(t *testing.T) {
 	}
 }
 
+func TestRetryPolicyCannotOverridePermanentFailure(t *testing.T) {
+	cfg := config.Default()
+	result := attemptResult{validation: Validation{Permanent: true}}
+	policy := state.RetryPolicy{Deadline: time.Now().Add(time.Hour)}
+	if stop := retryPolicyStop(cfg, result, 1, policy, true); stop != retryStopDenied {
+		t.Fatalf("单请求策略绕过了永久失败: %q", stop)
+	}
+}
+
 func TestWaitingPolicyUpdateReschedulesImmediatelyAndHonorsAttemptLimit(t *testing.T) {
 	var attempts atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

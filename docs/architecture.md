@@ -21,17 +21,21 @@ AI client -> data plane -> OpenAI-compatible relay -> model provider
 
 ## Data plane
 
-The gateway reads and bounds the downstream request body, then rebuilds an upstream HTTP request for every attempt. Authorization and protocol headers are forwarded but not recorded. Client cancellation propagates to the active upstream call, queue wait, pause wait, and retry timer.
+The gateway reads and bounds the downstream request body, then rebuilds an upstream HTTP request for every attempt. Authorization and supported protocol headers are forwarded but not recorded; compression negotiation is managed by the local transport. Client cancellation propagates to the active upstream call, queue wait, pause wait, and retry timer.
 
-Every upstream response is buffered in memory and spills to a mode-`0600` temporary file above the configured limit. A response is delivered only after protocol validation succeeds. This prevents partial model output from reaching the client before the gateway knows whether retry is required.
+Every upstream response is buffered in memory and spills to a mode-`0600` temporary file above the configured threshold. Hard limits bound one response and all active process caches, while disk writes continuously preserve the minimum free-space reserve. A response is delivered only after protocol validation succeeds. This prevents partial model output from reaching the client before the gateway knows whether retry is required.
 
-In `all-errors` mode, transport failures, every non-2xx status, response-header timeouts, response-body idle timeouts, invalid or failed JSON, failed or incomplete SSE, and missing completion markers are retryable. The body-idle timer resets whenever data arrives, preventing a connection from hanging forever after headers. The delay is selected between the configured minimum and maximum and can be extended by `Retry-After`. A global recovery gate spaces resumed attempts.
+In `all-errors` mode, transport failures, every non-2xx status, response-header timeouts, response-body idle timeouts, invalid or failed JSON, failed or incomplete SSE, and missing completion markers are retryable. Per-response, total-cache, disk-reserve, and unsupported-media rejections are deterministic local failures and are not retried. The body-idle timer resets whenever data arrives, preventing a connection from hanging forever after headers. The delay is selected between the configured minimum and maximum and can be extended by `Retry-After`. A global recovery gate spaces resumed attempts.
 
 The downstream HTTP status is committed as `200` before waiting so keepalives can preserve the connection. Final failures are therefore represented as OpenAI-style error envelopes in the body. Streaming requests receive SSE comment keepalives; non-streaming JSON receives whitespace, which remains valid JSON framing.
 
 ## Control plane
 
 The management API uses layered Bearer keys. Viewer can read redacted status, history, timelines, metrics, logs, and filtered captures; Operator adds pause/resume, immediate retry, cancellation, capture control, and configuration writes; Sensitive Data additionally permits full-raw downloads.
+
+Continuous tasks are governed by duration, maximum execution count, maximum failure count, an optional strict token limit, and a consecutive-failure circuit. The token limit counts only upstream-authoritative `usage.total_tokens`; missing usage pauses the task with `usage_missing`, and reaching the limit expires it after the in-flight execution. Opening the failure circuit pauses the task until an explicit resume clears it. Only the latest 100 status-code/error-code/duration/usage audits are retained; authentication headers and bodies are never persisted.
+
+History and incident lists apply time, state, and text filters on the server and use an opaque stable cursor composed from time and ID. Incident details resolve at most 100 related requests still inside history retention. The management SSE keeps a 512-event versioned ring per locale: the first connection receives `sync`, then status, alert, incident, metric, and continuous-task domains emit only when changed. `Last-Event-ID` or `after` replays missed events, while an overwritten cursor receives a current `reset`.
 
 Runtime records store stable message codes and interpolation details. Human-readable messages are localized at API response time, allowing the same completed history record to be viewed in either language. Request and incident timelines are restored from verified SHA-256 hash-chain journals. Startup marks unfinished requests as `orphaned` instead of replaying them. Retention maintenance removes whole expired entities and atomically rebuilds the retained chain through a mode-`0600` file, `fsync`, and rename.
 
@@ -53,7 +57,7 @@ The error-detail extractor accepts only known JSON/SSE fields and allowlisted re
 
 Metrics contain no prompts, response bodies, Authorization, headers, or raw errors. Error distribution is restricted to the stable `transport`, `protocol`, `auth`, `rate_limit`, `client`, `server`, and `http` categories. Operational events contain stable codes and bounded fields such as request ID, category, status code, attempt, and management outcome.
 
-The risk engine emits deduplicated alerts and never changes retry policy. Notifications use an independent bounded queue and delivery retry, so a failing Webhook cannot block model traffic.
+The risk engine emits deduplicated alerts and never changes retry policy. Notifications use an independent bounded queue and delivery retry, so a failing Webhook cannot block model traffic. The notifier tracks queue depth and delivered/failed/dropped counters plus the latest 100 outcomes; history never stores payloads or target URLs. When configured through environment variables, deliveries carry an HMAC-SHA256 signature over `timestamp + "." + raw payload`, plus timestamp and Key ID headers; Operators can enqueue a fixed test event.
 
 Logs and Webhooks contain stable English event identifiers and localized human text. Their locales are independent from the UI/API locale.
 
@@ -78,7 +82,9 @@ Relay-Lifeline maintains one upstream target. Account pools, multi-provider rout
 - Responses API: `response.completed` is required.
 - Chat Completions stream: `[DONE]` is required.
 - `response.failed`, `response.incomplete`, an error envelope, non-2xx status, transport failure, or truncated stream is a failure.
-- Non-streaming JSON must parse and must not contain a top-level failed, incomplete, or error state.
+- Non-streaming Responses JSON requires `status: completed`; non-streaming Chat Completions JSON requires a `choices` array.
+- Other non-streaming JSON must be a non-empty object without a top-level failed, incomplete, or error state.
+- The data plane does not deliver binary audio, image, or file responses.
 
 ## Known limitation
 
