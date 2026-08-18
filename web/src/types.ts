@@ -175,6 +175,67 @@ export interface RequestInfo {
   lastErrorDetails?: Record<string, unknown>;
   retryDeadline?: string;
   retryIntervalMilliseconds?: number;
+  retryPolicy?: RetryPolicyInfo;
+  actions?: RequestActions;
+}
+
+export type RetryScheduleMode = "inherit" | "immediate" | "fixed" | "random" | "exponential";
+
+export interface RetryScheduleInfo {
+  mode: RetryScheduleMode;
+  intervalMilliseconds?: number;
+  minimumIntervalMilliseconds?: number;
+  maximumIntervalMilliseconds?: number;
+  baseIntervalMilliseconds?: number;
+}
+
+export interface RetryPolicyInfo {
+  state: "pending" | "active";
+  durationMilliseconds: number;
+  schedule: RetryScheduleInfo;
+  maxAdditionalAttempts?: number;
+  additionalAttemptsUsed: number;
+  remainingAdditionalAttempts?: number;
+  honorRetryAfter: boolean;
+  appliedAt: string;
+  activatedAt?: string;
+  deadline?: string;
+}
+
+export interface RequestActions {
+  canRetryNow: boolean;
+  canSetRetryPolicy: boolean;
+  retryRequiresConfirmation: boolean;
+  canCancel: boolean;
+}
+
+export interface RetryPolicyInput {
+  durationMilliseconds: number;
+  schedule: {
+    mode: RetryScheduleMode;
+    intervalMilliseconds?: number;
+    minimumIntervalMilliseconds?: number;
+    maximumIntervalMilliseconds?: number;
+    baseIntervalMilliseconds?: number;
+  };
+  maxAdditionalAttempts?: number;
+  honorRetryAfter: boolean;
+}
+
+export interface BatchActionItem {
+  id: string;
+  outcome: "accepted" | "skipped";
+  reason?: string;
+  state?: string;
+}
+
+export interface BatchActionResponse {
+  operationId: string;
+  requested: number;
+  accepted: number;
+  skipped: number;
+  triggered?: number;
+  results: BatchActionItem[];
 }
 
 export type RepeatTaskState = "running" | "paused" | "stopped" | "expired" | "interrupted";

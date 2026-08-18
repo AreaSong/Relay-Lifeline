@@ -5,16 +5,17 @@ import "time"
 const securityEventCapacity = 1000
 
 type Event struct {
-	ID              uint64    `json:"id"`
-	Time            time.Time `json:"time"`
-	Code            string    `json:"code"`
-	Category        string    `json:"category,omitempty"`
-	RequestID       string    `json:"requestId,omitempty"`
-	StatusCode      int       `json:"statusCode,omitempty"`
-	Attempt         int       `json:"attempt,omitempty"`
-	Outcome         string    `json:"outcome,omitempty"`
-	Changed         *bool     `json:"changed,omitempty"`
-	RestartRequired *bool     `json:"restartRequired,omitempty"`
+	ID              uint64         `json:"id"`
+	Time            time.Time      `json:"time"`
+	Code            string         `json:"code"`
+	Category        string         `json:"category,omitempty"`
+	RequestID       string         `json:"requestId,omitempty"`
+	StatusCode      int            `json:"statusCode,omitempty"`
+	Attempt         int            `json:"attempt,omitempty"`
+	Outcome         string         `json:"outcome,omitempty"`
+	Details         map[string]any `json:"details,omitempty"`
+	Changed         *bool          `json:"changed,omitempty"`
+	RestartRequired *bool          `json:"restartRequired,omitempty"`
 }
 
 type SecurityEvent = Event

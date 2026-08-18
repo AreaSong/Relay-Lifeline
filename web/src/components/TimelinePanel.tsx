@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, Clock3, Inbox, RotateCcw, Send, ShieldAlert, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, Clock3, Inbox, RotateCcw, Send, Settings2, ShieldAlert, XCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { formatBytes, formatDuration, formatTime } from "../format";
 import type { ErrorDetail, HistoryRecord, TimelineEvent } from "../types";
@@ -9,6 +9,8 @@ function EventIcon({ type }: { type: string }) {
   if (type === "attempt_failed" || type === "delivery_failed") return <XCircle />;
   if (type === "waiting") return <Clock3 />;
   if (type === "retry_resumed" || type === "retry_requested") return <RotateCcw />;
+  if (["retry_rescheduled", "retry_policy_updated", "retry_policy_activated", "retry_policy_reset"].includes(type)) return <Settings2 />;
+  if (type === "retry_attempts_exhausted" || type === "retry_window_expired") return <ShieldAlert />;
   if (type === "risk_warning") return <ShieldAlert />;
   if (type === "canceled" || type === "cancel_requested") return <Ban />;
   if (type === "attempt_started") return <Send />;

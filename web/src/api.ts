@@ -1,4 +1,4 @@
-import type { Alert, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RepeatTask, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
+import type { Alert, BatchActionResponse, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, RealtimeSnapshot, RepeatTask, RetryPolicyInput, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -261,12 +261,37 @@ export class ApiClient {
     return this.request<{ paused: boolean }>("/control/resume", { method: "POST" });
   }
 
-  retry(id: string) {
-    return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}/retry`, { method: "POST" });
+  retry(id: string, allowUncertain = false) {
+    return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}/retry`, {
+      method: "POST", body: allowUncertain ? JSON.stringify({ allowUncertain: true }) : undefined,
+    });
   }
 
-  setRetryPolicy(id: string, duration: string, interval: string) {
-    return this.request<{ accepted: boolean; retryDeadline: string; retryIntervalMilliseconds: number }>(`/requests/${encodeURIComponent(id)}/retry-policy`, { method: "POST", body: JSON.stringify({ duration, interval }) });
+  batchRetry(requestIds: string[], allowUncertain = false) {
+    return this.request<BatchActionResponse>("/requests/batch/retry", {
+      method: "POST", body: JSON.stringify({ requestIds, allowUncertain }),
+    }, (value) => expectObjectArrays(value, "batchRetry", ["results"]));
+  }
+
+  setRetryPolicy(id: string, policy: RetryPolicyInput, overwrite = true) {
+    return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}/retry-policy`, {
+      method: "POST", body: JSON.stringify({ ...policy, overwrite }),
+    });
+  }
+
+  clearRetryPolicy(id: string) {
+    return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}/retry-policy`, { method: "DELETE" });
+  }
+
+  batchRetryPolicy(requestIds: string[], input: {
+    policy?: RetryPolicyInput;
+    reset?: boolean;
+    overwrite?: boolean;
+    retryWaitingNow?: boolean;
+  }) {
+    return this.request<BatchActionResponse>("/requests/batch/retry-policy", {
+      method: "POST", body: JSON.stringify({ requestIds, ...input }),
+    }, (value) => expectObjectArrays(value, "batchRetryPolicy", ["results"]));
   }
 
   repeatTasks() {

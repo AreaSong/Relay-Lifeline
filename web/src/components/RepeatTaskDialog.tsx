@@ -1,12 +1,10 @@
-import { Clock3, Repeat2, ShieldAlert } from "lucide-react";
+import { Repeat2, ShieldAlert } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import { errorMessage } from "../api";
 import type { ConfirmDialogState } from "./ConfirmDialog";
 import type { RequestInfo } from "../types";
-
-type Mode = "retry" | "repeat";
 
 export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSuccess, confirm }: {
   request: RequestInfo;
@@ -19,7 +17,6 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
 }) {
   const { t } = useTranslation(["common", "requests"]);
   const dialog = useRef<HTMLDivElement>(null);
-  const [mode, setMode] = useState<Mode>("retry");
   const [interval, setIntervalValue] = useState("60s");
   const [duration, setDuration] = useState("1h");
   const [idempotency, setIdempotency] = useState<"preserve" | "regenerate">("preserve");
@@ -43,17 +40,15 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const risky = mode === "repeat" && (forever || idempotency === "regenerate");
-    if (risky && !await confirm({
+    if (!await confirm({
       title: t("requests:repeat.confirmTitle"), description: t("requests:repeat.confirmDescription"),
-      confirmLabel: t("requests:repeat.confirmAction"), tone: "danger",
+      confirmLabel: t("requests:repeat.confirmAction"), tone: forever || idempotency === "regenerate" ? "danger" : "default",
     })) return;
     setBusy(true);
     try {
-      if (mode === "retry") await api.setRetryPolicy(request.id, duration, interval);
-      else await api.createRepeatTask(request.id, { interval, duration: forever ? "" : duration, idempotency, confirmForever: forever });
+      await api.createRepeatTask(request.id, { interval, duration: forever ? "" : duration, idempotency, confirmForever: forever });
       await refresh();
-      onSuccess(t(mode === "retry" ? "requests:repeat.retryCreated" : "requests:repeat.taskCreated"));
+      onSuccess(t("requests:repeat.taskCreated"));
       onClose();
     } catch (reason) {
       onError(errorMessage(reason));
@@ -66,18 +61,14 @@ export function RepeatTaskDialog({ request, api, refresh, onClose, onError, onSu
     <div ref={dialog} className="repeat-dialog" role="dialog" aria-modal="true" aria-labelledby="repeat-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
       <header><span className="confirm-icon"><Repeat2 size={20} /></span><div><h2 id="repeat-dialog-title">{t("requests:repeat.title")}</h2><p>{request.method} {request.path} · {request.id}</p></div></header>
       <form onSubmit={submit}>
-        <div className="segmented-control repeat-mode" aria-label={t("requests:repeat.mode")}>
-          <button type="button" className={mode === "retry" ? "active" : ""} onClick={() => setMode("retry")}><Clock3 size={15} />{t("requests:repeat.retryMode")}</button>
-          <button type="button" className={mode === "repeat" ? "active" : ""} onClick={() => setMode("repeat")}><Repeat2 size={15} />{t("requests:repeat.repeatMode")}</button>
-        </div>
-        <p className="repeat-explanation">{t(mode === "retry" ? "requests:repeat.retryDescription" : "requests:repeat.repeatDescription")}</p>
+        <p className="repeat-explanation">{t("requests:repeat.repeatDescription")}</p>
         <div className="form-grid">
           <label className="field"><span>{t("requests:repeat.interval")}</span><select value={interval} onChange={(event) => setIntervalValue(event.target.value)}>{["5s", "15s", "30s", "60s", "5m", "15m"].map((value) => <option key={value} value={value}>{t(`requests:repeat.values.${value}`)}</option>)}</select></label>
-          <label className="field"><span>{t("requests:repeat.duration")}</span><select value={duration} disabled={mode === "repeat" && forever} onChange={(event) => setDuration(event.target.value)}>{["5m", "15m", "30m", "1h", "6h", "24h"].map((value) => <option key={value} value={value}>{t(`requests:repeat.values.${value}`)}</option>)}</select></label>
-          {mode === "repeat" && <label className="field wide"><span>{t("requests:repeat.idempotency")}</span><select value={idempotency} onChange={(event) => setIdempotency(event.target.value as "preserve" | "regenerate")}><option value="preserve">{t("requests:repeat.preserve")}</option><option value="regenerate">{t("requests:repeat.regenerate")}</option></select></label>}
+          <label className="field"><span>{t("requests:repeat.duration")}</span><select value={duration} disabled={forever} onChange={(event) => setDuration(event.target.value)}>{["5m", "15m", "30m", "1h", "6h", "24h"].map((value) => <option key={value} value={value}>{t(`requests:repeat.values.${value}`)}</option>)}</select></label>
+          <label className="field wide"><span>{t("requests:repeat.idempotency")}</span><select value={idempotency} onChange={(event) => setIdempotency(event.target.value as "preserve" | "regenerate")}><option value="preserve">{t("requests:repeat.preserve")}</option><option value="regenerate">{t("requests:repeat.regenerate")}</option></select></label>
         </div>
-        {mode === "repeat" && <label className="repeat-checkbox"><input type="checkbox" checked={forever} onChange={(event) => setForever(event.target.checked)} /><span>{t("requests:repeat.forever")}</span></label>}
-        {mode === "repeat" && <div className="repeat-warning"><ShieldAlert size={17} /><span>{t("requests:repeat.warning")}</span></div>}
+        <label className="repeat-checkbox"><input type="checkbox" checked={forever} onChange={(event) => setForever(event.target.checked)} /><span>{t("requests:repeat.forever")}</span></label>
+        <div className="repeat-warning"><ShieldAlert size={17} /><span>{t("requests:repeat.warning")}</span></div>
         <footer><button type="button" className="button" onClick={onClose}>{t("common:actions.cancelDialog")}</button><button className="button primary" disabled={busy}>{busy ? t("common:loading") : t("requests:repeat.apply")}</button></footer>
       </form>
     </div>

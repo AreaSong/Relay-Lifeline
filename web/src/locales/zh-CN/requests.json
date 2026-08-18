@@ -1,9 +1,10 @@
 {
-  "columns": { "request": "请求", "result": "结果", "status": "状态", "attempts": "尝试", "duration": "持续时间", "nextRetry": "下次重试", "lastError": "最近错误", "actions": "操作" },
+  "columns": { "request": "请求", "result": "结果", "status": "状态", "attempts": "尝试", "duration": "持续时间", "nextRetry": "下次重试", "policy": "重试策略", "lastError": "最近错误", "actions": "操作" },
   "emptyActive": "当前没有活动请求",
   "filters": { "search": "搜索请求、Codex 任务 ID 或客户端 ID", "state": "状态", "allStates": "全部状态" },
   "identity": { "task": "任务 ID（客户端声明）", "client": "客户端 ID（客户端声明）" },
   "summary": { "active": "活动", "requesting": "请求中", "waiting": "等待中", "queued": "排队中" },
+  "batch": { "retryableCount": "可重试 {{count}} 个", "selected": "已选 {{count}} 个", "selectAll": "选择当前筛选结果", "select": "选择", "selectRequest": "选择请求 {{id}}", "clearSelection": "清除选择", "policy": "批量设置策略", "retry": "重试可重试请求（{{count}}）", "retryAction": "确认重试", "retryConfirmTitle": "确认批量重试", "retryUncertainConfirm": "其中包含可能已经到达上游的请求，将对 {{count}} 个请求再次发起调用，可能产生重复副作用。", "retryManyConfirm": "将立即唤醒 {{count}} 个请求，并继续遵守并发和恢复间隔限制。", "retryResult": "已接受 {{accepted}} 个请求，跳过 {{skipped}} 个" },
   "windowLabels": { "15m": "15 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" },
   "history": { "title": "请求历史", "description": "仅保存本次进程中的脱敏元数据", "empty": "还没有已完成请求", "window": "时间范围", "events": "运行事件", "eventsEmpty": "当前进程还没有运行事件" },
   "timeline": { "label": "请求时间线", "attempts": "尝试", "duration": "耗时", "truncated": "该请求时间线过长，已省略 {{count}} 条较早的中间事件；首事件和最近事件已保留。" },
@@ -24,12 +25,16 @@
     "config.save": "配置已保存"
   },
   "errorDetail": { "title": "上游错误详情", "type": "类型", "code": "错误码", "requestId": "上游请求 ID", "retryAfter": "Retry-After", "responseBytes": "响应大小", "structured": "上游返回了结构化错误", "unparsed": "上游返回了无法安全解析的错误响应" },
+  "retryPolicy": {
+    "action": "设置重试策略", "title": "重试策略", "targets": "目标 {{count}} 个，可设置 {{eligible}} 个，其中 {{waiting}} 个正在等待", "presetsLabel": "策略预设", "presets": { "standard": "标准恢复", "fast": "快速恢复", "conservative": "保守恢复", "custom": "自定义" },
+    "duration": "持续时间", "mode": "重试节奏", "interval": "固定间隔", "randomRange": "随机范围", "exponentialRange": "指数范围", "custom": "自定义", "customDuration": "自定义持续时间", "customInterval": "自定义间隔", "randomMinimum": "随机最小值", "randomMaximum": "随机最大值", "exponentialBase": "指数起始值", "exponentialMaximum": "指数上限", "maxAttempts": "最多新增尝试", "customAttempts": "自定义新增尝试次数", "attemptsUnit": "次", "additionalAttempts": "新增 {{count}} 次", "durationOnly": "仅受持续时间限制", "honorRetryAfter": "遵循上游 Retry-After（只会延长等待）", "overwrite": "覆盖已有单请求策略", "retryWaitingNow": "应用后立即唤醒等待中的请求", "immediateWarning": "立即模式仍遵守全局恢复间隔，但必须设置最大新增尝试次数。", "globalSpacing": "所有策略仍遵守全局并发限制、队列和恢复间隔。", "apply": "应用策略", "resetAction": "恢复全局默认", "pending": "待生效", "until": "截止 {{time}}", "remaining": "剩余 {{count}} 次", "globalDefault": "全局默认", "retryUnavailable": "当前状态不可立即重试", "noEligible": "当前没有可设置策略的请求", "quickConfirmTitle": "确认批量设置策略", "quickConfirmDescription": "将为 {{count}} 个请求应用“{{preset}}”，正在请求中的请求会在下一次失败后生效。", "confirmTitle": "确认重试策略", "confirmDescription": "将为 {{count}} 个请求应用策略，预计最多新增 {{estimate}} 次调用。请确认调用量和副作用可接受。", "confirmAction": "确认应用", "durationOnlyEstimate": "按持续时间计算", "applied": "已为 {{accepted}}/{{total}} 个请求应用策略", "reset": "已为 {{accepted}}/{{total}} 个请求恢复全局策略", "validation": { "duration": "持续时间必须在 5 秒到 24 小时之间", "interval": "间隔必须有效且小于持续时间", "attempts": "新增尝试次数必须在允许范围内" }, "units": { "seconds": "秒", "minutes": "分钟", "hours": "小时" }, "values": { "5s": "5 秒", "15s": "15 秒", "30s": "30 秒", "60s": "1 分钟", "5m": "5 分钟", "15m": "15 分钟", "30m": "30 分钟", "1h": "1 小时", "6h": "6 小时", "24h": "24 小时" }, "modes": { "inherit": "跟随全局", "immediate": "立即", "fixed": "固定间隔", "random": "随机间隔", "exponential": "指数退避" }, "summary": { "inherit": "跟随全局", "immediate": "立即", "fixed": "固定 {{interval}}", "random": "随机 {{minimum}}–{{maximum}}", "exponential": "指数 {{base}}→{{maximum}}" }
+  },
   "repeat": {
-    "action": "设置请求策略", "title": "请求执行策略", "mode": "执行模式", "retryMode": "限时恢复", "repeatMode": "持续重复",
+    "action": "创建持续任务", "title": "创建持续任务", "mode": "执行模式", "retryMode": "限时恢复", "repeatMode": "持续重复",
     "retryDescription": "仅在失败时继续尝试，首次成功或到达截止时间后结束。", "repeatDescription": "原请求正常返回；后台任务无论成功或失败都会继续执行。",
     "interval": "执行间隔", "duration": "最长持续时间", "idempotency": "幂等键策略", "preserve": "保留原幂等键（推荐）", "regenerate": "每轮生成新幂等键",
     "forever": "一直运行，直到手动停止", "warning": "持续执行可能重复产生模型费用或业务副作用。凭据只保存在当前进程内，服务重启后任务不会自动恢复。",
-    "apply": "应用策略", "confirmTitle": "确认持续执行", "confirmDescription": "该操作可能重复调用上游并产生费用。请确认间隔、持续时间和幂等键策略均符合预期。", "confirmAction": "确认启动",
+    "apply": "创建任务", "confirmTitle": "确认持续执行", "confirmDescription": "该操作可能重复调用上游并产生费用。请确认间隔、持续时间和幂等键策略均符合预期。", "confirmAction": "确认启动",
     "retryCreated": "限时恢复策略已生效", "taskCreated": "持续任务已创建", "tasksTitle": "持续任务", "tasksDescription": "安全摘要会保留；认证信息仅存在于当前进程内。",
     "task": "任务", "results": "执行结果", "nextRun": "下次执行", "inFlight": "正在执行", "successCount": "成功 {{count}}", "failureCount": "失败 {{count}}",
     "total": "总计", "success": "成功", "failure": "失败", "activeCount": "{{count}} 个运行任务", "noActive": "当前没有运行中的持续任务", "endedTasks": "已结束任务 · {{count}}",

@@ -15,21 +15,23 @@ import (
 )
 
 type RequestInfo struct {
-	ID               string          `json:"id"`
-	ClientID         string          `json:"clientId,omitempty"`
-	TaskID           string          `json:"taskId,omitempty"`
-	Method           string          `json:"method"`
-	Path             string          `json:"path"`
-	State            lifecycle.State `json:"state"`
-	Attempt          int             `json:"attempt"`
-	StartedAt        time.Time       `json:"startedAt"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
-	NextRetryAt      time.Time       `json:"nextRetryAt,omitempty"`
-	LastError        string          `json:"lastError,omitempty"`
-	LastErrorCode    string          `json:"lastErrorCode,omitempty"`
-	LastErrorDetails map[string]any  `json:"lastErrorDetails,omitempty"`
-	RetryDeadline    time.Time       `json:"retryDeadline,omitempty"`
-	RetryIntervalMs  int64           `json:"retryIntervalMilliseconds,omitempty"`
+	ID               string           `json:"id"`
+	ClientID         string           `json:"clientId,omitempty"`
+	TaskID           string           `json:"taskId,omitempty"`
+	Method           string           `json:"method"`
+	Path             string           `json:"path"`
+	State            lifecycle.State  `json:"state"`
+	Attempt          int              `json:"attempt"`
+	StartedAt        time.Time        `json:"startedAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+	NextRetryAt      time.Time        `json:"nextRetryAt,omitempty"`
+	LastError        string           `json:"lastError,omitempty"`
+	LastErrorCode    string           `json:"lastErrorCode,omitempty"`
+	LastErrorDetails map[string]any   `json:"lastErrorDetails,omitempty"`
+	RetryDeadline    time.Time        `json:"retryDeadline,omitempty"`
+	RetryIntervalMs  int64            `json:"retryIntervalMilliseconds,omitempty"`
+	RetryPolicy      *RetryPolicyInfo `json:"retryPolicy,omitempty"`
+	Actions          RequestActions   `json:"actions"`
 }
 
 type RequestIdentity struct {
@@ -37,16 +39,13 @@ type RequestIdentity struct {
 	TaskID   string `json:"taskId,omitempty"`
 }
 
-type RetryPolicy struct {
-	Deadline time.Time
-	Interval time.Duration
-}
-
 type trackedRequest struct {
-	info     RequestInfo
-	cancel   context.CancelFunc
-	retryNow chan struct{}
-	notified bool
+	info          RequestInfo
+	cancel        context.CancelFunc
+	retryNow      chan struct{}
+	policyChanged chan struct{}
+	policy        *RetryPolicy
+	notified      bool
 }
 
 type Registry struct {
@@ -96,13 +95,14 @@ func (r *Registry) AddWithIdentity(method, path string, cancel context.CancelFun
 	now := time.Now()
 	id := newID()
 	retryNow := make(chan struct{}, 1)
+	policyChanged := make(chan struct{}, 1)
 	r.mu.Lock()
 	r.requests[id] = &trackedRequest{
 		info: RequestInfo{
 			ID: id, ClientID: identity.ClientID, TaskID: identity.TaskID,
 			Method: method, Path: path, State: lifecycle.StateQueued, StartedAt: now, UpdatedAt: now,
 		},
-		cancel: cancel, retryNow: retryNow,
+		cancel: cancel, retryNow: retryNow, policyChanged: policyChanged,
 	}
 	r.mu.Unlock()
 	r.total.Add(1)
@@ -212,30 +212,182 @@ func (r *Registry) RetryNow(id string) bool {
 	return true
 }
 
-func (r *Registry) SetRetryPolicy(id string, duration, interval time.Duration) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Registry) RetryNowChecked(id string, allowUncertain bool) RequestActionResult {
+	r.mu.RLock()
 	request, ok := r.requests[id]
 	if !ok {
-		return false
+		r.mu.RUnlock()
+		return skippedAction(id, "", RequestReasonNotFound)
 	}
-	request.info.RetryDeadline = time.Now().Add(duration)
-	request.info.RetryIntervalMs = interval.Milliseconds()
-	r.timeline.Add(id, timeline.Event{
-		Type: "retry_policy_updated", MessageCode: "timeline.retry_policy_updated",
-		WaitMilliseconds: interval.Milliseconds(),
-	})
-	return true
+	state, retry := request.info.State, request.retryNow
+	r.mu.RUnlock()
+	if state == lifecycle.StateUncertain && !allowUncertain {
+		return skippedAction(id, state, RequestReasonConfirmationRequired)
+	}
+	if state != lifecycle.StateWaiting && state != lifecycle.StateUncertain {
+		return skippedAction(id, state, RequestReasonStateNotRetryable)
+	}
+	select {
+	case retry <- struct{}{}:
+		r.timeline.Add(id, timeline.Event{Type: "retry_requested", MessageCode: "timeline.retry_requested"})
+		return acceptedAction(id, state)
+	default:
+		return skippedAction(id, state, RequestReasonAlreadyRequested)
+	}
+}
+
+func (r *Registry) PolicyChanges(id string) <-chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if request, ok := r.requests[id]; ok {
+		return request.policyChanged
+	}
+	return nil
+}
+
+func (r *Registry) SetRetryPolicy(id string, duration, interval time.Duration) bool {
+	result := r.applyRetryPolicy(id, RetryPolicySpec{
+		Duration: duration, Schedule: RetrySchedule{Mode: RetryScheduleFixed, Interval: interval},
+		HonorRetryAfter: true,
+	}, true, false)
+	return result.Outcome == RequestActionAccepted
 }
 
 func (r *Registry) RetryPolicy(id string) (RetryPolicy, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	request, ok := r.requests[id]
-	if !ok || request.info.RetryDeadline.IsZero() {
+	if !ok || request.policy == nil {
 		return RetryPolicy{}, false
 	}
-	return RetryPolicy{Deadline: request.info.RetryDeadline, Interval: time.Duration(request.info.RetryIntervalMs) * time.Millisecond}, true
+	return *request.policy, true
+}
+
+func (r *Registry) ApplyRetryPolicy(id string, spec RetryPolicySpec, overwrite bool) RequestActionResult {
+	return r.applyRetryPolicy(id, spec, overwrite, true)
+}
+
+func (r *Registry) applyRetryPolicy(id string, spec RetryPolicySpec, overwrite, validate bool) RequestActionResult {
+	if validate && spec.Validate() != nil {
+		return skippedAction(id, "", RequestReasonStateNotPolicyCapable)
+	}
+	now := time.Now()
+	r.mu.Lock()
+	request, ok := r.requests[id]
+	if !ok {
+		r.mu.Unlock()
+		return skippedAction(id, "", RequestReasonNotFound)
+	}
+	state := request.info.State
+	if !actionsForState(state).CanSetRetryPolicy {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonStateNotPolicyCapable)
+	}
+	if request.policy != nil && !overwrite {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonPolicyExists)
+	}
+	policy := NewRetryPolicy(spec, now)
+	if state == lifecycle.StateWaiting {
+		activatePolicy(&policy, request.info.Attempt, now)
+	}
+	request.policy = &policy
+	updatePolicyInfo(request)
+	request.info.UpdatedAt = now
+	policyChanged := request.policyChanged
+	r.mu.Unlock()
+	r.timeline.Add(id, timeline.Event{
+		Type: "retry_policy_updated", MessageCode: "timeline.retry_policy_updated",
+		WaitMilliseconds: policyPrimaryInterval(policy).Milliseconds(),
+		MessageDetails:   map[string]any{"Mode": string(policy.Schedule.Mode)},
+	})
+	if state == lifecycle.StateWaiting {
+		signal(policyChanged)
+	}
+	return acceptedAction(id, state)
+}
+
+func (r *Registry) ClearRetryPolicy(id string) RequestActionResult {
+	r.mu.Lock()
+	request, ok := r.requests[id]
+	if !ok {
+		r.mu.Unlock()
+		return skippedAction(id, "", RequestReasonNotFound)
+	}
+	state := request.info.State
+	if !actionsForState(state).CanSetRetryPolicy {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonStateNotPolicyCapable)
+	}
+	if request.policy == nil {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonNoPolicy)
+	}
+	request.policy = nil
+	updatePolicyInfo(request)
+	request.info.UpdatedAt = time.Now()
+	policyChanged := request.policyChanged
+	r.mu.Unlock()
+	r.timeline.Add(id, timeline.Event{Type: "retry_policy_reset", MessageCode: "timeline.retry_policy_reset"})
+	if state == lifecycle.StateWaiting {
+		signal(policyChanged)
+	}
+	return acceptedAction(id, state)
+}
+
+func (r *Registry) ActivateRetryPolicy(id string, attempt int) (RetryPolicy, bool) {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	request, ok := r.requests[id]
+	if !ok || request.policy == nil {
+		return RetryPolicy{}, false
+	}
+	if !request.policy.Active() {
+		activatePolicy(request.policy, attempt, now)
+		updatePolicyInfo(request)
+		request.info.UpdatedAt = now
+		r.timeline.Add(id, timeline.Event{Type: "retry_policy_activated", Attempt: attempt, MessageCode: "timeline.retry_policy_activated"})
+	}
+	return *request.policy, true
+}
+
+func activatePolicy(policy *RetryPolicy, attempt int, now time.Time) {
+	policy.ActivatedAt = now
+	policy.Deadline = now.Add(policy.Duration)
+	policy.BaselineAttempt = attempt
+}
+
+func updatePolicyInfo(request *trackedRequest) {
+	request.info.RetryDeadline = time.Time{}
+	request.info.RetryIntervalMs = 0
+	request.info.RetryPolicy = nil
+	if request.policy == nil {
+		return
+	}
+	request.info.RetryDeadline = request.policy.Deadline
+	request.info.RetryIntervalMs = policyPrimaryInterval(*request.policy).Milliseconds()
+	request.info.RetryPolicy = request.policy.Info(request.info.Attempt)
+}
+
+func policyPrimaryInterval(policy RetryPolicy) time.Duration {
+	switch policy.Schedule.Mode {
+	case RetryScheduleFixed:
+		return policy.Schedule.Interval
+	case RetryScheduleRandom:
+		return policy.Schedule.Minimum
+	case RetryScheduleExponential:
+		return policy.Schedule.Base
+	default:
+		return 0
+	}
+}
+
+func signal(channel chan<- struct{}) {
+	select {
+	case channel <- struct{}{}:
+	default:
+	}
 }
 
 func (r *Registry) RetryWaiting() int {
@@ -249,7 +401,7 @@ func (r *Registry) RetryWaiting() int {
 	r.mu.RUnlock()
 	retried := 0
 	for _, id := range ids {
-		if r.RetryNow(id) {
+		if r.RetryNowChecked(id, false).Outcome == RequestActionAccepted {
 			retried++
 		}
 	}
@@ -285,7 +437,14 @@ func (r *Registry) Snapshot(paused bool) Snapshot {
 	requests := make([]RequestInfo, 0, len(r.requests))
 	queued, waiting, requesting := 0, 0, 0
 	for _, request := range r.requests {
-		requests = append(requests, request.info)
+		info := request.info
+		info.Actions = actionsForState(info.State)
+		if request.policy != nil {
+			info.RetryPolicy = request.policy.Info(info.Attempt)
+		} else {
+			info.RetryPolicy = nil
+		}
+		requests = append(requests, info)
 		switch request.info.State {
 		case lifecycle.StateQueued:
 			queued++

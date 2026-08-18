@@ -106,6 +106,10 @@
   .operations-chart.is-expanded, .operations-chart-deck.is-expanded { inset: 12px; }
 
   .request-toolbar { align-items: stretch; flex-direction: column; padding: 12px 0; }
+  .request-heading { align-items: flex-start; flex-wrap: wrap; padding-block: 10px; }
+  .request-heading-meta, .batch-controls { justify-content: flex-start; flex-wrap: wrap; }
+  .batch-controls { width: 100%; }
+  .policy-quick-popover { right: auto; left: 0; }
   .request-summary { grid-template-columns: 1fr 1fr; }
   .filter-controls { display: grid; grid-template-columns: 1fr 130px; }
   .search-field { min-width: 0; }
@@ -121,6 +125,7 @@
   .responsive-table td { min-width: 0; display: block; padding: 0; border: 0; }
   .responsive-table td::before { display: block; margin-bottom: 4px; color: var(--text-faint); content: attr(data-label); font:  11px var(--font-mono); text-transform: uppercase; }
   .responsive-table td:first-child, .responsive-table td:last-child { grid-column: 1 / -1; }
+  .responsive-table td.request-cell, .responsive-table td.selection-column { grid-column: 1 / -1; }
   .responsive-table .row-actions { justify-content: flex-start; }
   .responsive-table .subtle { max-width: 100%; }
   .responsive-table td strong { white-space: normal; overflow-wrap: anywhere; }
@@ -168,6 +173,12 @@
   .priority-metrics { grid-template-columns: 1fr 1fr; }
   .priority-metrics div:last-child { grid-column: 1 / -1; }
   .filter-controls { grid-template-columns: 1fr; }
+  .batch-controls .button.compact, .batch-controls .policy-quick-menu { flex: 1 1 auto; }
+  .batch-controls .policy-quick-menu summary { justify-content: center; }
+  .retry-policy-dialog footer { flex-wrap: wrap; }
+  .retry-policy-dialog footer .button { flex: 1 1 auto; }
+  .compound-field.range-field { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); }
+  .compound-field.range-field select { grid-column: 1 / -1; border-top: 0; border-left: 1px solid var(--border); border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
   .responsive-table tr { grid-template-columns: 1fr; }
   .responsive-table td, .responsive-table td:first-child, .responsive-table td:last-child { grid-column: 1; }
   .mobile-bottom-nav button { font-size: 11px; }

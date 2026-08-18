@@ -209,11 +209,17 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		changed := h.controller.Resume()
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.resume", Outcome: "succeeded", Changed: monitoring.Bool(changed)})
 		writeJSON(writer, http.StatusOK, map[string]bool{"changed": changed, "paused": false})
+	case request.Method == http.MethodPost && path == "/requests/batch/retry":
+		h.batchRetry(writer, request, locale, fallback)
+	case request.Method == http.MethodPost && path == "/requests/batch/retry-policy":
+		h.batchRetryPolicy(writer, request, locale, fallback)
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry")
-		h.requestAction(writer, h.registry.RetryNow(id), locale, fallback)
+		h.retryRequest(writer, request, id, locale, fallback)
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry-policy"):
 		h.setRetryPolicy(writer, request, strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry-policy"), locale, fallback)
+	case request.Method == http.MethodDelete && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry-policy"):
+		h.clearRetryPolicy(writer, request, strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry-policy"), locale, fallback)
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/repeat"):
 		h.createRepeatTask(writer, request, strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/repeat"), locale, fallback)
 	case strings.HasPrefix(path, "/repeat-tasks/"):
@@ -812,29 +818,6 @@ func (h *Handler) recordSecurityEvent(event monitoring.SecurityEvent) {
 	}
 }
 
-func (h *Handler) setRetryPolicy(writer http.ResponseWriter, request *http.Request, id, locale, fallback string) {
-	var input struct {
-		Duration string `json:"duration"`
-		Interval string `json:"interval"`
-	}
-	if !decodeSmallJSON(request, &input) {
-		h.writeError(writer, http.StatusBadRequest, "INVALID_RETRY_POLICY", l10n.M("api.repeat.invalid_input"), locale, fallback)
-		return
-	}
-	duration, durationErr := time.ParseDuration(input.Duration)
-	interval, intervalErr := time.ParseDuration(input.Interval)
-	if durationErr != nil || intervalErr != nil || duration < 5*time.Second || duration > 24*time.Hour || interval < 5*time.Second || interval > 24*time.Hour {
-		h.writeError(writer, http.StatusBadRequest, "INVALID_RETRY_POLICY", l10n.M("api.repeat.invalid_input"), locale, fallback)
-		return
-	}
-	if !h.registry.SetRetryPolicy(id, duration, interval) {
-		h.writeError(writer, http.StatusNotFound, "REQUEST_NOT_FOUND", l10n.M("api.request.not_found"), locale, fallback)
-		return
-	}
-	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "request.retry_policy", Outcome: "succeeded", RequestID: id})
-	writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "retryDeadline": time.Now().Add(duration), "retryIntervalMilliseconds": interval.Milliseconds()})
-}
-
 func (h *Handler) createRepeatTask(writer http.ResponseWriter, request *http.Request, id, locale, fallback string) {
 	if h.repeater == nil {
 		h.writeError(writer, http.StatusServiceUnavailable, "REPEAT_UNAVAILABLE", l10n.M("api.repeat.unavailable"), locale, fallback)
@@ -913,6 +896,9 @@ func (h *Handler) writeRepeatError(writer http.ResponseWriter, err error, locale
 }
 
 func decodeSmallJSON(request *http.Request, destination any) bool {
+	if request.Body == nil || request.Body == http.NoBody {
+		return false
+	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, 16<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {

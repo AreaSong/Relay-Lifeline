@@ -134,6 +134,8 @@ button:active, .button:active, .icon-button:active {
 .mode, .status { display: inline-flex; width: fit-content; align-items: center; padding: 3px 7px; color: var(--success); background: var(--success-soft); border: 1px solid color-mix(in srgb, var(--success) 22%, transparent); border-radius: 999px; font:  11px var(--font-mono); white-space: nowrap; }
 .mode.paused, .status.waiting, .status.queued { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 22%, transparent); }
 .status.requesting { color: var(--info); background: var(--info-soft); border-color: color-mix(in srgb, var(--info) 22%, transparent); }
+.status.uncertain { color: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 24%, transparent); }
+.status.buffering, .status.delivering { color: var(--accent); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 22%, transparent); }
 .status.failed, .status.canceled, .status.interrupted { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 24%, transparent); }
 
 .table-wrap { width: 100%; overflow-x: auto; background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm); }
