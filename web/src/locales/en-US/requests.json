@@ -1,7 +1,7 @@
 {
   "columns": { "request": "Request", "result": "Result", "status": "Status", "attempts": "Attempts", "duration": "Duration", "nextRetry": "Next retry", "policy": "Retry policy", "lastError": "Latest error", "actions": "Actions" },
   "emptyActive": "No active requests",
-  "filters": { "search": "Search request, Codex task ID, or client ID", "state": "State", "allStates": "All states" },
+  "filters": { "search": "Search request, Codex task ID, or client ID", "state": "State", "allStates": "All states", "from": "From", "to": "To", "apply": "Apply filters", "reset": "Reset filters" },
   "identity": { "task": "Task ID (client-declared)", "client": "Client ID (client-declared)" },
   "summary": { "active": "Active", "requesting": "Requesting", "waiting": "Waiting", "queued": "Queued" },
   "batch": { "retryableCount": "{{count}} retryable", "selected": "{{count}} selected", "selectAll": "Select current filtered requests", "select": "Select", "selectRequest": "Select request {{id}}", "clearSelection": "Clear selection", "policy": "Set policies", "retry": "Retry eligible ({{count}})", "retryAction": "Confirm retry", "retryConfirmTitle": "Confirm batch retry", "retryUncertainConfirm": "Some requests may already have reached the upstream. This will call {{count}} request(s) again and may duplicate side effects.", "retryManyConfirm": "This will wake {{count}} request(s) while still respecting concurrency and recovery spacing.", "retryResult": "Accepted {{accepted}} request(s); skipped {{skipped}}" },
@@ -28,6 +28,37 @@
   "retryPolicy": {
     "action": "Set retry policy", "title": "Retry policy", "targets": "{{count}} target(s); {{eligible}} can be configured, {{waiting}} waiting", "presetsLabel": "Policy presets", "presets": { "standard": "Standard recovery", "fast": "Fast recovery", "conservative": "Conservative recovery", "custom": "Custom" },
     "duration": "Recovery window", "mode": "Retry cadence", "interval": "Fixed interval", "randomRange": "Random range", "exponentialRange": "Exponential range", "custom": "Custom", "customDuration": "Custom duration", "customInterval": "Custom interval", "randomMinimum": "Random minimum", "randomMaximum": "Random maximum", "exponentialBase": "Exponential base", "exponentialMaximum": "Exponential cap", "maxAttempts": "Maximum additional attempts", "customAttempts": "Custom additional attempts", "attemptsUnit": "attempts", "additionalAttempts": "{{count}} additional", "durationOnly": "Duration only", "honorRetryAfter": "Honor upstream Retry-After (may only extend the wait)", "overwrite": "Overwrite existing per-request policies", "retryWaitingNow": "Wake waiting requests immediately after applying", "immediateWarning": "Immediate mode still respects global recovery spacing, but it requires a maximum additional-attempt limit.", "globalSpacing": "Every policy still respects global concurrency, queue, and recovery-spacing limits.", "apply": "Apply policy", "resetAction": "Restore global default", "pending": "Pending", "until": "Until {{time}}", "remaining": "{{count}} remaining", "globalDefault": "Global default", "retryUnavailable": "The current state cannot retry now", "noEligible": "No requests can receive a retry policy", "quickConfirmTitle": "Confirm batch policy", "quickConfirmDescription": "Apply “{{preset}}” to {{count}} request(s). Requests already in flight will use it after their next failure.", "confirmTitle": "Confirm retry policy", "confirmDescription": "Apply this policy to {{count}} request(s), with up to {{estimate}} additional calls. Confirm the volume and side effects are acceptable.", "confirmAction": "Confirm apply", "durationOnlyEstimate": "the duration window", "applied": "Applied policy to {{accepted}}/{{total}} request(s)", "reset": "Restored global policy for {{accepted}}/{{total}} request(s)", "validation": { "duration": "Duration must be between 5 seconds and 24 hours", "interval": "The interval must be valid and shorter than the duration", "attempts": "Additional attempts are outside the allowed range" }, "units": { "seconds": "seconds", "minutes": "minutes", "hours": "hours" }, "values": { "5s": "5 seconds", "15s": "15 seconds", "30s": "30 seconds", "60s": "1 minute", "5m": "5 minutes", "15m": "15 minutes", "30m": "30 minutes", "1h": "1 hour", "6h": "6 hours", "24h": "24 hours" }, "modes": { "inherit": "Follow global", "immediate": "Immediate", "fixed": "Fixed interval", "random": "Random interval", "exponential": "Exponential backoff" }, "summary": { "inherit": "Follow global", "immediate": "Immediate", "fixed": "Fixed {{interval}}", "random": "Random {{minimum}}–{{maximum}}", "exponential": "Exponential {{base}}→{{maximum}}" }
+  },
+  "uncertain": {
+    "count": "{{count}} uncertain",
+    "title": "Resolve uncertain delivery",
+    "description": "The upstream may have received this request, but the relay did not receive a definitive response. Choose an operator decision, inspect the safe evidence, then record a reason.",
+    "actionLabel": "Resolution action",
+    "resolveAction": "Resolve uncertain delivery",
+    "previewAction": "Inspect evidence",
+    "changeAction": "Change action",
+    "previewWarning": "The evidence is read-only. No upstream call is made during preview.",
+    "confirmNote": "This decision is recorded in the request timeline and cannot be undone from this console.",
+    "reason": "Operator reason",
+    "reasonPlaceholder": "Record the evidence or approval that supports this decision",
+    "reasonRequired": "Enter a reason before resolving this delivery",
+    "expires": "Confirmation expires at {{time}}",
+    "evidenceTitle": "Safe delivery evidence",
+    "attemptEvidence": "Attempt evidence",
+    "hashNotice": "Only the idempotency-key hash is shown; the raw key is never displayed.",
+    "noAttemptEvidence": "No attempt evidence was retained for this request.",
+    "yes": "Yes",
+    "no": "No",
+    "unavailable": "Uncertain-delivery resolution is unavailable",
+    "readOnlyTitle": "Read-only session",
+    "readOnlyDescription": "Viewer sessions can inspect request timelines but cannot preview or resolve uncertain delivery.",
+    "fields": { "state": "State", "attempt": "Attempt", "started": "Started", "uncertainSince": "Uncertain since", "target": "Target", "domain": "Domain", "wrote": "Wrote request", "hash": "Idempotency hash", "bytes": "Request bytes", "latency": "Latency", "statusCode": "Status", "phase": "Attempt phase", "category": "Category", "upstreamRequestId": "Upstream request ID" },
+    "actions": {
+      "confirm_success": { "label": "Confirm success", "description": "The upstream processed the request successfully; do not send it again.", "confirm": "Record success" },
+      "abandon": { "label": "Abandon delivery", "description": "Stop tracking this attempt without claiming that the upstream succeeded.", "confirm": "Abandon delivery" },
+      "request_compensation": { "label": "Request compensation", "description": "Approve a controlled compensation/recovery path for this uncertain attempt.", "confirm": "Request compensation" }
+    },
+    "success": { "confirm_success": "Uncertain delivery marked successful", "abandon": "Uncertain delivery abandoned", "request_compensation": "Compensation request recorded" }
   },
   "repeat": {
     "action": "Create continuous task", "title": "Create continuous task", "mode": "Execution mode", "retryMode": "Timed recovery", "repeatMode": "Continuous repeat",

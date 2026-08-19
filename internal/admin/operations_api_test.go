@@ -18,12 +18,15 @@ import (
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/governance"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/telemetry"
+	"github.com/areasong/relay-lifeline/internal/upstream"
 )
 
 func TestAdminCaptureAndRuntimeLogAPIs(t *testing.T) {
@@ -352,11 +355,90 @@ func TestRuntimeLogPagingValidationAndDiagnosticEvidence(t *testing.T) {
 	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "INVALID_LOG_CURSOR") {
 		t.Fatalf("非法日志游标未拒绝: %d %s", invalid.Code, invalid.Body.String())
 	}
+	filtered := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs?tail=true&q=received&since=2020-01-01T00:00:00Z")
+	if filtered.Code != http.StatusOK || !strings.Contains(filtered.Body.String(), "request.received") {
+		t.Fatalf("日志全文和时间筛选异常: %d %s", filtered.Code, filtered.Body.String())
+	}
+	invalidSince := authenticatedRequest(handler, http.MethodGet, "/admin/api/runtime-logs?since=yesterday")
+	if invalidSince.Code != http.StatusBadRequest || !strings.Contains(invalidSince.Body.String(), "INVALID_LOG_FILTER") {
+		t.Fatalf("非法日志时间未拒绝: %d %s", invalidSince.Code, invalidSince.Body.String())
+	}
 
 	bundle := authenticatedRequest(handler, http.MethodGet, "/admin/api/diagnostics/export")
 	files := diagnosticFiles(t, bundle.Body.Bytes())
 	if bundle.Code != http.StatusOK || !strings.Contains(files["runtime-logs.json"], `"event": "request.received"`) || !strings.Contains(files["metrics.json"], `"requests": 1`) || files["metric-errors.json"] == "" {
 		t.Fatalf("诊断证据不完整: %d %s", bundle.Code, bundle.Body.String())
+	}
+}
+
+func TestRuntimeStatusAPIsRedactUpstreamCredentials(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	handler := New(config.NewStore("", config.Default()), state.NewRegistry(), state.NewController())
+	handler.SetRuntimeStatus(func() upstream.PoolStatus {
+		return upstream.PoolStatus{Strategy: "weighted-priority", Targets: []upstream.TargetStatus{{
+			Target: upstream.Target{ID: "a", BaseURL: "https://user:secret@relay.example.test/v1?token=hidden", Weight: 1}, State: upstream.CircuitClosed,
+		}}}
+	}, func() governance.Snapshot {
+		return governance.Snapshot{Mode: "observe", Principals: 1, Entries: []governance.PrincipalUsage{{Principal: "bearer:0123456789abcdef"}}}
+	})
+	handler.SetTelemetryStatus(func() telemetry.Status {
+		return telemetry.Status{Enabled: true, Healthy: false, TraceHealthy: false, MetricHealthy: true, TraceExportFailures: 2}
+	})
+	upstreams := authenticatedRequest(handler, http.MethodGet, "/admin/api/upstreams/status")
+	if upstreams.Code != http.StatusOK || strings.Contains(upstreams.Body.String(), "secret") || strings.Contains(upstreams.Body.String(), "hidden") || !strings.Contains(upstreams.Body.String(), "relay.example.test") {
+		t.Fatalf("上游状态脱敏异常: %d %s", upstreams.Code, upstreams.Body.String())
+	}
+	governanceStatus := authenticatedRequest(handler, http.MethodGet, "/admin/api/governance/status")
+	if governanceStatus.Code != http.StatusOK || !strings.Contains(governanceStatus.Body.String(), `"mode":"observe"`) {
+		t.Fatalf("治理状态接口异常: %d %s", governanceStatus.Code, governanceStatus.Body.String())
+	}
+	telemetryStatus := authenticatedRequest(handler, http.MethodGet, "/admin/api/telemetry/status")
+	if telemetryStatus.Code != http.StatusOK || !strings.Contains(telemetryStatus.Body.String(), `"traceExportFailures":2`) || !strings.Contains(telemetryStatus.Body.String(), `"healthy":false`) {
+		t.Fatalf("Telemetry 状态接口异常: %d %s", telemetryStatus.Code, telemetryStatus.Body.String())
+	}
+}
+
+func TestConfigHistoryDiffAndProtectedRollback(t *testing.T) {
+	t.Setenv("RELAY_LIFELINE_ADMIN_KEY", "123456789012345678901234")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "config.yaml")
+	cfg := config.Default()
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewStore(path, cfg)
+	next := cfg
+	next.Queue.MaxActive++
+	if _, err := store.UpdateWithResult(next, true); err != nil {
+		t.Fatal(err)
+	}
+	monitor := monitoring.New()
+	handler := New(store, state.NewRegistry(), state.NewController())
+	handler.SetMonitoring(monitor)
+
+	list := authenticatedRequest(handler, http.MethodGet, "/admin/api/config/backups")
+	if list.Code != http.StatusOK {
+		t.Fatalf("配置历史接口异常: %d %s", list.Code, list.Body.String())
+	}
+	var versions struct {
+		Items []configVersion `json:"items"`
+	}
+	if json.NewDecoder(list.Body).Decode(&versions) != nil || len(versions.Items) != 1 || versions.Items[0].SHA256 == "" || len(versions.Items[0].Diff.Fields) == 0 {
+		t.Fatalf("配置历史差异不完整: %+v", versions)
+	}
+	version := versions.Items[0]
+	body := `{"sha256":"` + version.SHA256 + `"}`
+	rollback := httptest.NewRequest(http.MethodPost, "/admin/api/config/backups/"+version.Name+"/rollback", strings.NewReader(body))
+	rollback.Header.Set("Authorization", "Bearer 123456789012345678901234")
+	rollback.Header.Set("X-Relay-Lifeline-Confirm", "rollback-config")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, rollback)
+	if recorder.Code != http.StatusOK || store.Desired().Queue.MaxActive != cfg.Queue.MaxActive {
+		t.Fatalf("配置回滚失败: %d %s desired=%d", recorder.Code, recorder.Body.String(), store.Desired().Queue.MaxActive)
+	}
+	events := monitor.Events(0, 10).Events
+	if len(events) != 1 || events[0].Code != "config.rollback" || events[0].Outcome != "succeeded" {
+		t.Fatalf("配置回滚审计缺失: %+v", events)
 	}
 }
 

@@ -193,6 +193,18 @@ body, button, input, select, textarea { letter-spacing: 0; }
   .health-row .mode { display: none; }
 }
 
+@media (max-width: 1600px) and (min-width: 1181px) {
+  .workspace-title-row { gap: 12px; }
+  .health-row { flex-wrap: nowrap; gap: 8px; }
+  .health-row .mode { display: none; }
+  .health-row .connection.upstream-unknown, .health-row .connection.upstream-degraded { display: none; }
+  .connection { white-space: nowrap; }
+}
+
+@media (max-width: 1350px) and (min-width: 821px) {
+  .health-row { display: none; }
+}
+
 @media (max-width: 1180px) {
   .workspace-header { gap: 10px; padding-inline: 14px; }
   .desktop-heading { min-width: 180px; }

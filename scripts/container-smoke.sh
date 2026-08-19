@@ -42,7 +42,7 @@ curl --max-time 3 -fsS "http://127.0.0.1:${port}/readyz" | grep -q '"status":"re
 meta="$(curl --max-time 3 -fsS -H 'Authorization: Bearer container-operator-key-000001' \
   "http://127.0.0.1:${port}/admin/api/meta")"
 grep -q '"adminApiVersion":"3"' <<<"${meta}"
-grep -q '"configSchemaVersion":3' <<<"${meta}"
+grep -q '"configSchemaVersion":5' <<<"${meta}"
 grep -Fq "\"imageRef\":\"${image}\"" <<<"${meta}"
 if [[ -n "${expected_version}" ]]; then
   grep -Fq "\"version\":\"${expected_version}\"" <<<"${meta}"
@@ -57,5 +57,5 @@ if [[ -n "${expected_build_time}" ]]; then
   [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' "${image}")" == "${expected_build_time}" ]]
 fi
 curl --max-time 3 -fsS -H 'Authorization: Bearer container-operator-key-000001' \
-  "http://127.0.0.1:${port}/admin/api/config" | grep -q '"schemaVersion":3'
+  "http://127.0.0.1:${port}/admin/api/config" | grep -q '"schemaVersion":5'
 docker exec "${name}" wget -T 3 -q -O - http://127.0.0.1:8318/metrics | grep -q 'relay_lifeline_journal_healthy{journal="requests"} 1'

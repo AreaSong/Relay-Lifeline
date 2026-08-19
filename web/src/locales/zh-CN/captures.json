@@ -7,6 +7,7 @@
   "started": "诊断捕获已启动",
   "stopped": "诊断捕获已停止",
   "unavailable": "捕获服务不可用",
+  "persistenceDegraded": "捕获持久化在 {{stage}} 阶段处于降级状态（失败 {{count}} 次）。新元数据仅在确认落盘后才提交。",
   "requestLimit": "捕获请求数",
   "timeout": "最长等待时间",
   "minutes": "分钟",
@@ -25,6 +26,10 @@
   "rawConfirm": "完整原文可能包含提示词、模型输出和个人信息。确认下载未过滤的敏感内容吗？",
   "rawConfirmTitle": "下载敏感原文？",
   "downloaded": "捕获包已开始下载",
+  "cleanupExpired": "清理过期记录",
+  "cleanupConfirmTitle": "清理过期捕获？",
+  "cleanupConfirm": "删除所有超过保留期的捕获记录。此操作无法撤销。",
+  "cleanedExpired": "已删除 {{count}} 条过期捕获",
   "delete": "删除捕获",
   "deleteConfirm": "确认永久删除这条加密捕获吗？",
   "deleteConfirmTitle": "永久删除捕获？",
@@ -44,6 +49,7 @@
     "rewrap": "重包裹到活动密钥",
     "rewrapConfirm": "将所有捕获的数据密钥重包裹到当前活动密钥。确认继续吗？",
     "rewrapConfirmTitle": "轮换捕获密钥？",
-    "rewrapped": "已重包裹 {{count}} 条捕获记录"
+    "rewrapped": "已重包裹 {{count}} 条捕获记录",
+    "unresolvedWarning": "有 {{count}} 条捕获记录无法使用已配置密钥解密。删除前请保留旧密钥。"
   }
 }

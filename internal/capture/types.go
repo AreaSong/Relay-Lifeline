@@ -6,14 +6,18 @@ import (
 )
 
 type Status struct {
-	Available         bool      `json:"available"`
-	UnavailableReason string    `json:"unavailableReason,omitempty"`
-	Active            bool      `json:"active"`
-	RemainingRequests int       `json:"remainingRequests"`
-	Deadline          time.Time `json:"deadline,omitempty"`
-	StorageBytes      int64     `json:"storageBytes"`
-	MaxTotalBytes     int64     `json:"maxTotalBytes"`
-	CaptureCount      int       `json:"captureCount"`
+	Available          bool      `json:"available"`
+	UnavailableReason  string    `json:"unavailableReason,omitempty"`
+	Active             bool      `json:"active"`
+	RemainingRequests  int       `json:"remainingRequests"`
+	Deadline           time.Time `json:"deadline,omitempty"`
+	StorageBytes       int64     `json:"storageBytes"`
+	MaxTotalBytes      int64     `json:"maxTotalBytes"`
+	CaptureCount       int       `json:"captureCount"`
+	PersistenceHealthy bool      `json:"persistenceHealthy"`
+	FailureCount       uint64    `json:"failureCount,omitempty"`
+	FailedStage        string    `json:"failedStage,omitempty"`
+	LastFailureAt      time.Time `json:"lastFailureAt,omitempty"`
 }
 
 type BodyPart struct {

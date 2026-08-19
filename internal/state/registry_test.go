@@ -2,11 +2,17 @@ package state
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/lifecycle"
+	"github.com/areasong/relay-lifeline/internal/timeline"
 )
 
 func TestControllerPauseAndResume(t *testing.T) {
@@ -27,6 +33,62 @@ func TestControllerPauseAndResume(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("恢复超时")
+	}
+}
+
+func TestControllerDrainAndMaintenanceRejectAdmissionWithoutBlockingExistingWork(t *testing.T) {
+	controller := NewController()
+	if !controller.Drain() || controller.Mode() != ControlDraining || controller.Accepting() {
+		t.Fatalf("排空状态异常: mode=%s accepting=%t", controller.Mode(), controller.Accepting())
+	}
+	if err := controller.Wait(context.Background()); err != nil {
+		t.Fatalf("排空不应阻塞已接收请求: %v", err)
+	}
+	if !controller.Maintenance() || controller.Mode() != ControlMaintenance || !controller.Resume() || controller.Mode() != ControlRunning {
+		t.Fatalf("维护恢复状态异常: mode=%s", controller.Mode())
+	}
+}
+
+func TestTerminalJournalFailureKeepsExplicitPendingState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requests.jsonl")
+	requestJournal, err := journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := timeline.NewPersistent(func() timeline.Limits {
+		return timeline.Limits{MaxItems: 100, Retention: time.Hour}
+	}, requestJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(store)
+	id, _, err := registry.AddWithIdentityChecked("POST", "/v1/responses", func() {}, RequestIdentity{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateBuffering, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateDelivering, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateCompleted, 1, l10n.Message{}, time.Time{})
+	requestJournal.SetHooks(journal.Hooks{Write: func(*os.File, []byte) (int, error) { return 0, syscall.ENOSPC }})
+
+	err = registry.Remove(id, lifecycle.StateSuccessful)
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("终态写入应保留 ENOSPC: %v", err)
+	}
+	snapshot := registry.Snapshot(false)
+	if !snapshot.PersistenceDegraded || snapshot.PersistencePending != 1 || snapshot.Active != 0 || snapshot.Successful != 1 || len(snapshot.Requests) != 1 {
+		t.Fatalf("终态持久化降级状态异常: %+v", snapshot)
+	}
+	request := snapshot.Requests[0]
+	if request.ID != id || !request.PersistenceDegraded || !request.PersistencePending || request.State != lifecycle.StateCompleted {
+		t.Fatalf("待持久化请求状态异常: %+v", request)
+	}
+	if record, ok := store.Request(id); !ok || !record.CompletedAt.IsZero() {
+		t.Fatalf("timeline 内存不应领先失败的终态写入: %+v ok=%v", record, ok)
+	}
+	if status := requestJournal.Status(); status.State != journal.StateDegraded || status.FailedStage != "write" {
+		t.Fatalf("Journal 健康状态异常: %+v", status)
 	}
 }
 

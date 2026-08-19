@@ -1,8 +1,12 @@
 package monitoring
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"github.com/areasong/relay-lifeline/internal/governance"
+	"github.com/areasong/relay-lifeline/internal/telemetry"
 )
 
 const minuteBucketCount = 24 * 60
@@ -16,14 +20,22 @@ var (
 )
 
 type Counters struct {
-	Requests       uint64 `json:"requests"`
-	Successful     uint64 `json:"successful"`
-	Failed         uint64 `json:"failed"`
-	Canceled       uint64 `json:"canceled"`
-	Rejected       uint64 `json:"rejected"`
-	Attempts       uint64 `json:"attempts"`
-	FailedAttempts uint64 `json:"failedAttempts"`
-	Recovered      uint64 `json:"recovered"`
+	Requests             uint64 `json:"requests"`
+	Successful           uint64 `json:"successful"`
+	Failed               uint64 `json:"failed"`
+	Canceled             uint64 `json:"canceled"`
+	Rejected             uint64 `json:"rejected"`
+	Expired              uint64 `json:"expired"`
+	Attempts             uint64 `json:"attempts"`
+	FailedAttempts       uint64 `json:"failedAttempts"`
+	Recovered            uint64 `json:"recovered"`
+	Failovers            uint64 `json:"failovers"`
+	Uncertain            uint64 `json:"uncertain"`
+	UncertainConfirmed   uint64 `json:"uncertainConfirmed"`
+	UncertainAbandoned   uint64 `json:"uncertainAbandoned"`
+	UncertainCompensated uint64 `json:"uncertainCompensated"`
+	PersistenceFailures  uint64 `json:"persistenceFailures"`
+	CaptureFailures      uint64 `json:"captureFailures"`
 }
 
 type Totals struct {
@@ -68,6 +80,39 @@ type Metrics struct {
 	Recovery    Recovery  `json:"recovery"`
 }
 
+type SLO struct {
+	Window                       string  `json:"window"`
+	Availability                 float64 `json:"availability"`
+	AvailabilityTarget           float64 `json:"availabilityTarget"`
+	RecoveryLatencyMillis        float64 `json:"recoveryLatencyMilliseconds"`
+	RecoveryLatencyTarget        float64 `json:"recoveryLatencyTargetMilliseconds"`
+	ErrorBudget                  float64 `json:"errorBudget"`
+	ErrorBudgetRemaining         float64 `json:"errorBudgetRemaining"`
+	ErrorBudgetRemainingAbsolute float64 `json:"errorBudgetRemainingAbsolute"`
+	BurnRate                     float64 `json:"burnRate"`
+	Healthy                      bool    `json:"healthy"`
+}
+
+func (s *Store) SLO(window time.Duration, availabilityTarget float64, recoveryTarget time.Duration) SLO {
+	m := s.Metrics(window)
+	availability := 1.0
+	if m.Totals.Requests > 0 {
+		availability = float64(m.Totals.Successful) / float64(m.Totals.Requests)
+	}
+	budget := 1 - availabilityTarget
+	remainingAbsolute := max(0.0, budget-(1-availability))
+	remaining := 1.0
+	if budget > 0 {
+		remaining = min(1.0, remainingAbsolute/budget)
+	}
+	burn := 0.0
+	if budget > 0 {
+		burn = (1 - availability) / budget
+	}
+	recovery := m.Totals.AverageRecoveryMilliseconds
+	return SLO{Window: m.Window, Availability: availability, AvailabilityTarget: availabilityTarget, RecoveryLatencyMillis: recovery, RecoveryLatencyTarget: recoveryTarget.Seconds() * 1000, ErrorBudget: budget, ErrorBudgetRemaining: remaining, ErrorBudgetRemainingAbsolute: remainingAbsolute, BurnRate: burn, Healthy: availability >= availabilityTarget && (recovery == 0 || recovery <= recoveryTarget.Seconds()*1000)}
+}
+
 type ErrorCategory struct {
 	Code  string `json:"code"`
 	Count uint64 `json:"count"`
@@ -103,6 +148,16 @@ type Store struct {
 	now         func() time.Time
 	events      eventRing
 	persistence func() []PersistenceMetric
+	governance  func() governance.Snapshot
+	telemetry   func() telemetry.Status
+	controlMode func() string
+	uncertain   func() UncertainStatus
+}
+
+type UncertainStatus struct {
+	Open          int
+	OldestSeconds float64
+	TargetSeconds float64
 }
 
 func New() *Store {
@@ -127,17 +182,21 @@ func ParseWindow(value string) (time.Duration, bool) {
 
 func (s *Store) RecordReceived() {
 	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.Requests++ })
+	telemetry.RecordRequestReceived(context.Background())
 }
 
 func (s *Store) RecordAttempt() {
 	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.Attempts++ })
+	telemetry.RecordAttempt(context.Background())
 }
 
 func (s *Store) RecordAttemptFailure(category string) {
+	boundedCategory := errorCodes[errorIndex(category)]
 	s.updateCurrent(func(bucket *minuteBucket) {
 		bucket.counters.FailedAttempts++
 		bucket.errors[errorIndex(category)]++
 	})
+	telemetry.RecordAttemptFailure(context.Background(), boundedCategory)
 }
 
 func (s *Store) RecordRecovery(elapsed time.Duration, attempts int) {
@@ -148,6 +207,36 @@ func (s *Store) RecordRecovery(elapsed time.Duration, attempts int) {
 		bucket.durationBuckets[durationBucketIndex(milliseconds)]++
 		bucket.attemptBuckets[attemptBucketIndex(attempts)]++
 	})
+	telemetry.RecordRecovery(context.Background(), elapsed, attempts)
+}
+
+func (s *Store) RecordFailover() {
+	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.Failovers++ })
+}
+
+func (s *Store) RecordUncertain() {
+	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.Uncertain++ })
+}
+
+func (s *Store) RecordUncertainResolution(action string) {
+	s.updateCurrent(func(bucket *minuteBucket) {
+		switch action {
+		case "confirm_success":
+			bucket.counters.UncertainConfirmed++
+		case "abandon":
+			bucket.counters.UncertainAbandoned++
+		case "request_compensation":
+			bucket.counters.UncertainCompensated++
+		}
+	})
+}
+
+func (s *Store) RecordPersistenceFailure() {
+	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.PersistenceFailures++ })
+}
+
+func (s *Store) RecordCaptureFailure() {
+	s.updateCurrent(func(bucket *minuteBucket) { bucket.counters.CaptureFailures++ })
 }
 
 func (s *Store) RecordFinal(outcome string) {
@@ -155,23 +244,33 @@ func (s *Store) RecordFinal(outcome string) {
 		switch outcome {
 		case "successful":
 			bucket.counters.Successful++
+		case "confirmed_success":
+			// Operator-confirmed delivery is a successful business outcome for
+			// availability accounting, even though no response was replayed.
+			bucket.counters.Successful++
 		case "failed":
+			bucket.counters.Failed++
+		case "abandoned":
 			bucket.counters.Failed++
 		case "canceled":
 			bucket.counters.Canceled++
 		case "rejected":
 			bucket.counters.Rejected++
+		case "expired":
+			bucket.counters.Expired++
 		}
 	})
+	telemetry.RecordRequestOutcome(context.Background(), outcome)
 }
 
 func (s *Store) SetLoad(active, queued, waiting, requesting int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.load = Load{Active: active, Queued: queued, Waiting: waiting, Requesting: requesting}
 	bucket := s.currentBucketLocked(s.now().UTC())
 	bucket.load = s.load
 	maximizeLoad(&bucket.peak, s.load)
+	s.mu.Unlock()
+	telemetry.RecordLoad(context.Background(), active, queued, waiting, requesting)
 }
 
 func (s *Store) Metrics(window time.Duration) Metrics {
@@ -329,9 +428,17 @@ func addCounters(target *Counters, value Counters) {
 	target.Failed += value.Failed
 	target.Canceled += value.Canceled
 	target.Rejected += value.Rejected
+	target.Expired += value.Expired
 	target.Attempts += value.Attempts
 	target.FailedAttempts += value.FailedAttempts
 	target.Recovered += value.Recovered
+	target.Failovers += value.Failovers
+	target.Uncertain += value.Uncertain
+	target.UncertainConfirmed += value.UncertainConfirmed
+	target.UncertainAbandoned += value.UncertainAbandoned
+	target.UncertainCompensated += value.UncertainCompensated
+	target.PersistenceFailures += value.PersistenceFailures
+	target.CaptureFailures += value.CaptureFailures
 }
 
 func durationBucketIndex(milliseconds int64) int {

@@ -16,6 +16,15 @@ func (h *Handler) createRepeatTask(writer http.ResponseWriter, request *http.Req
 		h.writeError(writer, http.StatusServiceUnavailable, "REPEAT_UNAVAILABLE", l10n.M("api.repeat.unavailable"), locale, fallback)
 		return
 	}
+	info, exists := h.registry.RequestInfo(id)
+	if !exists {
+		h.writeError(writer, http.StatusNotFound, "REQUEST_NOT_FOUND", l10n.M("api.request.not_found"), locale, fallback)
+		return
+	}
+	if !info.Actions.CanRepeat {
+		h.writeError(writer, http.StatusPreconditionRequired, "UNCERTAIN_RESOLUTION_REQUIRED", l10n.M("api.request.uncertain_resolution_required"), locale, fallback)
+		return
+	}
 	var input struct {
 		Interval         string `json:"interval"`
 		Duration         string `json:"duration"`

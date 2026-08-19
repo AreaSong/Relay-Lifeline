@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,26 @@ func TestConfigBackupsReturnsMetadataWithoutContents(t *testing.T) {
 	}
 }
 
+func TestLoadConfigBackupRejectsTraversalAndNonRegularFiles(t *testing.T) {
+	directory := t.TempDir()
+	backupDirectory := filepath.Join(directory, "backups")
+	if err := os.MkdirAll(backupDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	name := "config-20260819T000000Z.yaml"
+	if err := cfg.Save(filepath.Join(backupDirectory, name)); err != nil {
+		t.Fatal(err)
+	}
+	metadata, loaded, err := LoadConfigBackup(filepath.Join(directory, "config.yaml"), backupDirectory, name)
+	if err != nil || !metadata.Valid || loaded.SchemaVersion != config.CurrentSchemaVersion {
+		t.Fatalf("加载有效配置备份失败: %+v %+v %v", metadata, loaded, err)
+	}
+	if _, _, err := LoadConfigBackup(filepath.Join(directory, "config.yaml"), backupDirectory, "../config.yaml"); !errors.Is(err, ErrConfigBackupNotFound) {
+		t.Fatalf("路径穿越未拒绝: %v", err)
+	}
+}
+
 func TestVerifyChecksBackupsAndJournalChains(t *testing.T) {
 	directory := t.TempDir()
 	cfg := config.Default()
@@ -69,7 +90,7 @@ func TestVerifyChecksBackupsAndJournalChains(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := Verify(configPath, cfg)
-	if !report.Healthy || len(report.Checks) != 5 || report.Checks[1].Status != "pass" || report.Checks[2].Entries != 1 || report.Checks[3].Status != "warn" {
+	if !report.Healthy || len(report.Checks) != 7 || report.Checks[1].Status != "pass" || report.Checks[2].Entries != 1 || report.Checks[3].Status != "warn" || report.Checks[5].Name != "usage-ledger_journal" {
 		t.Fatalf("恢复检查异常: %+v", report)
 	}
 }

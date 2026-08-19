@@ -3,6 +3,7 @@ package timeline
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,17 +35,23 @@ type ErrorDetail struct {
 }
 
 type Event struct {
-	Time             time.Time      `json:"time"`
-	Type             string         `json:"type"`
-	Attempt          int            `json:"attempt,omitempty"`
-	StatusCode       int            `json:"statusCode,omitempty"`
-	Category         string         `json:"category,omitempty"`
-	Message          string         `json:"message"`
-	MessageCode      string         `json:"messageCode,omitempty"`
-	MessageDetails   map[string]any `json:"messageDetails,omitempty"`
-	ErrorDetail      *ErrorDetail   `json:"errorDetail,omitempty"`
-	WaitMilliseconds int64          `json:"waitMilliseconds,omitempty"`
-	AttemptPhase     string         `json:"attemptPhase,omitempty"`
+	Time                time.Time      `json:"time"`
+	Type                string         `json:"type"`
+	Attempt             int            `json:"attempt,omitempty"`
+	StatusCode          int            `json:"statusCode,omitempty"`
+	Category            string         `json:"category,omitempty"`
+	Message             string         `json:"message"`
+	MessageCode         string         `json:"messageCode,omitempty"`
+	MessageDetails      map[string]any `json:"messageDetails,omitempty"`
+	ErrorDetail         *ErrorDetail   `json:"errorDetail,omitempty"`
+	WaitMilliseconds    int64          `json:"waitMilliseconds,omitempty"`
+	AttemptPhase        string         `json:"attemptPhase,omitempty"`
+	TargetID            string         `json:"targetId,omitempty"`
+	TargetDomain        string         `json:"targetDomain,omitempty"`
+	WroteRequest        bool           `json:"wroteRequest,omitempty"`
+	IdempotencyKeyHash  string         `json:"idempotencyKeyHash,omitempty"`
+	RequestBytes        int64          `json:"requestBytes,omitempty"`
+	LatencyMilliseconds int64          `json:"latencyMilliseconds,omitempty"`
 }
 
 type Record struct {
@@ -96,48 +103,58 @@ func NewPersistent(limits func() Limits, eventJournal *journal.Store) (*Store, e
 	return store, nil
 }
 
-func (s *Store) Start(id, method, path string) {
-	s.StartWithIdentity(id, method, path, "", "")
+func (s *Store) Start(id, method, path string) error {
+	return s.StartWithIdentity(id, method, path, "", "")
 }
 
-func (s *Store) StartWithIdentity(id, method, path, clientID, taskID string) {
+func (s *Store) StartWithIdentity(id, method, path, clientID, taskID string) error {
 	now := s.now()
 	record := &Record{ID: id, ClientID: clientID, TaskID: taskID, Method: method, Path: path, State: "queued", StartedAt: now}
 	record.Events = []Event{{Time: now, Type: "received", MessageCode: "timeline.received"}}
 	s.mu.Lock()
-	s.appendJournal(id, journalStart, record)
+	if err := s.appendJournal(id, journalStart, record); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("persist timeline start: %w", err)
+	}
 	s.active[id] = record
 	s.mu.Unlock()
+	return nil
 }
 
-func (s *Store) Add(id string, event Event) {
+func (s *Store) Add(id string, event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.active[id]
 	if !ok {
-		return
+		return nil
 	}
 	if event.Time.IsZero() {
 		event.Time = s.now()
 	}
-	s.appendJournal(id, journalEvent, event)
+	if err := s.appendJournal(id, journalEvent, event); err != nil {
+		return fmt.Errorf("persist timeline event: %w", err)
+	}
 	applyEvent(record, event)
+	return nil
 }
 
-func (s *Store) Finish(id, outcome string) {
+func (s *Store) Finish(id, outcome string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.active[id]
 	if !ok {
-		return
+		return nil
 	}
 	completedAt := s.now()
-	s.appendJournal(id, journalFinish, finishPayload{Outcome: outcome, CompletedAt: completedAt})
+	if err := s.appendJournal(id, journalFinish, finishPayload{Outcome: outcome, CompletedAt: completedAt}); err != nil {
+		return fmt.Errorf("persist timeline finish: %w", err)
+	}
 	delete(s.active, id)
 	record.State = outcome
 	record.CompletedAt = completedAt
 	s.history = append([]Record{cloneRecord(*record)}, s.history...)
 	s.pruneLocked()
+	return nil
 }
 
 func (s *Store) replay(entries []journal.Entry) error {
@@ -199,17 +216,27 @@ func (s *Store) orphanInterrupted() error {
 	return nil
 }
 
-func (s *Store) appendJournal(id, eventType string, payload any) {
+func (s *Store) appendJournal(id, eventType string, payload any) error {
 	if s.journal != nil {
-		_, _ = s.journal.Append(id, eventType, payload)
+		_, err := s.journal.Append(id, eventType, payload)
+		return err
 	}
+	return nil
 }
 
 func applyEvent(record *Record, event Event) {
 	record.Events = append(record.Events, event)
 	if len(record.Events) > maxEventsPerRequest {
-		// The first event anchors the timeline; discard the oldest detail event instead.
-		record.Events = append(record.Events[:1], record.Events[2:]...)
+		// Preserve the anchor and operator decisions; discard the oldest routine
+		// detail event so an uncertain-delivery audit cannot be aged out.
+		drop := 1
+		for index := 1; index < len(record.Events)-1; index++ {
+			if !criticalEvent(record.Events[index].Type) {
+				drop = index
+				break
+			}
+		}
+		record.Events = append(record.Events[:drop], record.Events[drop+1:]...)
 		record.EventsTruncated = true
 		record.DroppedEvents++
 	}
@@ -222,6 +249,10 @@ func applyEvent(record *Record, event Event) {
 		record.LastErrorDetails = cloneDetails(event.MessageDetails)
 		record.LastErrorDetail = cloneErrorDetail(event.ErrorDetail)
 	}
+}
+
+func criticalEvent(eventType string) bool {
+	return eventType == "uncertain" || strings.HasPrefix(eventType, "uncertain_") || eventType == "completed"
 }
 
 type finishPayload struct {
@@ -245,6 +276,19 @@ func (s *Store) Request(id string) (Record, bool) {
 		}
 	}
 	return Record{}, false
+}
+
+// ActiveIDs returns a snapshot of requests that still need their journal
+// history for in-flight recovery. The returned map is independent from the
+// store and may be safely used after releasing the timeline lock.
+func (s *Store) ActiveIDs() map[string]struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make(map[string]struct{}, len(s.active))
+	for id := range s.active {
+		ids[id] = struct{}{}
+	}
+	return ids
 }
 
 func (s *Store) History() []Record {

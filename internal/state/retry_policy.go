@@ -162,15 +162,16 @@ type RequestActions struct {
 	CanSetRetryPolicy         bool `json:"canSetRetryPolicy"`
 	RetryRequiresConfirmation bool `json:"retryRequiresConfirmation"`
 	CanCancel                 bool `json:"canCancel"`
+	CanRepeat                 bool `json:"canRepeat"`
 }
 
 func actionsForState(state lifecycle.State) RequestActions {
-	actions := RequestActions{CanCancel: !lifecycle.IsTerminal(state)}
+	actions := RequestActions{CanCancel: !lifecycle.IsTerminal(state), CanRepeat: !lifecycle.IsTerminal(state)}
 	switch state {
 	case lifecycle.StateWaiting:
 		actions.CanRetryNow, actions.CanSetRetryPolicy = true, true
 	case lifecycle.StateUncertain:
-		actions.CanRetryNow, actions.CanSetRetryPolicy = true, true
+		actions.CanRetryNow, actions.CanSetRetryPolicy, actions.CanCancel, actions.CanRepeat = false, false, false, false
 		actions.RetryRequiresConfirmation = true
 	case lifecycle.StateQueued, lifecycle.StateForwarding:
 		actions.CanSetRetryPolicy = true
@@ -188,13 +189,15 @@ const (
 type RequestActionReason string
 
 const (
-	RequestReasonNotFound              RequestActionReason = "not_found"
-	RequestReasonStateNotRetryable     RequestActionReason = "state_not_retryable"
-	RequestReasonStateNotPolicyCapable RequestActionReason = "state_not_policy_capable"
-	RequestReasonConfirmationRequired  RequestActionReason = "confirmation_required"
-	RequestReasonAlreadyRequested      RequestActionReason = "already_requested"
-	RequestReasonPolicyExists          RequestActionReason = "policy_exists"
-	RequestReasonNoPolicy              RequestActionReason = "no_policy"
+	RequestReasonNotFound               RequestActionReason = "not_found"
+	RequestReasonStateNotRetryable      RequestActionReason = "state_not_retryable"
+	RequestReasonStateNotPolicyCapable  RequestActionReason = "state_not_policy_capable"
+	RequestReasonConfirmationRequired   RequestActionReason = "confirmation_required"
+	RequestReasonAlreadyRequested       RequestActionReason = "already_requested"
+	RequestReasonPolicyExists           RequestActionReason = "policy_exists"
+	RequestReasonNoPolicy               RequestActionReason = "no_policy"
+	RequestReasonPersistenceUnavailable RequestActionReason = "persistence_unavailable"
+	RequestReasonUncertainResolution    RequestActionReason = "uncertain_resolution_required"
 )
 
 type RequestActionResult struct {

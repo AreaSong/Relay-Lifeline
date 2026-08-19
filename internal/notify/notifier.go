@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/egress"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/sanitize"
 )
 
 const deliveryHistoryLimit = 100
@@ -44,6 +46,7 @@ type Notifier struct {
 	store   *config.Store
 	logger  *slog.Logger
 	client  *http.Client
+	policy  egress.Policy
 	signing SigningConfig
 	queue   chan delivery
 	ctx     context.Context
@@ -96,9 +99,15 @@ func New(store *config.Store, logger *slog.Logger) *Notifier {
 }
 
 func NewWithSigning(store *config.Store, logger *slog.Logger, signing SigningConfig) *Notifier {
+	return NewWithSigningAndEgress(store, logger, signing, egress.Policy{})
+}
+
+func NewWithSigningAndEgress(store *config.Store, logger *slog.Logger, signing SigningConfig, policy egress.Policy) *Notifier {
 	ctx, cancel := context.WithCancel(context.Background())
+	client := (&egress.Policy{}).Client(&http.Client{Timeout: 5 * time.Second})
+	client.Transport = policy.Transport(client.Transport.(*http.Transport))
 	notifier := &Notifier{
-		store: store, logger: logger, client: &http.Client{Timeout: 5 * time.Second}, signing: signing,
+		store: store, logger: logger, client: client, policy: policy.Normalize(), signing: signing,
 		queue: make(chan delivery, 100), ctx: ctx, cancel: cancel,
 	}
 	notifier.wg.Add(1)
@@ -247,10 +256,15 @@ func (n *Notifier) deliver(job delivery) {
 	n.recordLocked(DeliveryRecord{ID: job.id, EventType: job.eventType, RequestID: job.requestID, Outcome: "failed", Attempts: completedAttempts, StatusCode: statusCode, CompletedAt: time.Now().UTC()})
 	n.mu.Unlock()
 	cfg := n.store.Get()
-	n.logger.Warn(n.logText(cfg, "notify.delivery_failed"), "event", "notification.delivery_failed", "error", l10n.Default.Error(cfg.Logging.Locale, cfg.Localization.FallbackLocale, lastErr), "attempts", job.attempts)
+	n.logger.Warn(n.logText(cfg, "notify.delivery_failed"), "event", "notification.delivery_failed", "error", sanitize.Text(l10n.Default.Error(cfg.Logging.Locale, cfg.Localization.FallbackLocale, lastErr)), "attempts", job.attempts)
 }
 
 func (n *Notifier) post(job delivery) (int, error) {
+	if n.policy.DenyPrivateNetworks || len(n.policy.AllowedHosts) > 0 {
+		if err := n.policy.ValidateURL(job.url); err != nil {
+			return 0, err
+		}
+	}
 	request, err := http.NewRequestWithContext(n.ctx, http.MethodPost, job.url, bytes.NewReader(job.payload))
 	if err != nil {
 		return 0, err

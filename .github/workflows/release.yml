@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -31,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -43,14 +47,13 @@ jobs:
         with:
           images: ghcr.io/areasong/relay-lifeline
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=raw,value=sha-${{ github.sha }}
       - id: build-time
         run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - id: version
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
@@ -63,14 +66,46 @@ jobs:
             BUILD_TIME=${{ steps.build-time.outputs.value }}
           provenance: mode=max
           sbom: true
+      - name: Smoke pushed digest
+        env:
+          IMAGE: ghcr.io/areasong/relay-lifeline
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ github.sha }}
+          BUILD_TIME: ${{ steps.build-time.outputs.value }}
+        run: |
+          set -euo pipefail
+          ref="${IMAGE}@${DIGEST}"
+          version="${GITHUB_REF_NAME#v}"
+          docker pull "${ref}"
+          ./scripts/container-smoke.sh "${ref}" "${version}" "${REVISION}" "${BUILD_TIME}"
+          docker buildx imagetools inspect "${ref}" | grep -q 'linux/amd64'
+          docker buildx imagetools inspect "${ref}" | grep -q 'linux/arm64'
+          previous_tag="$(git tag -l 'v*' --sort=-v:refname | awk -v current="${GITHUB_REF_NAME}" '$0 != current { print; exit }')"
+          if [[ -z "${previous_tag}" ]]; then
+            if [[ "${RELAY_LIFELINE_ALLOW_NO_PREVIOUS_RELEASE:-false}" != "true" ]]; then
+              echo "No previous release tag is available; set RELAY_LIFELINE_ALLOW_NO_PREVIOUS_RELEASE=true only for the first release." >&2
+              exit 1
+            fi
+            echo "Skipping N-1 upgrade smoke because this is an explicitly allowed first release."
+          else
+            docker pull "${IMAGE}:${previous_tag#v}"
+            ./scripts/upgrade-smoke.sh "${IMAGE}:${previous_tag#v}" "${ref}" "${previous_tag}"
+          fi
+          major="${version%%.*}"
+          minor="${version%.*}"
+          docker buildx imagetools create -t "${IMAGE}:${version}" "${ref}"
+          docker buildx imagetools create -t "${IMAGE}:${major}.${minor}" "${ref}"
+          docker buildx imagetools create -t "${IMAGE}:${major}" "${ref}"
 
   binaries:
-    needs: [verify, release-checks]
+    needs: [verify, release-checks, image]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.x"
@@ -107,7 +142,19 @@ jobs:
             fi
             rm -r "dist/${directory}"
           done
-          (cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS)
+          (cd dist && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS)
+      - name: Smoke release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for archive in dist/*.tar.gz dist/*.zip; do
+            case "${archive}" in
+              *linux-amd64.tar.gz) ./scripts/binary-artifact-smoke.sh "${archive}" "${version}" ;;
+              *) ./scripts/binary-artifact-smoke.sh "${archive}" "${version}" true ;;
+            esac
+          done
+          (cd dist && sha256sum -c SHA256SUMS)
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

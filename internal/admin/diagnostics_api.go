@@ -60,7 +60,7 @@ func (h *Handler) exportDiagnostics(writer http.ResponseWriter, request *http.Re
 		"manifest.json":         map[string]any{"schemaVersion": 2, "generatedAt": time.Now(), "containsRawBodies": false},
 		"report.json":           report,
 		"config.redacted.json":  diagnostics.RedactedConfig(h.store.Get()),
-		"status.json":           h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
+		"status.json":           h.statusSnapshot(locale, fallback),
 		"history.redacted.json": timeline.LocalizeRecords(timeline.WithoutErrorDetails(history), locale, fallback),
 		"alerts.json":           risk.Localize(h.risk.Recent(50), locale, fallback),
 		"runtime-logs.json":     logs,
@@ -101,6 +101,7 @@ func (h *Handler) journalSummary(report recovery.Report) map[string]any {
 			continue
 		}
 		stats := store.Stats()
+		status := store.Status()
 		health := "healthy"
 		if err := store.Health(); err != nil {
 			health = err.Error()
@@ -113,6 +114,8 @@ func (h *Handler) journalSummary(report recovery.Report) map[string]any {
 			"lastCompactionDurationSeconds": stats.LastCompactionDuration.Seconds(),
 			"lastCompactionRemovedEntries":  stats.LastCompactionRemoved,
 			"healthy":                       health == "healthy", "healthError": nullableDiagnosticError(health),
+			"state": status.State, "failedAt": status.FailedAt, "failedStage": status.FailedStage,
+			"failureCount":      status.FailureCount,
 			"compactionHealthy": stats.CompactionHealthy,
 			"hashChainValid":    verification.Status == "pass", "verificationStatus": verification.Status,
 		}

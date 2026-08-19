@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/admin/api": {
-        target: "http://127.0.0.1:8318",
+        target: process.env.RELAY_LIFELINE_API_TARGET || "http://127.0.0.1:8318",
         changeOrigin: true,
       },
     },

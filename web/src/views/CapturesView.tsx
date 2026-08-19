@@ -16,6 +16,7 @@ interface Props {
   canSensitive: boolean;
   selectedId?: string;
   confirm: (options: ConfirmDialogState) => Promise<boolean>;
+  pageVisible: boolean;
 }
 
 function durationMinutes(raw: string) {
@@ -27,7 +28,7 @@ function durationMinutes(raw: string) {
   return matched === raw.length ? Math.min(60, Math.max(1, Math.ceil(minutes))) : 10;
 }
 
-export function CapturesView({ api, config, onError, onSuccess, canOperate, canSensitive, selectedId, confirm }: Props) {
+export function CapturesView({ api, config, onError, onSuccess, canOperate, canSensitive, selectedId, confirm, pageVisible }: Props) {
   const { t, i18n } = useTranslation(["captures", "common"]);
   const [status, setStatus] = useState<CaptureStatus | null>(null);
   const [records, setRecords] = useState<CaptureRecord[]>([]);
@@ -43,7 +44,12 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
     } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
   }, [api, onError]);
 
-  useEffect(() => { void load(); const timer = window.setInterval(load, 3000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    if (!pageVisible) return;
+    void load();
+    const timer = window.setInterval(load, 3000);
+    return () => window.clearInterval(timer);
+  }, [load, pageVisible]);
   useEffect(() => {
     if (!selectedId) return;
     void api.capturePreview(selectedId).then(setPreview).catch((reason) => onError(reason instanceof Error ? reason.message : String(reason)));
@@ -80,14 +86,23 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
     } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
+  async function cleanExpired() {
+		if (!await confirm({ title: t("captures:cleanupConfirmTitle"), description: t("captures:cleanupConfirm"), confirmLabel: t("captures:cleanupExpired"), tone: "danger" })) return;
+		setBusy(true);
+		try { const result = await api.deleteExpiredCaptures(); onSuccess(t("captures:cleanedExpired", { count: result.deleted })); await load(); }
+		catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+		finally { setBusy(false); }
+	}
 
   const usage = status && status.maxTotalBytes > 0 ? Math.min(100, status.storageBytes / status.maxTotalBytes * 100) : 0;
   return <div className="capture-shell">
     <section className="content-section"><div className="section-heading captures-heading"><div><h2>{t("captures:controlTitle")}</h2><p>{status?.active ? t("captures:activeSummary", { count: status.remainingRequests }) : t("captures:idleSummary")}</p></div><div className="header-actions">
       <button className="icon-button" data-tooltip={t("common:actions.refresh")} aria-label={t("common:actions.refresh")} onClick={load}><RefreshCw size={17} /></button>
+      {canOperate && <button className="button" disabled={busy || records.length === 0} onClick={() => void cleanExpired()}><Trash2 size={16} />{t("captures:cleanupExpired")}</button>}
       {canOperate && (status?.active ? <button className="button" disabled={busy} onClick={stop}><Square size={17} />{t("captures:stop")}</button> : <button className="button primary" disabled={busy || status?.available === false} onClick={start}><Play size={17} />{t("captures:start")}</button>)}
     </div></div>
       {status?.available === false && <div className="error-banner page-banner">{status.unavailableReason || t("captures:unavailable")}</div>}
+	  {status?.available !== false && status?.persistenceHealthy === false && <div className="warning-banner page-banner" role="status">{t("captures:persistenceDegraded", { stage: status.failedStage || t("common:notAvailable"), count: status.failureCount || 0 })}</div>}
       {canOperate && <div className="capture-controls">
         <label className="field"><span>{t("captures:requestLimit")}</span><input type="number" min="1" max="100" value={requestLimit} onChange={(e) => setRequestLimit(Number(e.target.value))} /></label>
         <label className="field"><span>{t("captures:timeout")}</span><div className="compound-input"><input type="number" min="1" max="60" value={timeoutMinutes} onChange={(e) => setTimeoutMinutes(Number(e.target.value))} /><span className="unit-label">{t("captures:minutes")}</span></div></label>
@@ -111,6 +126,7 @@ export function CapturesView({ api, config, onError, onSuccess, canOperate, canS
         <div><span>{t("captures:keys.records")}</span><strong>{Object.entries(keys.recordsById).map(([id, count]) => `${id}: ${count}`).join(", ") || "0"}</strong></div>
         <div><span>{t("captures:keys.unresolved")}</span><strong>{keys.unresolved}</strong></div>
       </div>}
+		{keys && keys.unresolved > 0 && <div className="warning-banner page-banner" role="status">{t("captures:keys.unresolvedWarning", { count: keys.unresolved })}</div>}
     </section>
     {preview && <InspectorShell wide title={`${preview.record.method} ${preview.record.path}`} subtitle={preview.record.requestId} status={<span className={`status ${preview.record.state}`}>{t(`common:status.${preview.record.state}`, { defaultValue: preview.record.state })}</span>} onClose={() => setPreview(null)}>
       <div className="capture-parts">{preview.parts.map((part, index) => <section key={`${part.name}-${part.attempt || index}`}><div><strong>{part.name === "attempt" ? t("captures:attemptPart", { count: part.attempt }) : t(`captures:${part.name}Part`)}</strong><span>{formatBytes(part.originalBytes)}{part.truncated ? ` · ${t("captures:truncated")}` : ""}</span></div><details><summary>{t("captures:headers")}</summary><pre>{JSON.stringify(part.headers || {}, null, 2)}</pre></details><pre className="capture-body">{part.body}</pre></section>)}</div>

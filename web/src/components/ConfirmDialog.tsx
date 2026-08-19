@@ -23,14 +23,14 @@ export function ConfirmDialog({ state, onConfirm, onCancel }: {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") cancelRef.current();
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelRef.current(); return; }
       if (event.key !== "Tab" || !dialog.current) return;
       const buttons = Array.from(dialog.current.querySelectorAll<HTMLButtonElement>("button"));
       if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons[buttons.length - 1]?.focus(); }
       else if (!event.shiftKey && document.activeElement === buttons[buttons.length - 1]) { event.preventDefault(); buttons[0]?.focus(); }
     };
-    window.addEventListener("keydown", keydown);
-    return () => { window.removeEventListener("keydown", keydown); previous?.focus(); };
+    document.addEventListener("keydown", keydown, true);
+    return () => { document.removeEventListener("keydown", keydown, true); previous?.focus(); };
   }, []);
 
   return <div className="confirm-backdrop" role="presentation" onMouseDown={onCancel}>

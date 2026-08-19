@@ -20,6 +20,12 @@ export interface SearchTarget {
   detail?: string;
 }
 
+function relatedIncident(alert: Alert, incidents: Incident[]) {
+  const explicit = alert.messageDetails?.incidentId;
+  if (typeof explicit === "string" && incidents.some((incident) => incident.id === explicit && incident.state !== "resolved")) return explicit;
+  return incidents.find((incident) => incident.state !== "resolved" && incident.categories[alert.type] !== undefined)?.id;
+}
+
 function includesQuery(values: Array<string | undefined>, query: string) {
   return values.some((value) => value?.toLocaleLowerCase().includes(query));
 }
@@ -42,6 +48,8 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
   const [activeIndex, setActiveIndex] = useState(-1);
   const [logs, setLogs] = useState<RuntimeLogEntry[]>([]);
   const [captures, setCaptures] = useState<CaptureRecord[]>([]);
+  const [remoteHistory, setRemoteHistory] = useState<HistoryRecord[]>([]);
+  const [remoteIncidents, setRemoteIncidents] = useState<Incident[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const normalized = query.trim().toLocaleLowerCase();
@@ -71,10 +79,12 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
     if (!open || normalized.length < 2) return;
     let disposed = false;
     const timer = window.setTimeout(() => {
-      void Promise.allSettled([api.runtimeLogs({ limit: 200, tail: true }), api.captures()]).then(([logResult, captureResult]) => {
+      void Promise.allSettled([api.runtimeLogs({ limit: 200, tail: true }), api.captures(), api.history({ q: normalized, limit: 50 }), api.incidents({ q: normalized, limit: 50 })]).then(([logResult, captureResult, historyResult, incidentResult]) => {
         if (disposed) return;
         if (logResult.status === "fulfilled") setLogs(logResult.value.entries);
         if (captureResult.status === "fulfilled") setCaptures(captureResult.value);
+        if (historyResult.status === "fulfilled") setRemoteHistory(historyResult.value.items);
+        if (incidentResult.status === "fulfilled") setRemoteIncidents(incidentResult.value.items);
       });
     }, 220);
     return () => { disposed = true; window.clearTimeout(timer); };
@@ -88,19 +98,19 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
         items.push({ key: `request-${request.id}`, kind: "request", id: request.id, title: `${request.method} ${request.path}`, detail: request.id });
       }
     });
-    history.forEach((record) => {
+    [...history, ...remoteHistory].filter((record, index, all) => all.findIndex((item) => item.id === record.id) === index).forEach((record) => {
       if (includesQuery([record.id, record.clientId, record.taskId, record.method, record.path, record.state, record.lastErrorCode], normalized)) {
         items.push({ key: `history-${record.id}`, kind: "history", id: record.id, title: `${record.method} ${record.path}`, detail: record.id });
       }
     });
-    incidents.forEach((incident) => {
+    [...incidents, ...remoteIncidents].filter((incident, index, all) => all.findIndex((item) => item.id === incident.id) === index).forEach((incident) => {
       if (includesQuery([incident.id, incident.state, ...incident.affectedRequests, ...Object.keys(incident.categories)], normalized)) {
         items.push({ key: `incident-${incident.id}`, kind: "incident", id: incident.id, title: t("search.incidentResult"), detail: incident.id });
       }
     });
     alerts.forEach((alert) => {
       if (includesQuery([alert.id, alert.requestId, alert.type, alert.message], normalized)) {
-        items.push({ key: `alert-${alert.id}`, kind: "alert", id: alert.requestId || alert.id, title: alert.message, detail: alert.requestId || alert.id });
+        items.push({ key: `alert-${alert.id}`, kind: "alert", id: alert.requestId || alert.id, title: alert.message, detail: alert.requestId || alert.type });
       }
     });
     logs.forEach((entry) => {
@@ -115,7 +125,7 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
     });
     if (includesQuery([upstream], normalized)) items.push({ key: "upstream", kind: "upstream", id: upstream, title: t("search.upstreamResult"), detail: upstream });
     return items.slice(0, 8);
-  }, [alerts, captures, history, incidents, logs, normalized, requests, t, upstream]);
+  }, [alerts, captures, history, incidents, logs, normalized, remoteHistory, remoteIncidents, requests, t, upstream]);
 
   useEffect(() => { setActiveIndex(results.length ? 0 : -1); }, [normalized, results.length]);
 
@@ -126,7 +136,15 @@ export function GlobalSearch({ api, upstream, canOperate, requests, history, inc
     else if (result.kind === "log") onNavigate("logs", target);
     else if (result.kind === "capture") onNavigate("captures", target);
     else if (result.kind === "upstream") onNavigate(canOperate ? "settings" : "diagnostics", target);
-    else if (result.kind === "alert" && !alerts.find((alert) => alert.id === result.key.replace("alert-", ""))?.requestId) onNavigate("incidents", target);
+    else if (result.kind === "alert") {
+      const alert = alerts.find((item) => item.id === result.key.replace("alert-", ""));
+      if (alert?.requestId) onOpen(alert.requestId);
+      else {
+        const incidentId = alert ? relatedIncident(alert, incidents) : undefined;
+        if (incidentId) onNavigate("incidents", { kind: "incident", id: incidentId });
+        else onNavigate("logs", { kind: "log", id: "", detail: alert?.type || result.detail });
+      }
+    }
     else onOpen(result.id);
   }
 

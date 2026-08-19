@@ -7,6 +7,7 @@ import { RequestsTable } from "../components/RequestsTable";
 import { RepeatTaskDialog } from "../components/RepeatTaskDialog";
 import { RepeatTasksPanel } from "../components/RepeatTasksPanel";
 import { RetryPolicyDialog } from "../components/RetryPolicyDialog";
+import { UncertainResolutionDialog } from "../components/UncertainResolutionDialog";
 import type { MetricsSnapshot, RepeatTask, RequestInfo, RetryPolicyInput, Status } from "../types";
 
 const MINUTE = 60_000;
@@ -37,11 +38,11 @@ function sparkline(values: number[]) {
 }
 
 function canRetry(request: RequestInfo) {
-  return request.actions?.canRetryNow ?? (request.state === "waiting" || request.state === "uncertain");
+  return request.state !== "uncertain" && (request.actions?.canRetryNow ?? request.state === "waiting");
 }
 
 function canSetPolicy(request: RequestInfo) {
-  return request.actions?.canSetRetryPolicy ?? ["queued", "requesting", "waiting", "uncertain"].includes(request.state);
+  return request.state !== "uncertain" && (request.actions?.canSetRetryPolicy ?? ["queued", "requesting", "waiting"].includes(request.state));
 }
 
 function hasRetryPolicy(request: RequestInfo) {
@@ -69,6 +70,7 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [policyTargets, setPolicyTargets] = useState<RequestInfo[] | null>(null);
   const [repeatRequest, setRepeatRequest] = useState<RequestInfo | null>(null);
+  const [uncertainRequest, setUncertainRequest] = useState<RequestInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const requests = useMemo(() => status.requests.filter((request) => {
     const matchesState = state === "all" || request.state === state;
@@ -76,9 +78,16 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
     return matchesState && (!needle || [request.id, request.path, request.clientId, request.taskId].some((value) => value?.toLowerCase().includes(needle)));
   }), [query, state, status.requests]);
   const selectedRequests = useMemo(() => status.requests.filter((request) => selected.has(request.id)), [selected, status.requests]);
-  const scopeRequests = selectedRequests.length ? selectedRequests : requests;
+  const visibleSelectedRequests = useMemo(() => selectedRequests.filter((request) => requests.some((visible) => visible.id === request.id)), [requests, selectedRequests]);
+  const scopeRequests = visibleSelectedRequests.length ? visibleSelectedRequests : requests;
   const livePolicyTargets = useMemo(() => policyTargets?.map((target) => status.requests.find((request) => request.id === target.id) || target) || null, [policyTargets, status.requests]);
   const liveRepeatRequest = useMemo(() => repeatRequest ? status.requests.find((request) => request.id === repeatRequest.id) || repeatRequest : null, [repeatRequest, status.requests]);
+  const liveUncertainRequest = useMemo(() => {
+    if (!uncertainRequest) return null;
+    const live = status.requests.find((request) => request.id === uncertainRequest.id);
+    return live?.state === "uncertain" ? live : null;
+  }, [uncertainRequest, status.requests]);
+  const uncertainRequests = useMemo(() => requests.filter((request) => request.state === "uncertain"), [requests]);
   const retryable = scopeRequests.filter(canRetry);
   const policyCapable = scopeRequests.filter(canSetPolicy);
   const pressure = (metrics?.series || []).slice(-30).map((point) => point.active + point.waiting + point.queued);
@@ -111,19 +120,22 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
   async function retryTargets(targets: RequestInfo[]) {
     const eligible = targets.filter(canRetry);
     if (!eligible.length || busy) return;
-    const uncertain = eligible.some((request) => request.actions?.retryRequiresConfirmation || request.state === "uncertain");
-    if ((uncertain || eligible.length > 20) && !await confirm({
+    if (eligible.length > 20 && !await confirm({
       title: t("requests:batch.retryConfirmTitle"),
-      description: t(uncertain ? "requests:batch.retryUncertainConfirm" : "requests:batch.retryManyConfirm", { count: eligible.length }),
-      confirmLabel: t("requests:batch.retryAction"), tone: uncertain ? "danger" : "default",
+      description: t("requests:batch.retryManyConfirm", { count: eligible.length }),
+      confirmLabel: t("requests:batch.retryAction"), tone: "default",
     })) return;
     setBusy(true);
     try {
-      let accepted = 1;
+      let accepted = 0;
       let skipped = 0;
-      if (eligible.length === 1) await api.retry(eligible[0].id, uncertain);
+      if (eligible.length === 1) {
+        const response = await api.retry(eligible[0].id);
+        accepted = response.accepted ? 1 : 0;
+        skipped = response.accepted ? 0 : 1;
+      }
       else {
-        const response = await api.batchRetry(eligible.map((request) => request.id), uncertain);
+        const response = await api.batchRetry(eligible.map((request) => request.id));
         accepted = response.accepted;
         skipped = response.skipped;
       }
@@ -145,8 +157,8 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
     })) return;
     setBusy(true);
     try {
-      let accepted = 1;
-      if (policyCapable.length === 1) await api.setRetryPolicy(policyCapable[0].id, quickPolicies[name]);
+      let accepted = 0;
+      if (policyCapable.length === 1) accepted = (await api.setRetryPolicy(policyCapable[0].id, quickPolicies[name])).accepted ? 1 : 0;
       else accepted = (await api.batchRetryPolicy(policyCapable.map((request) => request.id), { policy: quickPolicies[name], overwrite: true })).accepted;
       await refresh();
       onSuccess(t("requests:retryPolicy.applied", { accepted, total: policyCapable.length }));
@@ -162,8 +174,8 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
     if (!targets.length || busy) return;
     setBusy(true);
     try {
-      let accepted = 1;
-      if (targets.length === 1) await api.clearRetryPolicy(targets[0].id);
+      let accepted = 0;
+      if (targets.length === 1) accepted = (await api.clearRetryPolicy(targets[0].id)).accepted ? 1 : 0;
       else accepted = (await api.batchRetryPolicy(targets.map((request) => request.id), { reset: true })).accepted;
       await refresh();
       onSuccess(t("requests:retryPolicy.reset", { accepted, total: targets.length }));
@@ -175,7 +187,7 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
   }
 
   async function cancelRequest(request: RequestInfo) {
-    if (busy) return;
+    if (busy || request.state === "uncertain") return;
     setBusy(true);
     try { await api.cancel(request.id); await refresh(); }
     catch (reason) { onError(errorMessage(reason)); }
@@ -190,7 +202,7 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
       <div className="request-pressure"><span>{t("overview:charts.pressure")}</span><svg viewBox="0 0 120 32" preserveAspectRatio="none" role="img" aria-label={t("overview:charts.pressure")}><title>{t("overview:charts.pressure")}</title><polyline points={sparkline(pressure.length ? pressure : [0, 0])} /></svg></div>
     </div>
     <section className="content-section">
-      <div className="section-heading request-heading"><div><h2>{t("overview:queue.title")}</h2><p>{t("overview:queue.description")}</p></div><div className="request-heading-meta"><span>{t("common:requestCount", { count: requests.length })}</span><span className="retryable-count">{t("requests:batch.retryableCount", { count: retryable.length })}</span></div></div>
+      <div className="section-heading request-heading"><div><h2>{t("overview:queue.title")}</h2><p>{t("overview:queue.description")}</p></div><div className="request-heading-meta"><span>{t("common:requestCount", { count: requests.length })}</span><span className="retryable-count">{t("requests:batch.retryableCount", { count: retryable.length })}</span>{uncertainRequests.length > 0 && <span className="uncertain-count">{t("requests:uncertain.count", { count: uncertainRequests.length })}</span>}</div></div>
       <div className="request-toolbar">
         <div className="filter-controls">
           <label className="search-field"><span className="sr-only">{t("requests:filters.search")}</span><Search size={16} /><input value={query} placeholder={t("requests:filters.search")} onChange={(event) => setQuery(event.target.value)} /></label>
@@ -204,15 +216,16 @@ export function RequestsView({ status, metrics, repeatTasks, api, refresh, onOpe
           <button className="button compact" disabled={busy || !retryable.length} onClick={() => retryTargets(scopeRequests)}><TimerReset size={15} />{t("requests:batch.retry", { count: retryable.length })}</button>
           <details className="policy-quick-menu"><summary className={`button compact ${!policyCapable.length || busy ? "disabled" : ""}`} aria-disabled={!policyCapable.length || busy}><Settings2 size={15} />{t("requests:batch.policy")}<ChevronDown size={14} /></summary><div className="policy-quick-popover">
             {(["standard", "fast", "conservative"] as const).map((preset) => <button key={preset} disabled={!policyCapable.length || busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void applyQuickPolicy(preset); }}>{t(`requests:retryPolicy.presets.${preset}`)}</button>)}
-            <button disabled={!policyCapable.length || busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setPolicyTargets([...scopeRequests]); }}>{t("requests:retryPolicy.presets.custom")}</button>
-            <button disabled={!policyCapable.some((request) => request.retryPolicy) || busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void resetPolicies(); }}>{t("requests:retryPolicy.resetAction")}</button>
+            <button disabled={!policyCapable.length || busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); setPolicyTargets([...policyCapable]); }}>{t("requests:retryPolicy.presets.custom")}</button>
+            <button disabled={!policyCapable.some(hasRetryPolicy) || busy} onClick={(event) => { event.currentTarget.closest("details")?.removeAttribute("open"); void resetPolicies(); }}>{t("requests:retryPolicy.resetAction")}</button>
           </div></details>
         </div>}
       </div>
-      <RequestsTable requests={requests} selected={selected} onToggle={toggle} onToggleAll={toggleAll} onOpen={onOpen} canOperate={canOperate} onRetry={(request) => retryTargets([request])} onPolicy={(request) => setPolicyTargets([request])} onRepeat={setRepeatRequest} onCancel={cancelRequest} />
+      <RequestsTable requests={requests} selected={selected} onToggle={toggle} onToggleAll={toggleAll} onOpen={onOpen} canOperate={canOperate} onRetry={(request) => retryTargets([request])} onPolicy={(request) => setPolicyTargets([request])} onRepeat={(request) => { if (request.state !== "uncertain") setRepeatRequest(request); }} onCancel={cancelRequest} onResolveUncertain={(request) => { if (request.state === "uncertain") setUncertainRequest(request); }} />
     </section>
     <RepeatTasksPanel tasks={repeatTasks} api={api} refresh={refresh} onError={onError} canOperate={canOperate} />
     {livePolicyTargets && <RetryPolicyDialog targets={livePolicyTargets} api={api} refresh={refresh} onClose={() => setPolicyTargets(null)} onError={onError} onSuccess={onSuccess} confirm={confirm} />}
     {liveRepeatRequest && <RepeatTaskDialog request={liveRepeatRequest} api={api} refresh={refresh} onClose={() => setRepeatRequest(null)} onError={onError} onSuccess={onSuccess} confirm={confirm} />}
+    {liveUncertainRequest && <UncertainResolutionDialog request={liveUncertainRequest} api={api} refresh={refresh} onClose={() => setUncertainRequest(null)} onError={onError} onSuccess={onSuccess} canOperate={canOperate} />}
   </div>;
 }

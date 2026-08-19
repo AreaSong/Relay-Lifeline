@@ -1,6 +1,6 @@
 import { Maximize2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import type { ECharts, EChartsCoreOption } from "echarts/core";
 
 export interface TimeSeriesPoint {
@@ -276,9 +276,10 @@ interface ChartCardProps {
   onToggleExpand?: () => void;
   showHeader?: boolean;
   modalRef?: RefObject<HTMLElement | null>;
+  accessibleContent: ReactNode;
 }
 
-function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef, active = true, expanded = false, expandLabel, collapseLabel, onToggleExpand, showHeader = true, modalRef }: ChartCardProps) {
+function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableLabel, canvasRef, active = true, expanded = false, expandLabel, collapseLabel, onToggleExpand, showHeader = true, modalRef, accessibleContent }: ChartCardProps) {
   const unavailable = loadState === "failed";
   const classes = [
     "operations-chart",
@@ -295,10 +296,9 @@ function ChartCard({ chartKey, title, empty, loadState, emptyLabel, unavailableL
       <div
         className="operations-chart__canvas"
         ref={canvasRef}
-        role="img"
-        aria-label={title}
-        aria-hidden={empty || loadState !== "ready"}
+        aria-hidden="true"
       />
+	  {!empty && loadState === "ready" && <div className="sr-only">{accessibleContent}</div>}
       {unavailable
         ? <p className="operations-chart__message operations-chart__message--unavailable">{unavailableLabel}</p>
         : empty && <p className="operations-chart__message operations-chart__message--empty">{emptyLabel}</p>}
@@ -424,16 +424,23 @@ export function OperationsCharts({
 
   const titles = { pressure: labels.pressureTitle, errors: labels.errorsTitle, recovery: labels.recoveryTitle };
   const refs = { pressure: pressureRef, errors: errorsRef, recovery: recoveryRef };
+  const percent = new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 });
+  const accessible: Record<ChartKey, ReactNode> = {
+    reliability: <table><caption>{labels.reliabilityTitle}</caption><thead><tr><th>{labels.duration}</th><th>{labels.requests}</th><th>{labels.successRate}</th><th>{labels.failedAttempts}</th></tr></thead><tbody>{reliability.map((point) => <tr key={point.time}><th>{formatTimeLabel(point.time, locale)}</th><td>{safeValue(point.requests)}</td><td>{percent.format(point.requests > 0 ? safeValue(point.successful) / safeValue(point.requests) : 0)}</td><td>{safeValue(point.failedAttempts)}</td></tr>)}</tbody></table>,
+    pressure: <table><caption>{labels.pressureTitle}</caption><thead><tr><th>{labels.duration}</th><th>{labels.requesting}</th><th>{labels.waiting}</th><th>{labels.queued}</th></tr></thead><tbody>{pressure.map((point) => <tr key={point.time}><th>{formatTimeLabel(point.time, locale)}</th><td>{safeValue(point.requesting ?? point.active)}</td><td>{safeValue(point.waiting)}</td><td>{safeValue(point.queued)}</td></tr>)}</tbody></table>,
+    errors: <table><caption>{labels.errorsTitle}</caption><thead><tr><th>{labels.errorsTitle}</th><th>{labels.failedAttempts}</th></tr></thead><tbody>{errors.filter((slice) => safeValue(slice.count) > 0).map((slice) => <tr key={slice.category}><th>{slice.category}</th><td>{safeValue(slice.count)}</td></tr>)}</tbody></table>,
+    recovery: <table><caption>{labels.recoveryTitle}</caption><thead><tr><th>{labels.duration}</th><th>{labels.requests}</th></tr></thead><tbody>{recovery.map((point) => <tr key={point.bucket}><th>{point.bucket}</th><td>{safeValue(point.count)}</td></tr>)}</tbody></table>,
+  };
 
   return <>
     <div className={["operations-charts", className, expanded ? "has-expanded-chart" : ""].filter(Boolean).join(" ")}>
-      <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} modalRef={reliabilityModalRef} />
+      <ChartCard chartKey="reliability" title={labels.reliabilityTitle} empty={empty.reliability} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={reliabilityRef} expanded={expanded === "reliability"} expandLabel={labels.expand} collapseLabel={labels.collapse} onToggleExpand={() => setExpanded((value) => value === "reliability" ? null : "reliability")} modalRef={reliabilityModalRef} accessibleContent={accessible.reliability} />
       <article ref={secondaryModalRef} className={`operations-chart-deck${expanded === "secondary" ? " is-expanded" : ""}`} role={expanded === "secondary" ? "dialog" : undefined} aria-modal={expanded === "secondary" || undefined} aria-label={expanded === "secondary" ? titles[secondary] : undefined} tabIndex={expanded === "secondary" ? -1 : undefined}>
         <header className="operations-chart-deck__header"><div className="chart-tabs" role="tablist" aria-label={labels.pressureTitle}>
           {secondaryKeys.map((key) => <button key={key} role="tab" aria-selected={secondary === key} className={secondary === key ? "active" : ""} onClick={() => { secondaryManuallySelected.current = true; setSecondary(key); }}>{titles[key]}</button>)}
         </div><button className="chart-expand" aria-label={expanded === "secondary" ? labels.collapse : labels.expand} onClick={() => setExpanded((value) => value === "secondary" ? null : "secondary")}>{expanded === "secondary" ? <X size={16} /> : <Maximize2 size={15} />}</button></header>
         <div className="operations-chart-deck__body">
-          {secondaryKeys.map((key) => <ChartCard key={key} chartKey={key} title={titles[key]} empty={empty[key]} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={refs[key]} active={secondary === key} showHeader={false} />)}
+          {secondaryKeys.map((key) => <ChartCard key={key} chartKey={key} title={titles[key]} empty={empty[key]} loadState={loadState} emptyLabel={labels.empty} unavailableLabel={labels.unavailable} canvasRef={refs[key]} active={secondary === key} showHeader={false} accessibleContent={accessible[key]} />)}
         </div>
       </article>
     </div>

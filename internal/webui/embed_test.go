@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,12 +24,26 @@ func TestHandlerAllowsChartStyleAttributesWithoutRelaxingScripts(t *testing.T) {
 }
 
 func TestHandlerCachesFingerprintedAssetsButRevalidatesShell(t *testing.T) {
+	entries, err := fs.ReadDir(assets, "dist/assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetPath := ""
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".js") {
+			assetPath = "/admin/assets/" + entry.Name()
+			break
+		}
+	}
+	if assetPath == "" {
+		t.Fatal("嵌入资源中缺少指纹 JavaScript 文件")
+	}
 	tests := []struct {
 		path string
 		want string
 	}{
 		{path: "/admin/", want: "no-cache"},
-		{path: "/admin/assets/index-example.js", want: "public, max-age=31536000, immutable"},
+		{path: assetPath, want: "public, max-age=31536000, immutable"},
 	}
 	for _, test := range tests {
 		recorder := httptest.NewRecorder()

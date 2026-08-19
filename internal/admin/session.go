@@ -14,12 +14,17 @@ import (
 
 const managementSessionCookie = "relay_lifeline_session"
 
+const maxManagementSessions = 2048
+
 var errLoginRateLimited = errors.New("management login rate limited")
 
 type managementSession struct {
-	Role     Role
-	CSRF     string
-	LastSeen time.Time
+	Role        Role
+	CSRF        string
+	LastSeen    time.Time
+	ExpiresAt   time.Time
+	AuthMethod  string
+	PrincipalID string
 }
 
 type loginFailures struct {
@@ -53,6 +58,16 @@ func (m *sessionManager) login(request *http.Request, key string, authenticator 
 		m.recordFailure(client, now)
 		return "", managementSession{}, errors.New("invalid management key")
 	}
+	token, session, err := m.create(role, "local", "", time.Time{})
+	if err == nil {
+		m.mu.Lock()
+		delete(m.failures, client)
+		m.mu.Unlock()
+	}
+	return token, session, err
+}
+
+func (m *sessionManager) create(role Role, authMethod, principalID string, identityExpiresAt time.Time) (string, managementSession, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", managementSession{}, err
@@ -61,9 +76,17 @@ func (m *sessionManager) login(request *http.Request, key string, authenticator 
 	if err != nil {
 		return "", managementSession{}, err
 	}
-	session := managementSession{Role: role, CSRF: csrf, LastSeen: now}
+	now := m.now()
+	expiresAt := now.Add(m.store.Get().ManagementSecurity.SessionMaxLifetime.Duration)
+	if !identityExpiresAt.IsZero() && identityExpiresAt.Before(expiresAt) {
+		expiresAt = identityExpiresAt
+	}
+	session := managementSession{Role: role, CSRF: csrf, LastSeen: now, ExpiresAt: expiresAt, AuthMethod: authMethod, PrincipalID: principalID}
 	m.mu.Lock()
-	delete(m.failures, client)
+	m.cleanupLocked(now)
+	if len(m.sessions) >= maxManagementSessions {
+		m.evictOldestLocked()
+	}
 	m.sessions[token] = session
 	m.mu.Unlock()
 	return token, session, nil
@@ -83,13 +106,33 @@ func (m *sessionManager) authenticate(request *http.Request) (managementSession,
 		delete(m.sessions, cookie.Value)
 		return managementSession{}, "", false, "invalidated"
 	}
-	if now.Sub(session.LastSeen) > timeout {
+	if now.Sub(session.LastSeen) > timeout || !session.ExpiresAt.After(now) {
 		delete(m.sessions, cookie.Value)
-		return managementSession{}, "", false, "idle_timeout"
+		return managementSession{}, "", false, "expired"
 	}
 	session.LastSeen = now
 	m.sessions[cookie.Value] = session
 	return session, cookie.Value, true, "active"
+}
+
+func (m *sessionManager) cleanupLocked(now time.Time) {
+	idleTimeout := m.store.Get().ManagementSecurity.SessionIdleTimeout.Duration
+	for token, session := range m.sessions {
+		if now.Sub(session.LastSeen) > idleTimeout || !session.ExpiresAt.After(now) {
+			delete(m.sessions, token)
+		}
+	}
+}
+
+func (m *sessionManager) evictOldestLocked() {
+	var oldestToken string
+	var oldest time.Time
+	for token, session := range m.sessions {
+		if oldestToken == "" || session.LastSeen.Before(oldest) {
+			oldestToken, oldest = token, session.LastSeen
+		}
+	}
+	delete(m.sessions, oldestToken)
 }
 
 func (m *sessionManager) revoke(token string) {
@@ -134,8 +177,12 @@ func randomToken() (string, error) {
 }
 
 func setSessionCookie(writer http.ResponseWriter, request *http.Request, token string, maxAge int) {
+	setSessionCookieSecure(writer, request, token, maxAge, false)
+}
+
+func setSessionCookieSecure(writer http.ResponseWriter, request *http.Request, token string, maxAge int, forceSecure bool) {
 	http.SetCookie(writer, &http.Cookie{
 		Name: managementSessionCookie, Value: token, Path: "/admin/api", MaxAge: maxAge,
-		HttpOnly: true, Secure: request.TLS != nil, SameSite: http.SameSiteStrictMode,
+		HttpOnly: true, Secure: forceSecure || request.TLS != nil, SameSite: http.SameSiteStrictMode,
 	})
 }

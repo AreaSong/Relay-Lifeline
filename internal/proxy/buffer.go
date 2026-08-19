@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 	"sync"
-	"syscall"
 
+	"github.com/areasong/relay-lifeline/internal/disk"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
 
@@ -139,11 +139,10 @@ func (b *ReplayBuffer) ensureDiskSpace(required int64) error {
 	if directory == "" {
 		directory = os.TempDir()
 	}
-	var stats syscall.Statfs_t
-	if err := syscall.Statfs(directory, &stats); err != nil {
+	available, err := disk.AvailableBytes(directory)
+	if err != nil {
 		return err
 	}
-	available := int64(stats.Bavail) * int64(stats.Bsize)
 	if available < required || available-required < b.minimumFree {
 		return errCacheDiskSpace
 	}

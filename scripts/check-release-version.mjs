@@ -25,7 +25,7 @@ if (!changelog.includes(`## [${version}]`)) {
 if (adminAPIVersion !== "3") {
   throw new Error(`Admin API version must be 3, received ${adminAPIVersion || "missing"}`);
 }
-if (configSchemaVersion !== 3) {
-  throw new Error(`config schema version must be 3, received ${configSchemaVersion || "missing"}`);
+if (configSchemaVersion !== 5) {
+	throw new Error(`config schema version must be 5, received ${configSchemaVersion || "missing"}`);
 }
 console.log(`release version verified: ${version}, Admin API v${adminAPIVersion}, config schema v${configSchemaVersion}`);

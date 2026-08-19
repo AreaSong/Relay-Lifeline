@@ -1,4 +1,4 @@
-import type { Alert, BatchActionResponse, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigSaveResult, DiagnosticReport, HistoryPage, HistoryRecord, IncidentDetail, IncidentPage, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, NotificationDelivery, NotificationStatus, RealtimeEvent, RepeatTask, RetryPolicyInput, RuntimeInfo, RuntimeLogPage, SessionInfo, Status } from "./types";
+import type { Alert, BatchActionResponse, CaptureKeyRewrapResult, CaptureKeyStatus, CapturePreview, CaptureRecord, CaptureStatus, Config, ConfigChangePlan, ConfigRuntimeState, ConfigSaveResult, ConfigVersion, DiagnosticReport, GovernanceStatus, HealthSummary, HistoryPage, HistoryRecord, IncidentDetail, IncidentPage, LoginOptions, MetricsErrors, MetricsSnapshot, MetricsWindow, MonitoringEvents, NotificationDelivery, NotificationStatus, PolicyDecision, PolicyInput, PolicyReleaseRecord, PolicyReleaseStatus, PolicyStatus, RealtimeEvent, RepeatTask, RetryPolicyInput, RuntimeInfo, RuntimeLogPage, SessionInfo, Status, TelemetryStatus, UncertainPreview, UncertainResolutionAction, UncertainResolutionInput, UncertainResolutionResponse, UpstreamPoolStatus, SLOSnapshot } from "./types";
 import i18n, { normalizeLocale } from "./i18n";
 
 export class ApiError extends Error {
@@ -33,10 +33,47 @@ function expectObjectArrays<T>(value: unknown, label: string, fields: string[]):
   return object as T;
 }
 
+function normalizeConfigCollections(config: Config): Config {
+	// Empty YAML sequences are commonly omitted by the server as null; keep the
+	// editor contract stable so views can safely use array operations.
+	return {
+		...config,
+		upstreams: { ...config.upstreams, targets: config.upstreams.targets ?? [] },
+		egress: { ...config.egress, allowedHosts: config.egress.allowedHosts ?? [] },
+		notifications: { ...config.notifications, eventTypes: config.notifications.eventTypes ?? [] },
+		governance: { ...config.governance, budgets: config.governance.budgets ?? [], prices: config.governance.prices ?? [] },
+		managementSecurity: {
+			...config.managementSecurity,
+			oidc: {
+				...config.managementSecurity.oidc,
+				scopes: config.managementSecurity.oidc.scopes ?? [],
+				signingAlgorithms: config.managementSecurity.oidc.signingAlgorithms ?? [],
+				viewerValues: config.managementSecurity.oidc.viewerValues ?? [],
+				operatorValues: config.managementSecurity.oidc.operatorValues ?? [],
+				sensitiveValues: config.managementSecurity.oidc.sensitiveValues ?? [],
+			},
+		},
+		trafficPolicy: { ...config.trafficPolicy, rules: config.trafficPolicy.rules ?? [] },
+	};
+}
+
 function expectCaptureRecord(value: unknown, label: string): CaptureRecord {
   const record = expectObject<Record<string, unknown>>(value, label);
   expectArray(record.attempts, `${label}.attempts`);
   return record as unknown as CaptureRecord;
+}
+
+function expectUncertainPreview(value: unknown, label: string): UncertainPreview {
+  const preview = expectObject<Record<string, unknown>>(value, label);
+  if (typeof preview.confirmationToken !== "string" || !preview.confirmationToken) {
+    throw new ApiError("INVALID_API_RESPONSE", `${label}.confirmationToken: expected token`);
+  }
+  if (typeof preview.expiresAt !== "string") {
+    throw new ApiError("INVALID_API_RESPONSE", `${label}.expiresAt: expected timestamp`);
+  }
+  const evidence = expectObject<Record<string, unknown>>(preview.evidence, `${label}.evidence`);
+  expectArray(evidence.attempts, `${label}.evidence.attempts`);
+  return preview as unknown as UncertainPreview;
 }
 
 export class ApiClient {
@@ -108,13 +145,27 @@ export class ApiClient {
     return this.request<Status>("/status", undefined, (value) => expectObjectArrays(value, "status", ["requests"]));
   }
 
-  config() {
-    return this.request<Config>("/config", undefined, (value) => {
-      const config = expectObject<Config>(value, "config");
-      if (config.schemaVersion !== 3) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
-      return config;
-    });
+  healthSummary() {
+    return this.request<HealthSummary>("/health/summary", undefined, (value) => expectObjectArrays(value, "healthSummary", ["components"]));
   }
+
+  slo() { return this.request<SLOSnapshot>("/slo", undefined, (value) => expectObject(value, "slo")); }
+
+	config() {
+		return this.request<Config>("/config", undefined, (value) => {
+			const config = expectObject<Config>(value, "config");
+			if (config.schemaVersion !== 5) throw new ApiError("UNSUPPORTED_CONFIG_SCHEMA", `Unsupported config schema ${config.schemaVersion}`);
+			return normalizeConfigCollections(config);
+		});
+	}
+
+	loginOptions() {
+		return this.request<LoginOptions>("/session/login-options", undefined, (value) => expectObject(value, "loginOptions"));
+	}
+
+	oidcLogin() {
+		window.location.assign("/admin/api/session/oidc/start");
+	}
 
   alerts() {
     return this.request<Alert[]>("/alerts", undefined, (value) => expectArray(value, "alerts"));
@@ -139,7 +190,7 @@ export class ApiClient {
 	}
 
 	incident(id: string) {
-		return this.request<IncidentDetail>(`/incidents/${encodeURIComponent(id)}`, undefined, (value) => expectObjectArrays(value, "incidentDetail", ["requests"]));
+		return this.request<IncidentDetail>(`/incidents/${encodeURIComponent(id)}`, undefined, (value) => expectObjectArrays(value, "incidentDetail", ["requests", "timeline"]));
   }
 
 	subscribe(onEvent: (event: RealtimeEvent) => void, onError: () => void) {
@@ -176,7 +227,7 @@ export class ApiClient {
     return this.request<MonitoringEvents>(`/events?after=${after}&limit=${limit}`, undefined, (value) => expectObjectArrays(value, "events", ["events"]));
   }
 
-  runtimeLogs(filters: { after?: number; limit?: number; tail?: boolean; level?: string; event?: string; requestId?: string } = {}) {
+  runtimeLogs(filters: { after?: number; limit?: number; tail?: boolean; level?: string; event?: string; requestId?: string; q?: string; since?: string } = {}) {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
     return this.request<RuntimeLogPage>(`/runtime-logs?${query}`, undefined, (value) => expectObjectArrays(value, "runtimeLogs", ["entries"]));
@@ -264,14 +315,70 @@ export class ApiClient {
     URL.revokeObjectURL(link.href);
   }
 
-  validateConfig(config: Config) {
+	validateConfig(config: Config) {
     return this.request<ConfigChangePlan>("/config/validate", { method: "POST", body: JSON.stringify(config) }, (value) => expectObjectArrays(value, "configPlan", ["changedSections", "hotReloadSections", "restartSections"]));
-  }
+	}
 
-  saveConfig(config: Config) {
-    return this.request<ConfigSaveResult>("/config", {
-      method: "PUT",
-      body: JSON.stringify(config),
+	configState() {
+		return this.request<ConfigRuntimeState>("/config/state", undefined, (value) => expectObject(value, "configState"));
+	}
+
+	configVersions() {
+		return this.request<{ items: ConfigVersion[] }>("/config/backups", undefined, (value) => expectObjectArrays(value, "configVersions", ["items"]));
+	}
+
+	rollbackConfig(version: ConfigVersion, authenticationChange: boolean) {
+		return this.request<{ restored: boolean }>(`/config/backups/${encodeURIComponent(version.name)}/rollback`, {
+			method: "POST", body: JSON.stringify({ sha256: version.sha256 }),
+			headers: { "X-Relay-Lifeline-Confirm": authenticationChange ? "rollback-config-auth" : "rollback-config" },
+		}, (value) => expectObject(value, "configRollback"));
+	}
+
+	upstreamStatus() {
+		return this.request<UpstreamPoolStatus>("/upstreams/status", undefined, (value) => expectObjectArrays(value, "upstreamStatus", ["targets"]));
+	}
+
+	governanceStatus() {
+		return this.request<GovernanceStatus>("/governance/status", undefined, (value) => expectObjectArrays(value, "governanceStatus", ["entries"]));
+	}
+
+	telemetryStatus() {
+		return this.request<TelemetryStatus>("/telemetry/status", undefined, (value) => expectObject(value, "telemetryStatus"));
+	}
+
+	policyStatus(limit = 50) {
+		return this.request<PolicyStatus>(`/policies/status?limit=${limit}`, undefined, (value) => expectObjectArrays(value, "policyStatus", ["recent"]));
+	}
+
+	policyReleases() {
+		return this.request<PolicyReleaseStatus>("/policies/releases", undefined, (value) => expectObjectArrays(value, "policyReleases", ["history"]));
+	}
+
+	savePolicyDraft(policy: Config["trafficPolicy"], draftRevision = "") {
+		return this.request<{ saved: boolean; draftRevision: string }>("/policies/draft", { method: "PUT", body: JSON.stringify({ policy, draftRevision }) }, (value) => expectObject(value, "policyDraft"));
+	}
+
+	publishPolicy(input: { configRevision: string; draftRevision?: string; stage: "shadow" | "canary" | "full"; canaryPercent?: number; policy?: Config["trafficPolicy"] }) {
+		return this.request<{ published: boolean; release: PolicyReleaseRecord; configRevision: string }>("/policies/publish", { method: "POST", body: JSON.stringify(input) }, (value) => expectObject(value, "policyPublish"));
+	}
+
+	rollbackPolicy(configRevision: string, policyRevision: string) {
+		return this.request<{ rolledBack: boolean; release: PolicyReleaseRecord; configRevision: string }>("/policies/rollback", { method: "POST", body: JSON.stringify({ configRevision, policyRevision }) }, (value) => expectObject(value, "policyRollback"));
+	}
+
+	simulatePolicy(input: PolicyInput, source: "active" | "draft" = "active") {
+		return this.request<PolicyDecision>(`/policies/simulate${source === "draft" ? "?source=draft" : ""}`, { method: "POST", body: JSON.stringify(input) }, (value) => expectObject(value, "policyDecision"));
+	}
+
+	replayPolicy(input: { captureId?: string; request?: PolicyInput }) {
+		return this.request<{ dryRun: boolean; executed: boolean; containsRawBody: boolean; decision: PolicyDecision }>("/policies/replay", { method: "POST", body: JSON.stringify(input) }, (value) => expectObject(value, "policyReplay"));
+	}
+
+	saveConfig(config: Config, confirmAuthentication = false) {
+		return this.request<ConfigSaveResult>("/config", {
+			method: "PUT",
+			body: JSON.stringify(config),
+			headers: confirmAuthentication ? { "X-Relay-Lifeline-Confirm": "change-management-auth" } : undefined,
     }, (value) => expectObjectArrays(value, "configSave", ["changedSections", "hotReloadSections", "restartSections"]));
   }
 
@@ -284,7 +391,45 @@ export class ApiClient {
   }
 
   resume() {
-    return this.request<{ paused: boolean }>("/control/resume", { method: "POST" });
+    return this.request<{ paused: boolean; mode: string }>("/control/resume", { method: "POST" });
+  }
+
+	drain() {
+		return this.request<{ mode: string; active: number }>("/control/drain", { method: "POST" });
+	}
+
+	maintenance() {
+		return this.request<{ mode: string; active: number }>("/control/maintenance", { method: "POST" });
+	}
+
+  previewUncertainResolution(id: string, action: UncertainResolutionAction) {
+    return this.request<UncertainPreview>(`/requests/${encodeURIComponent(id)}/uncertain/preview`, {
+      method: "POST", body: JSON.stringify({ action }),
+    }, (value) => expectUncertainPreview(value, "uncertainPreview"));
+  }
+
+  // 保留与接口路径一致的短方法名，兼容不同调用方。
+  previewUncertain(id: string, action: UncertainResolutionAction) {
+    return this.previewUncertainResolution(id, action);
+  }
+
+  previewUncertainDelivery(id: string, action: UncertainResolutionAction) {
+    return this.previewUncertainResolution(id, action);
+  }
+
+  resolveUncertain(id: string, input: UncertainResolutionInput): Promise<UncertainResolutionResponse>;
+  resolveUncertain(id: string, action: UncertainResolutionAction, confirmationToken: string, reason: string): Promise<UncertainResolutionResponse>;
+  resolveUncertain(id: string, inputOrAction: UncertainResolutionInput | UncertainResolutionAction, confirmationToken?: string, reason?: string) {
+    const input: UncertainResolutionInput = typeof inputOrAction === "string"
+      ? { action: inputOrAction, confirmationToken: confirmationToken || "", reason: reason || "" }
+      : inputOrAction;
+    return this.request<UncertainResolutionResponse>(`/requests/${encodeURIComponent(id)}/uncertain/resolve`, {
+      method: "POST", body: JSON.stringify(input),
+    }, (value) => expectObject(value, "uncertainResolution"));
+  }
+
+  resolveUncertainDelivery(id: string, input: UncertainResolutionInput) {
+    return this.resolveUncertain(id, input);
   }
 
   retry(id: string, allowUncertain = false) {
@@ -339,4 +484,5 @@ export class ApiClient {
   cancel(id: string) {
     return this.request<{ accepted: boolean }>(`/requests/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
+
 }

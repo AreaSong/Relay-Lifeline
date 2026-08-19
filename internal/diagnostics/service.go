@@ -8,13 +8,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strings"
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/disk"
 	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/sanitize"
 )
 
 type Check struct {
@@ -61,7 +63,7 @@ func (s *Service) Run(ctx context.Context, locales ...string) Report {
 		fallback = locales[1]
 	}
 	checks := []Check{passed("service", "diagnostic.service.name", "diagnostic.service.running", nil)}
-	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkAdminKey(), s.checkCapture(cfg), s.checkJournal(cfg))
+	checks = append(checks, s.checkConfig(cfg), s.checkConfigFile(), s.checkManagementAuthentication(cfg), s.checkCapture(cfg), s.checkJournal(cfg))
 	checks = append(checks, s.checkUpstream(ctx, cfg), s.checkCache(cfg), s.checkDisk(cfg))
 	healthy := true
 	for _, check := range checks {
@@ -120,17 +122,23 @@ func (s *Service) checkConfigFile() Check {
 	return passed("config_file", "diagnostic.config_file.name", "diagnostic.config_file.ready", nil)
 }
 
-func (s *Service) checkAdminKey() Check {
+func (s *Service) checkManagementAuthentication(cfg config.Config) Check {
+	if cfg.ManagementSecurity.OIDC.Enabled && strings.TrimSpace(os.Getenv("RELAY_LIFELINE_OIDC_CLIENT_SECRET")) == "" {
+		return failed("management_authentication", "diagnostic.management_authentication.name", "diagnostic.management_authentication.oidc_secret_missing", nil)
+	}
+	if !cfg.ManagementSecurity.LocalAccessEnabled {
+		return passed("management_authentication", "diagnostic.management_authentication.name", "diagnostic.management_authentication.oidc_ready", nil)
+	}
 	operator := os.Getenv("RELAY_LIFELINE_ADMIN_KEY")
 	viewer := os.Getenv("RELAY_LIFELINE_VIEWER_KEY")
 	sensitive := os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY")
 	if len(operator) < 24 || len(sensitive) < 24 || viewer != "" && len(viewer) < 24 {
-		return failed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.invalid", nil)
+		return failed("management_authentication", "diagnostic.admin_key.name", "diagnostic.admin_key.invalid", nil)
 	}
 	if operator == sensitive || viewer != "" && (viewer == operator || viewer == sensitive) {
-		return failed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.not_distinct", nil)
+		return failed("management_authentication", "diagnostic.admin_key.name", "diagnostic.admin_key.not_distinct", nil)
 	}
-	return passed("admin_key", "diagnostic.admin_key.name", "diagnostic.admin_key.valid", map[string]any{"ViewerConfigured": viewer != ""})
+	return passed("management_authentication", "diagnostic.admin_key.name", "diagnostic.admin_key.valid", map[string]any{"ViewerConfigured": viewer != "", "OIDCConfigured": cfg.ManagementSecurity.OIDC.Enabled})
 }
 
 func (s *Service) checkCapture(cfg config.Config) Check {
@@ -224,11 +232,10 @@ func (s *Service) checkDisk(cfg config.Config) Check {
 	if directory == "" {
 		directory = os.TempDir()
 	}
-	var stats syscall.Statfs_t
-	if err := syscall.Statfs(filepath.Clean(directory), &stats); err != nil {
+	available, err := disk.AvailableBytes(filepath.Clean(directory))
+	if err != nil {
 		return failed("disk", "diagnostic.disk.name", "diagnostic.disk.read_failed", nil)
 	}
-	available := int64(stats.Bavail) * int64(stats.Bsize)
 	if available < int64(cfg.Risk.MinimumFreeDisk) {
 		return failed("disk", "diagnostic.disk.name", "diagnostic.disk.low", map[string]any{"Minimum": config.FormatByteSize(int64(cfg.Risk.MinimumFreeDisk))})
 	}
@@ -236,22 +243,11 @@ func (s *Service) checkDisk(cfg config.Config) Check {
 }
 
 func RedactedConfig(cfg config.Config) config.Config {
-	cfg.Upstream.BaseURL = redactURL(cfg.Upstream.BaseURL)
+	cfg.Upstream.BaseURL = sanitize.URL(cfg.Upstream.BaseURL)
 	if cfg.Notifications.WebhookURL != "" {
 		cfg.Notifications.WebhookURL = "[configured]"
 	}
 	return cfg
-}
-
-func redactURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "[invalid-url]"
-	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
 }
 
 func passed(id, nameCode, messageCode string, details map[string]any) Check {

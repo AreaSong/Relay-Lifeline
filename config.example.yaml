@@ -1,11 +1,15 @@
-schema-version: 3
+schema-version: 5
 
 server:
   listen: "127.0.0.1:8318"
   admin-enabled: true
   config-backup-dir: ""
   read-header-timeout: "10s"
+  read-body-timeout: "60s"
+  idle-timeout: "90s"
+  downstream-write-idle-timeout: "30s"
   shutdown-timeout: "3m"
+  max-header-bytes: 1048576
   max-request-body: "32MiB"
 
 upstream:
@@ -14,12 +18,20 @@ upstream:
   response-header-timeout: "30s"
   response-body-idle-timeout: "90s"
 
+egress:
+  deny-private-networks: true
+  allowed-hosts:
+    - "cli-proxy-api"
+    # Add every explicitly approved webhook/telemetry/upstream hostname here.
+
 retry:
   enabled: true
   mode: "all-errors"
   min-interval: "60s"
   max-interval: "120s"
   max-attempts: 0
+  max-elapsed: "0s"
+  retry-after-cap: "10m"
   honor-retry-after: true
 
 stream:
@@ -41,6 +53,16 @@ history:
 observability:
   error-details: "safe"
   max-error-detail: "2KiB"
+  telemetry:
+    enabled: false
+    protocol: "grpc"
+    endpoint: "localhost:4317"
+    insecure: false
+    sample-ratio: 1
+    service-name: "relay-lifeline"
+    environment: "production"
+    export-timeout: "10s"
+    metric-interval: "60s"
 
 capture:
   enabled: false
@@ -81,6 +103,10 @@ notifications:
     - auth_errors
     - queue_pressure
     - disk_pressure
+    - governance_ledger_failed
+    - uncertain_delivery
+    - uncertain_slo_breach
+    - uncertain_resolved
 
 logging:
   level: "info"
@@ -106,14 +132,74 @@ lifecycle:
   track-uncertain-delivery: true
   preserve-idempotency-key: true
   generate-idempotency-key: false
+  allow-uncertain-retry: false
+  uncertain-resolution-target: "15m"
+  allow-cross-domain-failover: false
   max-request-duration: "0s"
   client-disconnect-policy: "cancel"
 
 management-security:
+  local-access-enabled: true
   login-failures-per-minute: 5
   login-cooldown: "30s"
   session-idle-timeout: "30m"
+  session-max-lifetime: "8h"
+  oidc:
+    enabled: false
+    issuer-url: ""
+    client-id: ""
+    redirect-url: ""
+    scopes: []
+    signing-algorithms: ["RS256"]
+    role-claim: "groups"
+    viewer-values: []
+    operator-values: []
+    sensitive-values: []
 
 metrics-export:
   enabled: false
   path: "/metrics"
+
+governance:
+  mode: "observe"
+  unknown-usage-policy: "observe"
+  max-concurrent: 0
+  requests-per-minute: 0
+  token-limit: 0
+  cost-limit-micros: 0
+  token-reservation: 0
+  cost-reservation-micros: 0
+  reservation-min-tokens: 256
+  reservation-max-tokens: 4096
+  reservation-min-cost-micros: 0
+  reservation-max-cost-micros: 0
+  soft-threshold-percent: 80
+  forecast-window: "1h"
+  budgets: []
+  prices: []
+
+slo:
+  enabled: true
+  availability-target: 0.99
+  recovery-latency-target: "30s"
+  window: "24h"
+
+traffic-policy:
+  enabled: false
+  mode: "observe"
+  rules: []
+  shadow:
+    enabled: false
+    target-id: "primary"
+    sample-percent: 0
+    max-concurrent: 1
+    max-request-body: "1MiB"
+    request-budget-per-hour: 0
+    cost-budget-micros-per-hour: 0
+    cost-reservation-micros: 1000
+    require-idempotency: true
+  adaptive:
+    enabled: false
+    error-budget-floor: 0.5
+    minimum-observations: 10
+    maximum-latency-milliseconds: 30000

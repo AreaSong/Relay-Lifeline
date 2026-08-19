@@ -14,7 +14,7 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`),
 	regexp.MustCompile(`(?i)https?://[^\s/:@]+:[^\s/@]+@[^\s]+`),
-	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|secret|password)(\s*[=:]\s*)[^\s,;&]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)(\s*[=:]\s*)[^\s,;&]+`),
 }
 
 func FilterBody(data []byte, contentType string) []byte {

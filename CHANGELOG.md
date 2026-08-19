@@ -4,12 +4,26 @@ All notable changes are documented here. This project follows Semantic Versionin
 
 ## [Unreleased]
 
+### Added
+
+- Add multi-dimensional governance budgets with adaptive reservations, soft-threshold forecasting, usage settlement, replay recovery, and fail-closed enforcement semantics.
+- Add journaled traffic-policy drafts, shadow/canary/full releases, adaptive routing guards, and request-level decision evidence.
+- Add uncertain-delivery evidence and two-phase operator resolution for abandon, confirmed success, and compensation retry workflows.
+- Add uncertain-delivery SLO, health, Prometheus, and notification signals plus responsive management workbench controls.
+- Add persistent policy-release reconciliation, orphaned-request recovery semantics, and journal verification/compaction runbooks.
+
+### Changed
+
+- Configuration schema is now version 5; traffic policies must use the draft/publish/rollback workflow instead of ordinary config saves.
+- Release promotion now smoke-tests an immutable commit image before creating semver tags and archive releases, including an N-1 upgrade/rollback check.
+- Document fail-closed governance ledger behavior, unknown-usage handling, shadow budgets, adaptive auto-stop guards, and explicit uncertain-delivery operator gates.
+
 ## [2.3.0] - 2026-08-19
 
 ### Added
 
 - Add decoded per-response and process-wide response-cache limits, continuous minimum-free-disk enforcement, and matching hot-reloadable settings.
-- Add schema 3 migration from schemas 1 and 2 with safe response-cache defaults.
+- Add schema 5 migration from schemas 1 through 4 with safe response-cache defaults.
 - Add endpoint-aware completion rules for non-streaming Responses and Chat Completions payloads.
 - Add execution limits, consecutive-failure circuit breaking, and bounded per-run audit records for continuous tasks.
 - Add Webhook health, queue metrics, bounded delivery history, and operator test delivery.

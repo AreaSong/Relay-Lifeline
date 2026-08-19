@@ -165,3 +165,46 @@ func TestPersistentTimelineMarksInterruptedRequestOrphaned(t *testing.T) {
 		t.Fatalf("orphaned 终态未持久化: %+v", record)
 	}
 }
+
+func TestPersistentTimelineProtectsActiveRequestDuringCompaction(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "requests.jsonl")
+	eventJournal, err := journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := func() Limits { return Limits{MaxItems: 10, Retention: time.Hour} }
+	store, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		eventJournal.Close()
+		t.Fatal(err)
+	}
+	if err := store.Start("active", "POST", "/v1/responses"); err != nil {
+		eventJournal.Close()
+		t.Fatal(err)
+	}
+	if _, err := eventJournal.CompactWithProtection(time.Now().Add(time.Hour), store.ActiveIDs()); err != nil {
+		eventJournal.Close()
+		t.Fatal(err)
+	}
+	if err := store.Add("active", Event{Type: "attempt_started", Attempt: 1}); err != nil {
+		eventJournal.Close()
+		t.Fatal(err)
+	}
+	if err := eventJournal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	eventJournal, err = journal.Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventJournal.Close()
+	recovered, err := NewPersistent(limits, eventJournal)
+	if err != nil {
+		t.Fatalf("压实后的 active 请求无法恢复: %v", err)
+	}
+	record, ok := recovered.Request("active")
+	if !ok || record.State != "orphaned" || len(record.Events) != 2 || record.Attempt != 1 {
+		t.Fatalf("压实后的 active 请求恢复异常: %+v", record)
+	}
+}

@@ -99,9 +99,63 @@ curl -fsS http://127.0.0.1:8318/readyz
 
 Readiness returns `503 unavailable` when an enabled request or incident journal is closed, unwritable, or has a recorded write failure. Prometheus exposes the `relay_lifeline_journal_*` gauges for entries, bytes, replay duration, latest compaction, and journal/compaction health.
 
+## Traffic-policy release runbook
+
+Use an Operator credential for every write below. Record the current desired `configRevision` before starting; a conflict means another change landed and the draft must be re-read, not forced.
+
+1. Inspect `GET /admin/api/config/state`, `GET /admin/api/policies`, `GET /admin/api/policies/releases`, `GET /admin/api/policies/status`, `GET /admin/api/slo`, and `GET /admin/api/health/summary`. Confirm the desired `configRevision`, upstream target IDs, current release stage, SLO health, and journal health.
+2. Save a candidate with `PUT /admin/api/policies/draft` and the previous `draftRevision` when editing an existing draft. Run `POST /admin/api/policies/simulate?source=draft` for representative method/path/model/principal inputs, then use `POST /admin/api/policies/replay` for a sanitized capture or request sample. Confirm `dryRun: true`, `enforced: false`, and that no upstream request was created.
+3. Publish `stage: shadow` first when the candidate has a shadow target. Watch `shadowPlanned`, `shadowSent`, `shadowSkipped`, `shadowFailed`, `shadowReservedCostMicros`, and `shadowActualCostMicros` in `/policies/status`; also verify that the primary target's circuit and adaptive counters do not change from shadow outcomes. Stop and roll back if shadow failure, skip, or cost behavior is outside the change window.
+4. Publish a bounded `stage: canary` with an explicit `canaryPercent` (1-100). Check recent decisions for stable request-ID bucketing: `canarySelected` must match the intended proportion, and only selected decisions in enforce mode may have `enforced: true` and a non-empty `targetId`. A request with `recommendedTargetId` but no `targetId` was not routed by the policy.
+5. Promote to `stage: full` only after the canary window meets the availability, recovery latency, error-budget, upstream circuit, and governance budgets. Keep the prior release revision available for rollback.
+
+For an urgent rollback, pause or drain new work if the blast radius is still growing, then call `POST /admin/api/policies/rollback` with the current `configRevision` and the known-good `policyRevision` from release history. Verify `/policies/releases`, `/policies/status`, `/config/state`, `/health/summary`, and one non-model connectivity request before resuming traffic. The rollback is itself journaled; do not edit `policy-releases.jsonl` by hand.
+
+Adaptive routing requires a separate watch. Review `adaptiveStopped`, `adaptiveStopReason`, `adaptiveSwitches`, `adaptiveLastTargetId`, and `adaptiveLastScore` together with `/slo` `errorBudgetRemaining` and `burnRate`. `slo_guard`, `burn_rate_guard`, `failure_rate_guard`, and `adaptive_auto_stopped` are stop signals, not transient target failures. A switch cooldown can intentionally keep the previous eligible target. Fix the underlying signal and publish a new policy revision to acknowledge an automatic stop; verify the fallback target and SLO before promotion.
+
+## Governance ledger runbook
+
+`GET /admin/api/governance/status` shows reservations, per-scope usage, reserved capacity, unknown usage, rejection reasons, and ledger state. `GET /admin/api/persistence/status`, `/health/summary`, `/readyz`, and Prometheus `relay_lifeline_governance_*` and `relay_lifeline_journal_*` metrics are the cross-checks.
+
+- In `governance.mode: enforce`, stop or drain new traffic when the usage ledger is `degraded` or `/readyz` is `503`. Admission, retry-attempt reservation, and settlement are fail-closed when a configured ledger cannot be written. Preserve the volume, check ownership/permissions, free space, and the failed stage, then restart only after `-journal-verify` succeeds on a stopped copy.
+- In `observe`, a ledger write failure is exposed as `persistenceDegraded` and the request path may continue. Treat this as a release-blocking incident if budgets are relied on for safety; changing to enforce without a tested ledger is unsafe.
+- For `unknownUsagePolicy: deny`, investigate non-zero `unknownUsage` entries before admitting more work in that budget window. An unknown settlement is recorded after bytes were written but authoritative usage was absent; it is not converted into an estimated token or cost value. Resolve the provider usage issue or wait for the window to roll over, then confirm the counters and reservations have settled.
+- Do not delete or truncate `usage-ledger.jsonl` to clear a budget. The ledger replays reservations and settlements on startup, reconciles interrupted reservations, and is compacted with active reservations protected by heartbeats.
+
+## Uncertain-delivery runbook
+
+An `uncertain` request means the gateway may have written bytes upstream but did not receive response headers. The default path blocks an automatic retry. Locate the Request ID in `/admin/api/status`, inspect `/admin/api/requests/{id}/timeline`, and compare the evidence with the provider audit before choosing an action.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/timeline"
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success"}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/preview"
+```
+
+The preview response is the evidence record and a two-minute, actor-bound confirmation token. Submit the token with a non-empty reason (maximum 500 Unicode characters) to `/uncertain/resolve`. Choose exactly one: `confirm_success` when the provider audit proves completion, `abandon` when the business operation should be treated as failed, or `request_compensation` when a retry is explicitly approved and the idempotency/charge risk is understood. A stale token, different action, different actor, or already-resolved request must be treated as a conflict. Do not reuse the token in scripts or logs.
+
+Monitor `/admin/api/health/summary`, `/admin/api/slo`, the `uncertain_slo_breach` Webhook, and `relay_lifeline_uncertain_open`, `relay_lifeline_uncertain_oldest_seconds`, and `relay_lifeline_uncertain_slo_healthy`. Resolve the oldest records before the configured resolution target; the health component becomes degraded after that target. `orphaned` is different: it is a request left unfinished across a restart and is retained for history only, never replayed.
+
+## Journal verification and recovery
+
+The persistence directory contains `requests.jsonl`, `incidents.jsonl`, `repeat-tasks.jsonl`, `usage-ledger.jsonl`, and `policy-releases.jsonl`. Each is a hash chain; `RELAY_LIFELINE_JOURNAL_HMAC_KEY` additionally protects the external `.anchor` file. Verify a stopped instance or a read-only copy:
+
+```bash
+for journal in requests incidents repeat-tasks usage-ledger policy-releases; do
+  relay-lifeline -journal-verify \
+    "/var/lib/relay-lifeline/events/${journal}.jsonl" || exit 1
+done
+relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
+```
+
+Startup refuses a malformed line, sequence gap, hash mismatch, or anchor mismatch. Keep the original volume unchanged for forensics; restore a known-good volume/config backup rather than removing a line or rebuilding a chain manually. Hourly compaction is atomic and re-hashes retained entries. Request and incident records beyond retention are removed, while active entities remain; policy prepared intents are finalized only when the active policy revision matches, and otherwise written as aborted. After recovery, check `/readyz`, `/admin/api/persistence/status`, `/admin/api/governance/status`, `/admin/api/policies/releases`, and the Prometheus compaction-health gauges before accepting traffic.
+
 ## Migration, recovery, and drills
 
-Run these commands against a stopped instance or a copy of its files. `-recovery-check` is read-only; `-config-migrate` first creates a mode-`0600` backup and then atomically writes schema 3. Schemas 1 and 2 are migratable; schema 3 adds hard response-cache limits.
+Run these commands against a stopped instance or a copy of its files. `-recovery-check` is read-only; `-config-migrate` first creates a mode-`0600` backup and then atomically writes schema 5. Schemas 1 through 4 are migratable; schema 5 adds OIDC management authentication while preserving local break-glass access for migrated configurations.
 
 ```bash
 relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
@@ -130,7 +184,7 @@ A forced process termination cannot preserve an existing TCP connection. OpenAI-
 
 Before upgrading, retain the old image and its matching configuration. After deployment, verify runtime metadata, all diagnostics, capture key resolution, role isolation, and a non-model connectivity request.
 
-To roll back, first point clients directly at CPA if immediate bypass is needed. Restore both the old image and its matching config, recreate the container, then verify health, version, diagnostics, and capture readability. An old binary may reject fields introduced by a newer config.
+To roll back, first point clients directly at CPA if immediate bypass is needed. Restore both the old image and its matching pre-migration config, recreate the container, then verify health, version, diagnostics, and capture readability. An old binary may reject fields introduced by a newer config; do not point it at a schema 5 file.
 
 Configuration writes retain the newest ten mode-`0600` backups. Encrypted captures persist across restarts and expire after 72 hours by default. Request and incident journals persist under `/var/lib/relay-lifeline/events`, are compacted hourly according to their retention settings, and must use a persistent volume. Metrics, operational events, and live runtime logs reset on restart.
 

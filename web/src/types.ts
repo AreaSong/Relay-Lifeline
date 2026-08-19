@@ -6,8 +6,12 @@ export interface Config {
     listen: string;
     adminEnabled: boolean;
     configBackupDir: string;
-    readHeaderTimeout: Duration;
-    shutdownTimeout: Duration;
+	  readHeaderTimeout: Duration;
+	  readBodyTimeout: Duration;
+	  idleTimeout: Duration;
+	  downstreamWriteIdleTimeout: Duration;
+	  shutdownTimeout: Duration;
+	  maxHeaderBytes: number;
     maxRequestBody: string;
   };
   upstream: {
@@ -16,12 +20,24 @@ export interface Config {
     responseHeaderTimeout: Duration;
     responseBodyIdleTimeout: Duration;
   };
+		upstreams: {
+		strategy: "primary-only" | "weighted-priority";
+			targets: Array<{ id: string; baseUrl: string; priority: number; weight: number; maxActive: number; idempotencyDomain: string; costMicrosPer1K: number; capabilityScore: number }>;
+		health: { mode: "" | "passive" };
+		circuit: { enabled: boolean; minimumRequests: number; failurePercent: number; openDuration: Duration; halfOpenMax: number };
+	};
+	egress: {
+		denyPrivateNetworks: boolean;
+		allowedHosts: string[];
+	};
   retry: {
     enabled: boolean;
     mode: "all-errors" | "transient-errors";
     minInterval: Duration;
     maxInterval: Duration;
-    maxAttempts: number;
+	    maxAttempts: number;
+	    maxElapsed: Duration;
+	    retryAfterCap: Duration;
     honorRetryAfter: boolean;
   };
   stream: {
@@ -43,6 +59,17 @@ export interface Config {
   observability: {
     errorDetails: "off" | "safe";
     maxErrorDetail: string;
+		telemetry: {
+			enabled: boolean;
+			protocol: "grpc" | "http/protobuf" | "stdout";
+			endpoint: string;
+			insecure: boolean;
+			sampleRatio: number;
+			serviceName: string;
+			environment: string;
+			exportTimeout: Duration;
+			metricInterval: Duration;
+		};
   };
   capture: {
     enabled: boolean;
@@ -97,22 +124,182 @@ export interface Config {
     retention: Duration;
     maxItems: number;
   };
-  lifecycle: {
-    trackUncertainDelivery: boolean;
-    preserveIdempotencyKey: boolean;
-    generateIdempotencyKey: boolean;
+	lifecycle: {
+	    trackUncertainDelivery: boolean;
+	    preserveIdempotencyKey: boolean;
+		generateIdempotencyKey: boolean;
+		allowUncertainRetry: boolean;
+		allowCrossDomainFailover: boolean;
+    uncertainResolutionTarget: Duration;
     maxRequestDuration: Duration;
     clientDisconnectPolicy: "cancel" | "finish-attempt";
   };
   managementSecurity: {
-    loginFailuresPerMinute: number;
+		localAccessEnabled: boolean;
+	    loginFailuresPerMinute: number;
     loginCooldown: Duration;
-    sessionIdleTimeout: Duration;
+	    sessionIdleTimeout: Duration;
+		sessionMaxLifetime: Duration;
+		oidc: {
+			enabled: boolean;
+			issuerUrl: string;
+			clientId: string;
+			redirectUrl: string;
+			scopes: string[];
+			signingAlgorithms: string[];
+			roleClaim: string;
+			viewerValues: string[];
+			operatorValues: string[];
+			sensitiveValues: string[];
+		};
   };
   metricsExport: {
     enabled: boolean;
     path: string;
   };
+		governance: {
+			mode: "observe" | "enforce";
+			unknownUsagePolicy: "observe" | "deny";
+			maxConcurrent: number;
+		requestsPerMinute: number;
+		tokenLimit: number;
+		costLimitMicros: number;
+		 tokenReservation: number;
+		costReservationMicros: number;
+		reservationMinTokens: number;
+		reservationMaxTokens: number;
+		reservationMinCostMicros: number;
+		reservationMaxCostMicros: number;
+		softThresholdPercent: number;
+		forecastWindow: Duration;
+		budgets: GovernanceBudgetConfig[];
+		prices: Array<{ model: string; inputMicrosPerToken: number; outputMicrosPerToken: number }>;
+	};
+	slo: {
+		enabled: boolean;
+		availabilityTarget: number;
+		recoveryLatencyTarget: Duration;
+		window: Duration;
+	};
+	trafficPolicy: {
+		enabled: boolean;
+		mode: "observe" | "enforce";
+		releaseStage: "draft" | "shadow" | "canary" | "full";
+		canaryPercent: number;
+		revision?: string;
+		rules: TrafficPolicyRule[];
+		shadow: {
+			enabled: boolean;
+			targetId: string;
+			samplePercent: number;
+			maxConcurrent: number;
+			maxRequestBody: string;
+			requestBudgetPerHour: number;
+			costBudgetMicrosPerHour: number;
+			costReservationMicros: number;
+			requireIdempotency: boolean;
+		};
+		adaptive: {
+			enabled: boolean;
+			errorBudgetFloor: number;
+			minimumObservations: number;
+			maximumLatencyMilliseconds: number;
+			latencyWeight: number;
+			errorRateWeight: number;
+			costWeight: number;
+			capabilityWeight: number;
+			switchCooldown: Duration;
+			fallbackTargetId: string;
+			autoStopBurnRate: number;
+			autoStopFailureRate: number;
+		};
+	};
+}
+
+export interface TrafficPolicyRule {
+	id: string;
+	enabled: boolean;
+	priority: number;
+	method: string;
+	pathPrefix: string;
+	model: string;
+	principalPrefix: string;
+	action: "route" | "deny";
+	targetId: string;
+}
+
+export interface PolicyInput {
+	method: string;
+	path: string;
+	model: string;
+	principal: string;
+	requestId?: string;
+	idempotencyKey?: string;
+	bodyBytes?: number;
+	sloHealthy?: boolean;
+	errorBudgetRemaining?: number;
+	errorBudgetBurnRate?: number;
+	targets?: Array<{ id: string; circuitState: string; observations: number; latencyMilliseconds: number; errorRate?: number; rateLimitRate?: number; costMicrosPer1K?: number; capabilityScore?: number }>;
+}
+
+export interface PolicyDecision {
+	id: number;
+	evaluatedAt: string;
+	dryRun: boolean;
+	enabled: boolean;
+	mode: string;
+	matchedRuleId?: string;
+	action: string;
+	targetId?: string;
+	denied: boolean;
+	enforced: boolean;
+	reason: string;
+	adaptive: boolean;
+	shadowTargetId?: string;
+	shadowEligible: boolean;
+	canarySelected: boolean;
+	fallback: boolean;
+	adaptiveScore?: number;
+	explanation?: string[];
+}
+
+export interface PolicyStatus {
+	enabled: boolean;
+	mode: string;
+	rules: number;
+	decisions: number;
+	denied: number;
+	routed: number;
+	adaptive: number;
+	shadowPlanned: number;
+	shadowActive: number;
+	shadowSent: number;
+	shadowSkipped: number;
+	shadowFailed: number;
+	shadowReservedCostMicros: number;
+	adaptiveStopped: boolean;
+	adaptiveStopReason?: string;
+	adaptiveSwitches: number;
+	adaptiveLastTargetId?: string;
+	adaptiveLastScore?: number;
+	recent: PolicyDecision[];
+}
+
+export interface PolicyReleaseRecord {
+	revision: string;
+	stage: "shadow" | "canary" | "full";
+	canaryPercent: number;
+	createdAt: string;
+	actor?: string;
+	policy: Config["trafficPolicy"];
+}
+
+export interface PolicyReleaseStatus {
+	currentRevision: string;
+	currentStage: string;
+	draftRevision?: string;
+	draft?: Config["trafficPolicy"];
+	history: PolicyReleaseRecord[];
 }
 
 export interface RuntimeInfo {
@@ -146,6 +333,12 @@ export interface SessionInfo {
   role: "viewer" | "operator" | "sensitive";
   capabilities: Array<"view" | "operate" | "sensitive">;
   csrfToken?: string;
+	authMethod?: "local" | "oidc" | "bearer";
+}
+
+export interface LoginOptions {
+	localEnabled: boolean;
+	oidc: { enabled: boolean; available: boolean };
 }
 
 export interface ConfigChangePlan {
@@ -154,11 +347,100 @@ export interface ConfigChangePlan {
   hotReloadSections: string[];
   restartSections: string[];
   restartRequired: boolean;
+	fields?: Array<{ path: string; applyMode: "hot" | "restart" }>;
 }
 
 export interface ConfigSaveResult extends ConfigChangePlan {
   saved: boolean;
   backupPath?: string;
+	activeRevision: string;
+	desiredRevision: string;
+}
+
+export interface ConfigRuntimeState {
+	active: Config;
+	desired: Config;
+	activeRevision: string;
+	desiredRevision: string;
+	pendingRestart: ConfigChangePlan;
+}
+
+export interface ConfigVersion {
+	name: string;
+	modifiedAt: string;
+	sizeBytes: number;
+	sha256?: string;
+	schemaVersion?: number;
+	valid: boolean;
+	error?: string;
+	diff: ConfigChangePlan;
+	applyPlan: ConfigChangePlan;
+}
+
+export interface UpstreamPoolStatus {
+	strategy: string;
+	targets: Array<{
+		target: Config["upstreams"]["targets"][number];
+		circuitState: "closed" | "open" | "half-open";
+		active: number;
+		failureCount: number;
+		successCount: number;
+		lastFailureAt?: string;
+		lastSuccessAt?: string;
+		lastLatencyMilliseconds?: number;
+		lastErrorClass?: string;
+			halfOpenLeases?: number;
+			errorRate: number;
+			rateLimitRate: number;
+	}>;
+}
+
+export interface GovernanceStatus {
+	mode: string;
+	unknownUsagePolicy: string;
+	principals: number;
+	reservations: number;
+	entries: Array<{ scope: string; key: string; principal: string; windowStarted: string; requests: number; active: number; tokens: number; costMicros: number; reservedTokens: number; reservedCostMicros: number; unknownUsage: number }>;
+	softThreshold: boolean;
+	estimatedExhaustionMinutes?: number;
+	counters: {
+		admitted: number;
+		rejected: Record<string, number>;
+		settlements: number;
+		knownSettlements: number;
+		unknownSettlements: number;
+		reconciled: number;
+		persistenceFailures: number;
+	};
+	ledger: {
+		enabled: boolean;
+		healthy: boolean;
+		state?: string;
+		failedAt?: string;
+		failedStage?: string;
+		failureCount?: number;
+	};
+}
+
+export interface GovernanceBudgetConfig {
+	scope: "principal" | "tenant" | "model" | "upstream" | string;
+	key: string;
+	maxConcurrent: number;
+	requestsPerMinute: number;
+	tokenLimit: number;
+	costLimitMicros: number;
+}
+
+export interface TelemetryStatus {
+	enabled: boolean;
+	protocol?: string;
+	healthy: boolean;
+	traceHealthy: boolean;
+	metricHealthy: boolean;
+	traceExportFailures: number;
+	metricExportFailures: number;
+	lastSuccessAt?: string;
+	lastFailureAt?: string;
 }
 
 export interface RequestInfo {
@@ -179,6 +461,62 @@ export interface RequestInfo {
   retryIntervalMilliseconds?: number;
   retryPolicy?: RetryPolicyInfo;
   actions?: RequestActions;
+	persistenceDegraded?: boolean;
+	persistencePending?: boolean;
+	uncertainSince?: string;
+	uncertainResolution?: string;
+	uncertainResolvedAt?: string;
+}
+
+/** Actions that settle an upstream attempt whose delivery result is unknown. */
+export type UncertainResolutionAction = "confirm_success" | "abandon" | "request_compensation";
+
+export interface UncertainAttemptEvidence {
+  attempt: number;
+  targetId?: string;
+  targetDomain?: string;
+  statusCode?: number;
+  category?: string;
+  attemptPhase?: string;
+  wroteRequest: boolean;
+  idempotencyKeyHash?: string;
+  requestBytes?: number;
+  latencyMilliseconds?: number;
+  upstreamRequestId?: string;
+}
+
+export interface UncertainEvidence {
+  requestId: string;
+  method: string;
+  path: string;
+  state: string;
+  attempt: number;
+  startedAt: string;
+  uncertainSince: string;
+  attempts: UncertainAttemptEvidence[];
+}
+
+export interface UncertainPreview {
+  confirmationToken: string;
+  expiresAt: string;
+  evidence: UncertainEvidence;
+}
+
+export interface UncertainResolutionInput {
+  action: UncertainResolutionAction;
+  confirmationToken: string;
+  reason: string;
+}
+
+export interface UncertainResolutionResponse {
+  accepted: boolean;
+  action: UncertainResolutionAction;
+  result?: {
+    id?: string;
+    outcome?: string;
+    reason?: string;
+    state?: string;
+  };
 }
 
 export type RetryScheduleMode = "inherit" | "immediate" | "fixed" | "random" | "exponential";
@@ -209,6 +547,7 @@ export interface RequestActions {
   canSetRetryPolicy: boolean;
   retryRequiresConfirmation: boolean;
   canCancel: boolean;
+  canRepeat: boolean;
 }
 
 export interface RetryPolicyInput {
@@ -289,6 +628,7 @@ export interface RepeatTask {
 
 export interface Status {
   paused: boolean;
+  mode: "running" | "paused" | "draining" | "maintenance" | string;
   active: number;
   queued: number;
   waiting: number;
@@ -296,12 +636,34 @@ export interface Status {
   totalRequests: number;
   successful: number;
   failedAttempts: number;
+	persistenceDegraded?: boolean;
+	persistencePending?: number;
   upstream: {
     state: "unknown" | "healthy" | "degraded";
     lastChecked?: string;
     lastError?: string;
   };
   requests: RequestInfo[];
+}
+
+export interface HealthComponent {
+  name: string;
+  state: string;
+  healthy: boolean;
+  details?: Record<string, unknown>;
+}
+
+export interface HealthSummary {
+  generatedAt: string;
+  overall: "healthy" | "degraded" | string;
+  components: HealthComponent[];
+  actions?: string[];
+}
+
+export interface SLOSnapshot {
+	window: string; availability: number; availabilityTarget: number;
+	recoveryLatencyMilliseconds: number; recoveryLatencyTargetMilliseconds: number;
+	errorBudget: number; errorBudgetRemaining: number; burnRate: number; healthy: boolean;
 }
 
 export interface TimelineEvent {
@@ -378,6 +740,13 @@ export interface HistoryPage {
 	hasMore: boolean;
 }
 
+export interface ListFilters {
+	q: string;
+	state: string;
+	from: string;
+	to: string;
+}
+
 export interface IncidentPage {
 	items: Incident[];
 	nextCursor?: string;
@@ -387,6 +756,17 @@ export interface IncidentPage {
 export interface IncidentDetail {
 	incident: Incident;
 	requests: HistoryRecord[];
+	timeline: Array<{
+		time: string;
+		type: string;
+		requestId?: string;
+		attempt?: number;
+		statusCode?: number;
+		category?: string;
+		message: string;
+		waitMilliseconds?: number;
+		attemptPhase?: string;
+	}>;
 	affectedRequestsTruncated: boolean;
 }
 
@@ -456,6 +836,10 @@ export interface CaptureStatus {
   storageBytes: number;
   maxTotalBytes: number;
   captureCount: number;
+	persistenceHealthy: boolean;
+	failureCount?: number;
+	failedStage?: string;
+	lastFailureAt?: string;
 }
 
 export interface CaptureKeyStatus {
@@ -532,6 +916,10 @@ export interface MetricsPoint {
   attempts: number;
   failedAttempts: number;
   recovered: number;
+  failovers: number;
+  uncertain: number;
+  persistenceFailures: number;
+  captureFailures: number;
   active: number;
   queued: number;
   waiting: number;
@@ -559,6 +947,10 @@ export interface MetricsSnapshot {
     attempts: number;
     failedAttempts: number;
     recovered: number;
+    failovers: number;
+    uncertain: number;
+    persistenceFailures: number;
+    captureFailures: number;
     successRate: number;
     averageRecoveryMilliseconds: number;
   };

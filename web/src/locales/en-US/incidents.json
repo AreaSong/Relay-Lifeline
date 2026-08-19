@@ -4,5 +4,7 @@
   "count": "{{count}} incidents",
   "empty": "No incidents have been recorded",
   "state": { "open": "Outage ongoing", "recovering": "Recovery observation", "resolved": "Stable recovery" },
-	"failedAttempts": "Failed attempts", "affectedRequests": "Affected requests", "lastFailure": "Last failure", "categories": "Error categories", "statusCodes": "HTTP status", "resolvedAt": "Stable recovery", "viewRequests": "View", "requestsUnavailable": "Related requests are outside the retained history window", "requestsTruncated": "Showing the first 100 related requests", "loadMore": "Load earlier incidents"
+	"filters": { "search": "Search incident or request ID", "state": "State", "allStates": "All states", "from": "From", "to": "To", "apply": "Apply filters", "reset": "Reset filters" },
+	"failedAttempts": "Failed attempts", "affectedRequests": "Affected requests", "lastFailure": "Last failure", "categories": "Error categories", "statusCodes": "HTTP status", "resolvedAt": "Stable recovery", "viewRequests": "View", "requestsUnavailable": "Related requests are outside the retained history window", "requestsTruncated": "Showing the first 100 related requests", "loadMore": "Load earlier incidents",
+	"timeline": { "title": "Incident timeline" }
 }

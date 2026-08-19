@@ -15,7 +15,7 @@ const repeatRequest = {
 function notificationConfig() {
 	const emptySection = new Proxy({}, { get: () => "" });
 	return new Proxy({
-		schemaVersion: 3,
+			schemaVersion: 5,
 		notifications: {
 			stalledAfter: "10m", notifyOnRecovery: true, webhookUrl: "https://example.test/hook",
 			deliveryAttempts: 3, deliveryBackoff: "5s", eventTypes: ["stalled"], locale: "en-US",
@@ -59,7 +59,7 @@ describe("critical management flows", () => {
       testNotification,
     } as unknown as ApiClient;
     const config = notificationConfig();
-    render(<SettingsView api={api} config={config} baseline={config} setConfig={vi.fn()} save={save} reload={vi.fn()} discard={vi.fn()} dirty busy={false} runtimeInfo={null} themeMode="system" setThemeMode={vi.fn()} />);
+		render(<SettingsView api={api} config={config} baseline={config} setConfig={vi.fn()} save={save} reload={vi.fn()} discard={vi.fn()} dirty busy={false} runtimeInfo={null} configState={null} canSensitive upstreamStatus={null} governanceStatus={null} telemetryStatus={null} confirm={vi.fn().mockResolvedValue(true)} themeMode="system" setThemeMode={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /Save/i }));
     expect(save).toHaveBeenCalledTimes(1);

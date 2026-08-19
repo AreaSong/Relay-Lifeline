@@ -34,7 +34,7 @@ curl -fsS http://127.0.0.1:8318/readyz
 
 ## 迁移、恢复检查与故障演练
 
-以下命令应针对已停止的实例或文件副本执行。`-recovery-check` 只读；`-config-migrate` 会先生成权限为 `0600` 的备份，再原子写入 schema 3。schema 1 和 2 均可迁移；schema 3 新增响应缓存硬上限。
+以下命令应针对已停止的实例或文件副本执行。`-recovery-check` 只读；`-config-migrate` 会先生成权限为 `0600` 的备份，再原子写入 schema 5。schema 1 至 4 均可迁移；schema 5 新增 OIDC 管理认证，并为迁移配置保留本地应急访问。
 
 ```bash
 relay-lifeline -config /etc/relay-lifeline/config.yaml -config-validate
@@ -188,6 +188,60 @@ relay-lifeline -config /etc/relay-lifeline/config.yaml -doctor
 relay-lifeline -journal-verify /var/lib/relay-lifeline/events/requests.jsonl
 ```
 
+## 流量策略发布 Runbook
+
+以下写操作都使用 Operator 凭据。开始前记录当前目标 `configRevision`；出现冲突表示已有其他变更落地，应重新读取草稿，不要强制覆盖。
+
+1. 检查 `GET /admin/api/config/state`、`GET /admin/api/policies`、`GET /admin/api/policies/releases`、`GET /admin/api/policies/status`、`GET /admin/api/slo` 和 `GET /admin/api/health/summary`，确认目标 `configRevision`、目标 ID、当前阶段、SLO 与 Journal 健康。
+2. 使用 `PUT /admin/api/policies/draft` 保存候选；编辑已有草稿时带上之前的 `draftRevision`。用 `POST /admin/api/policies/simulate?source=draft` 测试代表性的 method/path/model/principal，再用 `POST /admin/api/policies/replay` 重放脱敏捕获或请求样本。必须确认返回 `dryRun: true`、`enforced: false`，且没有产生上游请求。
+3. 候选有 Shadow 目标时先发布 `stage: shadow`。观察 `/policies/status` 的 `shadowPlanned`、`shadowSent`、`shadowSkipped`、`shadowFailed`、`shadowReservedCostMicros` 和 `shadowActualCostMicros`；同时确认 Shadow 结果没有改变主目标熔断器或自适应计数。失败、跳过或费用超出变更窗口时停止并回滚。
+4. 发布有界的 `stage: canary`，明确设置 `canaryPercent`（1-100）。检查最近决策的 Request ID 稳定分桶：`canarySelected` 应符合预期比例；只有 enforce 模式且被选中的决策才能出现 `enforced: true` 和非空 `targetId`。只有 `recommendedTargetId` 而没有 `targetId` 的决策没有实际改路由。
+5. 只有在 canary 窗口满足可用性、恢复延迟、错误预算、上游熔断和治理预算后，才提升到 `stage: full`。保留上一版本 release revision 以便回滚。
+
+紧急回滚时，如果影响面仍在扩大，先暂停或排空新请求，再用 release history 中的已知正常 `policyRevision` 和当前 `configRevision` 调用 `POST /admin/api/policies/rollback`。恢复后检查 `/policies/releases`、`/policies/status`、`/config/state`、`/health/summary`，并执行一次不消耗模型 Token 的连通性检查，再恢复流量。回滚本身也会写入 Journal，不要手工编辑 `policy-releases.jsonl`。
+
+自适应路由需要单独观察：将 `adaptiveStopped`、`adaptiveStopReason`、`adaptiveSwitches`、`adaptiveLastTargetId`、`adaptiveLastScore` 与 `/slo` 的 `errorBudgetRemaining`、`burnRate` 一起查看。`slo_guard`、`burn_rate_guard`、`failure_rate_guard` 和 `adaptive_auto_stopped` 是停止信号，不是普通目标瞬时错误；切换冷却期间保持上一个合格目标是预期行为。修复信号后发布新的策略 revision 才会确认自动停止；提升前必须核对 fallback 目标和 SLO。
+
+## Governance Ledger Runbook
+
+`GET /admin/api/governance/status` 返回预留、各作用域用量、已预留容量、未知用量、拒绝原因和 ledger 状态。用 `GET /admin/api/persistence/status`、`/health/summary`、`/readyz` 以及 Prometheus 的 `relay_lifeline_governance_*`、`relay_lifeline_journal_*` 指标交叉核对。
+
+- `governance.mode: enforce` 下，如果 usage ledger 为 `degraded` 或 `/readyz` 返回 `503`，应停止或排空新流量。配置的 ledger 无法写入时，admission、重试尝试预留和结算都会故障闭合。保留持久卷，检查所有者/权限、磁盘空间和失败阶段；停止实例后在副本上通过 `-journal-verify`，再重启。
+- `observe` 模式会以 `persistenceDegraded` 暴露 ledger 写失败，但请求链路可能继续。若预算承担安全职责，应把这视为阻断发布的事故；没有经过演练的 ledger 不应直接切换到 enforce。
+- `unknownUsagePolicy: deny` 下，先处理预算窗口中 `unknownUsage` 非零的条目。请求已写入但缺少权威 usage 时会记录未知结算，不会估算 Token 或费用；应修复上游 usage，或等待窗口滚动，再确认计数和预留已结清。
+- 不要通过删除或截断 `usage-ledger.jsonl` 清空预算。启动会重放预留/结算并对账中断预留，压实过程会用 heartbeat 保护活动预留。
+
+## Uncertain 交付处理 Runbook
+
+`uncertain` 表示网关可能已经向上游写入正文，但没有收到响应 Header；默认不会自动重试。先从 `/admin/api/status` 找到 Request ID，再查看 `/admin/api/requests/{id}/timeline`，将证据与上游审计记录比对后再决定动作。
+
+```bash
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/timeline"
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success"}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/preview"
+```
+
+预览返回证据和两分钟有效、绑定身份的确认 Token。向 `/uncertain/resolve` 提交 Token 时必须带非空原因（最多 500 个 Unicode 字符）。三选一：Provider 审计确认完成时使用 `confirm_success`；业务上应视为失败时使用 `abandon`；明确批准重试且已理解幂等/扣费风险时使用 `request_compensation`。过期 Token、不同动作、不同身份或已经处理的请求都应按冲突处理；不要把 Token 放入脚本或日志。
+
+持续观察 `/admin/api/health/summary`、`/admin/api/slo`、`uncertain_slo_breach` Webhook，以及 `relay_lifeline_uncertain_open`、`relay_lifeline_uncertain_oldest_seconds`、`relay_lifeline_uncertain_slo_healthy`。应在配置的处理目标前处理最老记录；超过目标后 health component 会降级。`orphaned` 不同于 `uncertain`：它是重启时未完成的旧请求，只保留历史，永不重放。
+
+## Journal 校验与恢复
+
+持久化目录包含 `requests.jsonl`、`incidents.jsonl`、`repeat-tasks.jsonl`、`usage-ledger.jsonl` 和 `policy-releases.jsonl`。它们都是哈希链；配置 `RELAY_LIFELINE_JOURNAL_HMAC_KEY` 后还会保护外部 `.anchor` 文件。应在停止实例或只读副本上校验：
+
+```bash
+for journal in requests incidents repeat-tasks usage-ledger policy-releases; do
+  relay-lifeline -journal-verify \
+    "/var/lib/relay-lifeline/events/${journal}.jsonl" || exit 1
+done
+relay-lifeline -config /etc/relay-lifeline/config.yaml -recovery-check
+```
+
+启动会拒绝格式错误、序号缺口、哈希不匹配或锚点不匹配。保留原始卷用于取证；应恢复已知正常的卷/配置备份，不要删除某一行或手工重建链。每小时压实是原子的，会重新计算保留条目的哈希；超出保留期的请求/事故会清理，活动实体会保留。策略 prepare 只有在活动策略 revision 匹配时才 finalize，否则写为 abort。恢复后，在接收流量前检查 `/readyz`、`/admin/api/persistence/status`、`/admin/api/governance/status`、`/admin/api/policies/releases` 和 Prometheus 压实健康指标。
+
 ## 重启与排空
 
 Compose 的 `stop_grace_period` 应大于 `server.shutdown-timeout`。收到退出信号后，服务停止接收新连接、把等待中的请求唤醒为一次立即重试，并同步等待活动 Handler 排空。
@@ -219,7 +273,7 @@ curl -fsS http://127.0.0.1:8318/healthz
 3. 同时恢复旧镜像和该版本对应的配置备份。
 4. 重建容器并检查健康、版本、诊断和捕获可读性。
 
-旧版本可能拒绝新字段，因此不能只回滚镜像而保留更新后的配置。配置保存操作会创建最多 10 份 `0600` 回滚副本。
+旧版本可能拒绝新字段，因此不能只回滚镜像而保留更新后的配置；必须恢复迁移前配置，不能让旧二进制读取 schema 5 文件。配置保存操作会创建最多 10 份 `0600` 回滚副本。
 
 ## 数据与保留
 

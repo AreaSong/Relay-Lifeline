@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,38 @@ func TestConfigValidatesSafeErrorDetailSettings(t *testing.T) {
 	cfg.Observability.MaxErrorDetail = 128
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("应拒绝过小的错误详情上限")
+	}
+}
+
+func TestConfigValidatesTelemetrySettings(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		set  func(*TelemetryConfig)
+	}{
+		{name: "unknown protocol", set: func(cfg *TelemetryConfig) { cfg.Protocol = "zipkin" }},
+		{name: "missing endpoint", set: func(cfg *TelemetryConfig) { cfg.Enabled, cfg.Endpoint = true, "" }},
+		{name: "invalid ratio", set: func(cfg *TelemetryConfig) { cfg.SampleRatio = 1.1 }},
+		{name: "http endpoint without scheme", set: func(cfg *TelemetryConfig) {
+			cfg.Enabled, cfg.Protocol, cfg.Endpoint = true, "http/protobuf", "collector:4318"
+		}},
+		{name: "grpc endpoint with scheme", set: func(cfg *TelemetryConfig) {
+			cfg.Enabled, cfg.Protocol, cfg.Endpoint = true, "grpc", "https://collector:4317"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			test.set(&cfg.Observability.Telemetry)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("应拒绝无效 telemetry 配置")
+			}
+		})
+	}
+	cfg := Default()
+	cfg.Observability.Telemetry.Enabled = true
+	cfg.Observability.Telemetry.Protocol = "http/protobuf"
+	cfg.Observability.Telemetry.Endpoint = "https://collector.example.test/v1/otlp"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("合法 telemetry 配置被拒绝: %v", err)
 	}
 }
 
@@ -162,6 +195,61 @@ func TestMigrateSchema2AddsResponseCacheLimits(t *testing.T) {
 	}
 }
 
+func TestMigrateSchema4EnablesCompatibleLocalAuthentication(t *testing.T) {
+	cfg := Default()
+	cfg.SchemaVersion = 4
+	cfg.ManagementSecurity = ManagementSecurityConfig{
+		LoginFailuresPerMinute: 5,
+		LoginCooldown:          duration(30 * time.Second),
+		SessionIdleTimeout:     duration(30 * time.Minute),
+	}
+	migrated, err := Migrate(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !migrated.ManagementSecurity.LocalAccessEnabled || migrated.ManagementSecurity.SessionMaxLifetime.Duration != 8*time.Hour || migrated.ManagementSecurity.OIDC.Enabled {
+		t.Fatalf("schema 4 认证迁移未保持本地访问兼容: %+v", migrated.ManagementSecurity)
+	}
+}
+
+func TestOIDCConfigurationValidationAndRestartPlan(t *testing.T) {
+	valid := Default()
+	valid.ManagementSecurity.OIDC = OIDCConfig{
+		Enabled: true, IssuerURL: "https://id.example.test", ClientID: "relay-lifeline",
+		RedirectURL: "https://relay.example.test/admin/api/session/oidc/callback",
+		RoleClaim:   "groups", SigningAlgorithms: []string{"RS256"}, ViewerValues: []string{"relay-viewers"}, OperatorValues: []string{"relay-operators"},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("有效 OIDC 配置被拒绝: %v", err)
+	}
+	plan := PlanChanges(Default(), valid)
+	if !plan.RestartRequired || !slices.Contains(plan.RestartSections, "management-security") {
+		t.Fatalf("OIDC 权限配置应要求重启: %+v", plan)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{name: "不安全 issuer", edit: func(cfg *Config) { cfg.ManagementSecurity.OIDC.IssuerURL = "http://id.example.test" }},
+		{name: "开放重定向路径", edit: func(cfg *Config) { cfg.ManagementSecurity.OIDC.RedirectURL = "https://relay.example.test/callback" }},
+		{name: "角色映射重叠", edit: func(cfg *Config) { cfg.ManagementSecurity.OIDC.OperatorValues = []string{"relay-viewers"} }},
+		{name: "无认证机制", edit: func(cfg *Config) {
+			cfg.ManagementSecurity.LocalAccessEnabled = false
+			cfg.ManagementSecurity.OIDC.Enabled = false
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := valid
+			test.edit(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("应拒绝不安全的管理认证配置")
+			}
+		})
+	}
+}
+
 func TestConfigValidatesResponseCacheLimits(t *testing.T) {
 	cfg := Default()
 	cfg.Stream.MaxResponseBody = cfg.Stream.MemoryLimit - 1
@@ -204,8 +292,10 @@ func TestPlanChangesSeparatesHotReloadAndRestartSections(t *testing.T) {
 
 	after.Upstream.BaseURL = "http://127.0.0.1:8317"
 	after.Capture.StorageDir = filepath.Join(t.TempDir(), "captures")
+	after.Observability.Telemetry.Enabled = true
+	after.Observability.Telemetry.Endpoint = "collector:4317"
 	plan = PlanChanges(before, after)
-	if !plan.RestartRequired || !slices.Contains(plan.RestartSections, "upstream") || !slices.Contains(plan.RestartSections, "capture") {
+	if !plan.RestartRequired || !slices.Contains(plan.HotReloadSections, "upstream") || !slices.Contains(plan.RestartSections, "capture") || !slices.Contains(plan.RestartSections, "observability") {
 		t.Fatalf("重启分类异常: %+v", plan)
 	}
 }
@@ -249,4 +339,68 @@ func TestStoreBacksUpConfigurationWithRestrictedPermissionsAndRetention(t *testi
 			t.Fatalf("备份权限异常: %s mode=%v err=%v", entry.Name(), info.Mode().Perm(), statErr)
 		}
 	}
+}
+
+func TestStorePublishesHotUpstreamConfiguration(t *testing.T) {
+	cfg := Default()
+	store := NewStore("", cfg)
+	updates := make(chan Config, 1)
+	unsubscribe := store.Subscribe(func(next Config) { updates <- next })
+	defer unsubscribe()
+	next := cfg
+	next.Upstreams = UpstreamPoolConfig{
+		Strategy: "weighted-priority",
+		Targets:  []UpstreamTargetConfig{{ID: "secondary", BaseURL: "https://relay.example.test", Weight: 1, IdempotencyDomain: "shared"}},
+		Health:   cfg.Upstreams.Health, Circuit: cfg.Upstreams.Circuit,
+	}
+	result, err := store.UpdateWithResult(next, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PendingRestart.RestartRequired || store.Get().Upstreams.Targets[0].ID != "secondary" {
+		t.Fatalf("多上游配置应热更新: %+v", result)
+	}
+	select {
+	case published := <-updates:
+		if published.Upstreams.Targets[0].ID != "secondary" {
+			t.Fatalf("订阅者收到错误配置: %+v", published.Upstreams)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("配置提交未通知运行时订阅者")
+	}
+}
+
+func TestPlanChangesTreatsNilAndEmptyOIDCListsAsEquivalent(t *testing.T) {
+	before := Default()
+	after := cloneConfig(before)
+	after.ManagementSecurity.OIDC.Scopes = []string{}
+	after.ManagementSecurity.OIDC.ViewerValues = []string{}
+	plan := PlanChanges(before, after)
+	if planChanges := fieldPaths(plan.Fields); len(planChanges) != 0 || len(plan.ChangedSections) != 0 {
+		t.Fatalf("OIDC 空列表不应触发认证变更: %+v", plan)
+	}
+}
+
+func TestStoreUpdateWithResultIfRevisionRejectsStaleWriter(t *testing.T) {
+	cfg := Default()
+	store := NewStore("", cfg)
+	stale := store.State().DesiredRevision
+	next := cfg
+	next.Queue.MaxWaiting++
+	if _, err := store.UpdateWithResult(next, false); err != nil {
+		t.Fatal(err)
+	}
+	other := store.Get()
+	other.Queue.MaxActive++
+	if _, err := store.UpdateWithResultIfRevision(other, false, stale); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("stale config writer was not rejected: %v", err)
+	}
+}
+
+func fieldPaths(fields []FieldChange) []string {
+	paths := make([]string, len(fields))
+	for index, field := range fields {
+		paths[index] = field.Path
+	}
+	return paths
 }

@@ -7,6 +7,7 @@
   "started": "Diagnostic capture started",
   "stopped": "Diagnostic capture stopped",
   "unavailable": "Capture service is unavailable",
+  "persistenceDegraded": "Capture persistence is degraded at {{stage}} ({{count}} failures). New metadata is retained only after a confirmed disk commit.",
   "requestLimit": "Requests to capture",
   "timeout": "Activation window",
   "minutes": "minutes",
@@ -25,6 +26,10 @@
   "rawConfirm": "Raw content may include prompts, model output, and personal data. Download the unfiltered sensitive content?",
   "rawConfirmTitle": "Download sensitive raw content?",
   "downloaded": "Capture download started",
+  "cleanupExpired": "Clean expired",
+  "cleanupConfirmTitle": "Clean expired captures?",
+  "cleanupConfirm": "Delete every capture whose retention window has ended. This cannot be undone.",
+  "cleanedExpired": "Deleted {{count}} expired captures",
   "delete": "Delete capture",
   "deleteConfirm": "Permanently delete this encrypted capture?",
   "deleteConfirmTitle": "Permanently delete capture?",
@@ -44,6 +49,7 @@
     "rewrap": "Rewrap with active key",
     "rewrapConfirm": "Rewrap every capture data key with the active key. Continue?",
     "rewrapConfirmTitle": "Rotate capture wrapping keys?",
-    "rewrapped": "Rewrapped {{count}} capture records"
+    "rewrapped": "Rewrapped {{count}} capture records",
+    "unresolvedWarning": "{{count}} capture records cannot be decrypted with configured keys. Preserve the old key before deleting them."
   }
 }

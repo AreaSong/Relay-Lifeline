@@ -3,6 +3,7 @@ package recovery
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,8 @@ import (
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/journal"
 )
+
+var ErrConfigBackupNotFound = errors.New("configuration backup not found")
 
 type ConfigBackup struct {
 	Name          string    `json:"name"`
@@ -46,6 +49,8 @@ func Verify(configPath string, cfg config.Config) Report {
 		checks = append(checks,
 			verifyJournal("requests_journal", filepath.Join(cfg.Persistence.Directory, "requests.jsonl")),
 			verifyJournal("incidents_journal", filepath.Join(cfg.Persistence.Directory, "incidents.jsonl")),
+			verifyJournal("repeat-tasks_journal", filepath.Join(cfg.Persistence.Directory, "repeat-tasks.jsonl")),
+			verifyJournal("usage-ledger_journal", filepath.Join(cfg.Persistence.Directory, "usage-ledger.jsonl")),
 		)
 	}
 	checks = append(checks, verifyDirectory("capture_storage", cfg.Capture.StorageDir))
@@ -102,6 +107,43 @@ func ConfigBackups(configPath, configuredDirectory string) ([]ConfigBackup, erro
 	}
 	sort.Slice(backups, func(i, j int) bool { return backups[i].Name > backups[j].Name })
 	return backups, nil
+}
+
+// LoadConfigBackup resolves only regular files returned by ConfigBackups.
+// Callers receive parsed configuration and metadata, never an unchecked path.
+func LoadConfigBackup(configPath, configuredDirectory, name string) (ConfigBackup, config.Config, error) {
+	if filepath.Base(name) != name || !strings.HasPrefix(name, "config-") || filepath.Ext(name) != ".yaml" {
+		return ConfigBackup{}, config.Config{}, ErrConfigBackupNotFound
+	}
+	backups, err := ConfigBackups(configPath, configuredDirectory)
+	if err != nil {
+		return ConfigBackup{}, config.Config{}, err
+	}
+	var metadata ConfigBackup
+	found := false
+	for _, item := range backups {
+		if item.Name == name {
+			metadata, found = item, true
+			break
+		}
+	}
+	if !found || !metadata.Valid {
+		return metadata, config.Config{}, ErrConfigBackupNotFound
+	}
+	directory := configuredDirectory
+	if directory == "" {
+		directory = filepath.Join(filepath.Dir(configPath), ".relay-lifeline-backups")
+	}
+	path := filepath.Join(directory, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return metadata, config.Config{}, ErrConfigBackupNotFound
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return metadata, config.Config{}, err
+	}
+	return metadata, cfg, nil
 }
 
 func verifyConfig(name, path string) Check {

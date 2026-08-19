@@ -22,6 +22,12 @@
     "INVALID_REPEAT_TASK": "Invalid continuous task settings",
     "REPEAT_TASK_NOT_FOUND": "Active request or continuous task not found",
     "REPEAT_TASK_EXISTS": "This request already has an active continuous task",
-    "REPEAT_UNAVAILABLE": "Continuous task service is unavailable"
+    "REPEAT_UNAVAILABLE": "Continuous task service is unavailable",
+    "INVALID_UNCERTAIN_ACTION": "Choose a supported uncertain-delivery action and provide a reason",
+    "UNCERTAIN_STATE_CONFLICT": "This request is no longer awaiting uncertain-delivery resolution",
+    "UNCERTAIN_CONFIRMATION_INVALID": "The uncertain-delivery confirmation is invalid or already used",
+    "UNCERTAIN_CONFIRMATION_EXPIRED": "The uncertain-delivery confirmation expired; inspect fresh evidence and try again",
+    "CONFIRMATION_UNAVAILABLE": "A confirmation token could not be issued",
+    "UNCERTAIN_RESOLUTION_REQUIRED": "Resolve uncertain delivery before taking another request action"
   }
 }

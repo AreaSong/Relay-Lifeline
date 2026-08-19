@@ -50,6 +50,18 @@ func TestStoreAggregatesMinuteMetricsErrorsAndRecovery(t *testing.T) {
 	}
 }
 
+func TestSLOCalculatesAvailabilityBudgetAndBurnRate(t *testing.T) {
+	s := New()
+	s.RecordReceived()
+	s.RecordFinal("successful")
+	s.RecordReceived()
+	s.RecordFinal("failed")
+	slo := s.SLO(time.Hour, 0.99, 30*time.Second)
+	if slo.Availability != 0.5 || slo.ErrorBudgetRemaining != 0 || slo.BurnRate < 49.9 || slo.BurnRate > 50.1 || slo.Healthy {
+		t.Fatalf("unexpected SLO: %+v", slo)
+	}
+}
+
 func TestStoreRetainsExactly1440UTCMinuteBuckets(t *testing.T) {
 	current := time.Date(2026, 7, 27, 0, 0, 10, 0, time.FixedZone("UTC+8", 8*60*60))
 	store := New()
@@ -101,13 +113,26 @@ func TestUnknownErrorCategoryIsBoundedToHTTP(t *testing.T) {
 
 func TestStoreRecordsEveryTerminalOutcome(t *testing.T) {
 	store := New()
-	for _, outcome := range []string{"successful", "failed", "canceled", "rejected"} {
+	for _, outcome := range []string{"successful", "failed", "canceled", "rejected", "expired"} {
 		store.RecordReceived()
 		store.RecordFinal(outcome)
 	}
 	totals := store.Metrics(15 * time.Minute).Totals
-	if totals.Requests != 4 || totals.Successful != 1 || totals.Failed != 1 || totals.Canceled != 1 || totals.Rejected != 1 {
+	if totals.Requests != 5 || totals.Successful != 1 || totals.Failed != 1 || totals.Canceled != 1 || totals.Rejected != 1 || totals.Expired != 1 {
 		t.Fatalf("终态计数异常: %+v", totals)
+	}
+}
+
+func TestStoreRecordsReliabilityCounters(t *testing.T) {
+	store := New()
+	store.RecordFailover()
+	store.RecordUncertain()
+	store.RecordPersistenceFailure()
+	store.RecordCaptureFailure()
+
+	totals := store.Metrics(15 * time.Minute).Totals
+	if totals.Failovers != 1 || totals.Uncertain != 1 || totals.PersistenceFailures != 1 || totals.CaptureFailures != 1 {
+		t.Fatalf("可靠性计数异常: %+v", totals)
 	}
 }
 

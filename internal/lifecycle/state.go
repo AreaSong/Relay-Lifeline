@@ -5,20 +5,22 @@ import "fmt"
 type State string
 
 const (
-	StateReceived   State = "received"
-	StateQueued     State = "queued"
-	StateForwarding State = "requesting"
-	StateUncertain  State = "uncertain"
-	StateWaiting    State = "waiting"
-	StateBuffering  State = "buffering"
-	StateDelivering State = "delivering"
-	StateCompleted  State = "completed"
-	StateSuccessful State = "successful"
-	StateFailed     State = "failed"
-	StateCanceled   State = "canceled"
-	StateRejected   State = "rejected"
-	StateExpired    State = "expired"
-	StateOrphaned   State = "orphaned"
+	StateReceived         State = "received"
+	StateQueued           State = "queued"
+	StateForwarding       State = "requesting"
+	StateUncertain        State = "uncertain"
+	StateWaiting          State = "waiting"
+	StateBuffering        State = "buffering"
+	StateDelivering       State = "delivering"
+	StateCompleted        State = "completed"
+	StateSuccessful       State = "successful"
+	StateFailed           State = "failed"
+	StateCanceled         State = "canceled"
+	StateRejected         State = "rejected"
+	StateExpired          State = "expired"
+	StateOrphaned         State = "orphaned"
+	StateConfirmedSuccess State = "confirmed_success"
+	StateAbandoned        State = "abandoned"
 )
 
 type AttemptPhase string
@@ -37,7 +39,7 @@ var transitions = map[State]map[State]bool{
 	StateReceived:   allow(StateQueued, StateRejected, StateCanceled, StateExpired),
 	StateQueued:     allow(StateForwarding, StateRejected, StateCanceled, StateExpired),
 	StateForwarding: allow(StateBuffering, StateUncertain, StateWaiting, StateCanceled, StateFailed, StateExpired),
-	StateUncertain:  allow(StateWaiting, StateCanceled, StateFailed, StateExpired),
+	StateUncertain:  allow(StateWaiting, StateCanceled, StateFailed, StateExpired, StateConfirmedSuccess, StateAbandoned),
 	StateWaiting:    allow(StateForwarding, StateCanceled, StateFailed, StateExpired),
 	StateBuffering:  allow(StateDelivering, StateWaiting, StateCanceled, StateFailed, StateExpired),
 	StateDelivering: allow(StateCompleted, StateCanceled, StateFailed, StateExpired),
@@ -64,7 +66,7 @@ func ValidateTransition(from, to State) error {
 
 func IsTerminal(state State) bool {
 	switch state {
-	case StateSuccessful, StateFailed, StateCanceled, StateRejected, StateExpired, StateOrphaned:
+	case StateSuccessful, StateFailed, StateCanceled, StateRejected, StateExpired, StateOrphaned, StateConfirmedSuccess, StateAbandoned:
 		return true
 	default:
 		return false

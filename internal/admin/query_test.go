@@ -58,3 +58,18 @@ func TestListQueryRejectsInvalidCursorAndRange(t *testing.T) {
 		t.Fatal("应拒绝反向时间范围")
 	}
 }
+
+func TestBuildIncidentTimelineMergesLifecycleAndRequestEvents(t *testing.T) {
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	recovery, resolved := base.Add(3*time.Minute), base.Add(4*time.Minute)
+	item := incident.Incident{ID: "incident", StartedAt: base, RecoveryStarted: &recovery, ResolvedAt: &resolved}
+	records := []timeline.Record{{ID: "request", Events: []timeline.Event{
+		{Time: base.Add(-time.Second), Type: "before", Message: "skip"},
+		{Time: base.Add(time.Minute), Type: "attempt_failed", Attempt: 1, StatusCode: 503, Message: "failed"},
+		{Time: resolved.Add(time.Second), Type: "after", Message: "skip"},
+	}}}
+	events := buildIncidentTimeline(item, records, func(value string) string { return value })
+	if len(events) != 4 || events[0].Type != "incident_opened" || events[1].RequestID != "request" || events[2].Type != "incident_recovering" || events[3].Type != "incident_resolved" {
+		t.Fatalf("事故时间线异常: %+v", events)
+	}
+}

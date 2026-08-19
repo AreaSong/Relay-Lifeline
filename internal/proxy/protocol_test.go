@@ -35,6 +35,8 @@ func TestValidateEventStreamCompletionMatrix(t *testing.T) {
 		{name: "Chat Completions 不接受 Responses 标记", content: "data: {\"type\":\"response.completed\"}\n\n"},
 		{name: "Responses 失败", content: "data: {\"type\":\"response.failed\"}\n\n"},
 		{name: "Responses 不完整", content: "data: {\"type\":\"response.incomplete\"}\n\n"},
+		{name: "Responses 多行完成", content: "data: {\"type\":\ndata: \"response.completed\"}\n\n", success: true},
+		{name: "Responses 损坏事件后完成", content: "data: not-json\n\ndata: {\"type\":\"response.completed\"}\n\n"},
 		{name: "流被截断", content: "data: {\"type\":\"response.output_text.delta\"}\n\n"},
 	}
 

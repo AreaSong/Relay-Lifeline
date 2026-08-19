@@ -143,7 +143,7 @@ func (h *Handler) realtimeSnapshot(locale, fallback string) streamSnapshot {
 		repeats = h.repeater.List()
 	}
 	return streamSnapshot{
-		Status: h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback),
+		Status: h.statusSnapshot(locale, fallback),
 		Alerts: risk.Localize(h.risk.Recent(100), locale, fallback), Incidents: incidents, Metrics: metrics, Repeats: repeats,
 	}
 }

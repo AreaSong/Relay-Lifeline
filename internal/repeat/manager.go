@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"github.com/areasong/relay-lifeline/internal/journal"
+	"github.com/areasong/relay-lifeline/internal/sanitize"
 )
 
 const journalSnapshot = "repeat.snapshot"
 const maxExecutionAudit = 100
 
 var (
-	ErrSourceNotFound = errors.New("active request source not found")
-	ErrTaskNotFound   = errors.New("repeat task not found")
-	ErrTaskExists     = errors.New("active repeat task already exists")
-	ErrInvalidInput   = errors.New("invalid repeat task input")
+	ErrSourceNotFound         = errors.New("active request source not found")
+	ErrTaskNotFound           = errors.New("repeat task not found")
+	ErrTaskExists             = errors.New("active repeat task already exists")
+	ErrInvalidInput           = errors.New("invalid repeat task input")
+	ErrPersistenceUnavailable = errors.New("repeat task persistence unavailable")
 )
 
 type State string
@@ -120,13 +122,14 @@ type runtimeTask struct {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	sources  map[string]Template
-	tasks    map[string]*runtimeTask
-	journal  *journal.Store
-	executor Executor
-	closed   bool
-	now      func() time.Time
+	mu         sync.RWMutex
+	sources    map[string]Template
+	tasks      map[string]*runtimeTask
+	journal    *journal.Store
+	executor   Executor
+	closed     bool
+	now        func() time.Time
+	persistErr error
 }
 
 func New(eventJournal *journal.Store, executor Executor) (*Manager, error) {
@@ -172,7 +175,7 @@ func (m *Manager) Create(sourceID string, input CreateInput) (Task, error) {
 	id := newID()
 	ctx, cancel := context.WithCancel(context.Background())
 	task := Task{
-		ID: id, SourceRequestID: sourceID, Method: template.Method, Path: template.Path,
+		ID: id, SourceRequestID: sourceID, Method: template.Method, Path: sanitize.URL(template.Path),
 		State: StateRunning, Idempotency: input.Idempotency,
 		IntervalMilliseconds: input.Interval.Milliseconds(), DurationMilliseconds: input.Duration.Milliseconds(),
 		StartedAt: now, NextRunAt: now, MaxExecutions: input.MaxExecutions, MaxFailures: input.MaxFailures, FailureThreshold: input.FailureThreshold, MaxTokens: input.MaxTokens,
@@ -220,6 +223,12 @@ func (m *Manager) List() []Task {
 	return result
 }
 
+func (m *Manager) PersistenceError() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.persistErr
+}
+
 func (m *Manager) Pause(id string) (Task, error) {
 	return m.changeState(id, StatePaused)
 }
@@ -231,6 +240,7 @@ func (m *Manager) Resume(id string) (Task, error) {
 	if !ok || terminal(runtime.task.State) {
 		return Task{}, ErrTaskNotFound
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.State = StateRunning
 	runtime.task.CircuitOpen = false
 	runtime.task.ConsecutiveFailures = 0
@@ -238,6 +248,7 @@ func (m *Manager) Resume(id string) (Task, error) {
 	runtime.task.TokenUsageMissing = false
 	runtime.task.NextRunAt = m.now()
 	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
 		return Task{}, err
 	}
 	signal(runtime.wake)
@@ -251,6 +262,7 @@ func (m *Manager) changeState(id string, state State) (Task, error) {
 	if !ok || terminal(runtime.task.State) {
 		return Task{}, ErrTaskNotFound
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.State = state
 	if state == StateRunning {
 		runtime.task.NextRunAt = m.now()
@@ -258,6 +270,7 @@ func (m *Manager) changeState(id string, state State) (Task, error) {
 		runtime.task.NextRunAt = time.Time{}
 	}
 	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
 		return Task{}, err
 	}
 	signal(runtime.wake)
@@ -271,10 +284,12 @@ func (m *Manager) RunNow(id string) (Task, error) {
 	if !ok || terminal(runtime.task.State) {
 		return Task{}, ErrTaskNotFound
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.State = StateRunning
 	runtime.task.NextRunAt = m.now()
 	runtime.task.TokenUsageMissing = false
 	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
 		return Task{}, err
 	}
 	signal(runtime.wake)
@@ -288,14 +303,16 @@ func (m *Manager) Stop(id string) (Task, error) {
 	if !ok || terminal(runtime.task.State) {
 		return Task{}, ErrTaskNotFound
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.State = StateStopped
 	runtime.task.StoppedAt = m.now()
 	runtime.task.NextRunAt = time.Time{}
 	runtime.task.InFlight = false
-	runtime.cancel()
 	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
 		return Task{}, err
 	}
+	runtime.cancel()
 	return runtime.task, nil
 }
 
@@ -307,12 +324,15 @@ func (m *Manager) Close() {
 		if terminal(runtime.task.State) {
 			continue
 		}
+		previous := cloneTask(runtime.task)
 		runtime.task.State = StateInterrupted
 		runtime.task.StoppedAt = m.now()
 		runtime.task.NextRunAt = time.Time{}
 		runtime.task.InFlight = false
+		if err := m.appendLocked(runtime.task); err != nil {
+			runtime.task = previous
+		}
 		runtime.cancel()
-		_ = m.appendLocked(runtime.task)
 	}
 }
 
@@ -367,10 +387,18 @@ func (m *Manager) beginExecution(id string) bool {
 		m.expireLocked(runtime)
 		return false
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.InFlight = true
 	runtime.task.LastRunAt = m.now()
 	runtime.task.NextRunAt = time.Time{}
-	_ = m.appendLocked(runtime.task)
+	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
+		runtime.task.State = StatePaused
+		runtime.task.StopReason = "persistence_degraded"
+		runtime.task.NextRunAt = time.Time{}
+		runtime.cancel()
+		return false
+	}
 	return true
 }
 
@@ -381,6 +409,7 @@ func (m *Manager) finishExecution(id string, result Execution) {
 	if !ok || terminal(runtime.task.State) {
 		return
 	}
+	previous := cloneTask(runtime.task)
 	runtime.task.InFlight = false
 	runtime.task.Executions++
 	runtime.task.LastExecutionID = result.ID
@@ -417,14 +446,14 @@ func (m *Manager) finishExecution(id string, result Execution) {
 			runtime.task.State = StatePaused
 			runtime.task.StopReason = "usage_missing"
 			runtime.task.NextRunAt = time.Time{}
-			_ = m.appendLocked(runtime.task)
+			m.commitLocked(runtime, previous)
 			return
 		}
 		runtime.task.TokenUsageMissing = false
 		runtime.task.TokensUsed += result.UsageTokens
 		if runtime.task.TokensUsed >= runtime.task.MaxTokens {
 			m.finishLocked(runtime, StateExpired, "max_tokens")
-			_ = m.appendLocked(runtime.task)
+			m.commitLocked(runtime, previous)
 			return
 		}
 	}
@@ -441,12 +470,26 @@ func (m *Manager) finishExecution(id string, result Execution) {
 	if runtime.task.State == StateRunning {
 		runtime.task.NextRunAt = m.now().Add(time.Duration(runtime.task.IntervalMilliseconds) * time.Millisecond)
 	}
-	_ = m.appendLocked(runtime.task)
+	m.commitLocked(runtime, previous)
 }
 
 func (m *Manager) expireLocked(runtime *runtimeTask) {
+	previous := cloneTask(runtime.task)
 	m.finishLocked(runtime, StateExpired, "deadline")
-	_ = m.appendLocked(runtime.task)
+	m.commitLocked(runtime, previous)
+}
+
+func (m *Manager) commitLocked(runtime *runtimeTask, previous Task) bool {
+	if err := m.appendLocked(runtime.task); err != nil {
+		runtime.task = previous
+		runtime.task.State = StatePaused
+		runtime.task.StopReason = "persistence_degraded"
+		runtime.task.NextRunAt = time.Time{}
+		runtime.task.InFlight = false
+		runtime.cancel()
+		return false
+	}
+	return true
 }
 
 func (m *Manager) finishLocked(runtime *runtimeTask, state State, reason string) {
@@ -492,7 +535,16 @@ func (m *Manager) appendLocked(task Task) error {
 		return nil
 	}
 	_, err := m.journal.Append(task.ID, journalSnapshot, task)
+	if err != nil && m.persistErr == nil {
+		m.persistErr = errors.Join(ErrPersistenceUnavailable, err)
+	}
 	return err
+}
+
+func cloneTask(task Task) Task {
+	copy := task
+	copy.ExecutionAudit = append([]ExecutionAudit(nil), task.ExecutionAudit...)
+	return copy
 }
 
 func (m *Manager) hasActiveTaskLocked(sourceID string) bool {

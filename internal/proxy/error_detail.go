@@ -1,32 +1,17 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/sanitize"
 	"github.com/areasong/relay-lifeline/internal/timeline"
-)
-
-var (
-	urlTokenPattern    = regexp.MustCompile(`https?://[^\s<>"']+`)
-	bearerPattern      = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=%-]+`)
-	keyPattern         = regexp.MustCompile(`\b(?:sk|rk|pk|sess|key)-[A-Za-z0-9_-]{8,}\b`)
-	jwtPattern         = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)
-	providerKeyPattern = regexp.MustCompile(
-		`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b`,
-	)
-	assignmentPattern = regexp.MustCompile(
-		`(?i)\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|authorization|client[_ -]?secret|password|secret)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)`,
-	)
 )
 
 func extractSafeErrorDetail(cfg config.ObservabilityConfig, result attemptResult, streaming bool) *timeline.ErrorDetail {
@@ -63,15 +48,9 @@ func extractJSONError(reader io.Reader, detail *timeline.ErrorDetail) bool {
 }
 
 func extractSSEError(reader io.Reader, detail *timeline.ErrorDetail) bool {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	parsed := false
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := bytes.TrimSpace([]byte(strings.TrimPrefix(line, "data:")))
+	_ = scanSSEData(reader, func(raw []byte) error {
+		data := bytes.TrimSpace(raw)
 		var event struct {
 			Type     string          `json:"type"`
 			Status   string          `json:"status"`
@@ -79,7 +58,7 @@ func extractSSEError(reader io.Reader, detail *timeline.ErrorDetail) bool {
 			Response json.RawMessage `json:"response"`
 		}
 		if json.Unmarshal(data, &event) != nil || !isFailureEvent(event.Type, event.Status, event.Error) {
-			continue
+			return nil
 		}
 		parsed = extractEnvelope(data, detail, false) || parsed
 		var eventFields struct {
@@ -93,7 +72,8 @@ func extractSSEError(reader io.Reader, detail *timeline.ErrorDetail) bool {
 		if len(event.Response) > 0 {
 			parsed = extractEnvelope(event.Response, detail, false) || parsed
 		}
-	}
+		return nil
+	})
 	return parsed
 }
 
@@ -194,25 +174,7 @@ func limitErrorDetail(detail *timeline.ErrorDetail, maximum int) {
 }
 
 func sanitizeDetail(value string) string {
-	value = strings.ToValidUTF8(value, "?")
-	value = urlTokenPattern.ReplaceAllStringFunc(value, redactDetailURL)
-	value = bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
-	value = keyPattern.ReplaceAllString(value, "[REDACTED]")
-	value = jwtPattern.ReplaceAllString(value, "[REDACTED]")
-	value = providerKeyPattern.ReplaceAllString(value, "[REDACTED]")
-	value = assignmentPattern.ReplaceAllString(value, "[REDACTED]")
-	return strings.Join(strings.Fields(value), " ")
-}
-
-func redactDetailURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return "[REDACTED_URL]"
-	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
+	return strings.Join(strings.Fields(sanitize.Text(value)), " ")
 }
 
 func truncateUTF8(value string, maximum int) string {

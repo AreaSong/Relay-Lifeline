@@ -1,6 +1,7 @@
 package runlog
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +33,14 @@ type Page struct {
 	HasGap      bool    `json:"hasGap"`
 }
 
+type Filter struct {
+	Level     string
+	Event     string
+	RequestID string
+	Search    string
+	Since     time.Time
+}
+
 type Store struct {
 	mu      sync.Mutex
 	entries []Entry
@@ -58,12 +67,16 @@ func (s *Store) Add(entry Entry) {
 }
 
 func (s *Store) List(after uint64, level, event, requestID string) []Entry {
+	return s.Query(after, Filter{Level: level, Event: event, RequestID: requestID})
+}
+
+func (s *Store) Query(after uint64, filter Filter) []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	result := make([]Entry, 0, len(s.entries))
 	for _, entry := range s.entries {
-		if entry.ID <= after || level != "" && entry.Level != level || event != "" && entry.Event != event || requestID != "" && entry.RequestID != requestID {
+		if entry.ID <= after || !matches(entry, filter) {
 			continue
 		}
 		entry.Fields = cloneFields(entry.Fields)
@@ -73,6 +86,10 @@ func (s *Store) List(after uint64, level, event, requestID string) []Entry {
 }
 
 func (s *Store) Page(after uint64, limit int, level, event, requestID string) Page {
+	return s.QueryPage(after, limit, Filter{Level: level, Event: event, RequestID: requestID})
+}
+
+func (s *Store) QueryPage(after uint64, limit int, filter Filter) Page {
 	if limit < 1 {
 		limit = 100
 	}
@@ -87,7 +104,7 @@ func (s *Store) Page(after uint64, limit int, level, event, requestID string) Pa
 	page.OldestAfter = s.entries[0].ID - 1
 	page.HasGap = after < page.OldestAfter
 	for _, entry := range s.entries {
-		if entry.ID <= after || !matches(entry, level, event, requestID) {
+		if entry.ID <= after || !matches(entry, filter) {
 			continue
 		}
 		if len(page.Entries) == limit {
@@ -102,6 +119,10 @@ func (s *Store) Page(after uint64, limit int, level, event, requestID string) Pa
 }
 
 func (s *Store) Tail(limit int, level, event, requestID string) Page {
+	return s.QueryTail(limit, Filter{Level: level, Event: event, RequestID: requestID})
+}
+
+func (s *Store) QueryTail(limit int, filter Filter) Page {
 	if limit < 1 {
 		limit = 100
 	}
@@ -118,7 +139,7 @@ func (s *Store) Tail(limit int, level, event, requestID string) Page {
 	matched := make([]Entry, 0, min(limit+1, len(s.entries)))
 	for index := len(s.entries) - 1; index >= 0 && len(matched) <= limit; index-- {
 		entry := s.entries[index]
-		if matches(entry, level, event, requestID) {
+		if matches(entry, filter) {
 			matched = append(matched, entry)
 		}
 	}
@@ -140,10 +161,12 @@ func (s *Store) Tail(limit int, level, event, requestID string) Page {
 	return page
 }
 
-func matches(entry Entry, level, event, requestID string) bool {
-	return (level == "" || entry.Level == level) &&
-		(event == "" || entry.Event == event) &&
-		(requestID == "" || entry.RequestID == requestID)
+func matches(entry Entry, filter Filter) bool {
+	if filter.Level != "" && entry.Level != filter.Level || filter.Event != "" && entry.Event != filter.Event || filter.RequestID != "" && entry.RequestID != filter.RequestID || !filter.Since.IsZero() && entry.Time.Before(filter.Since) {
+		return false
+	}
+	search := strings.ToLower(strings.TrimSpace(filter.Search))
+	return search == "" || strings.Contains(strings.ToLower(entry.Event), search) || strings.Contains(strings.ToLower(entry.Message), search) || strings.Contains(strings.ToLower(entry.RequestID), search) || strings.Contains(strings.ToLower(entry.ClientID), search) || strings.Contains(strings.ToLower(entry.TaskID), search)
 }
 
 func (s *Store) pruneLocked() {

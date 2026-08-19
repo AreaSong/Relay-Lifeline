@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/areasong/relay-lifeline/internal/l10n"
 )
+
+var errInvalidSSEJSON = errors.New("invalid SSE JSON event")
 
 type Validation struct {
 	Success   bool
@@ -68,31 +71,28 @@ func validateResponse(response *http.Response, buffer *ReplayBuffer, profile pro
 }
 
 func validateEventStream(reader io.Reader, profile protocolProfile) Validation {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	responsesCompleted := false
 	done := false
 	failed := false
 	var usage *TokenUsage
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
+	err := scanSSEData(reader, func(raw []byte) error {
+		data := bytes.TrimSpace(raw)
+		if len(data) == 0 {
+			return nil
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
+		if bytes.Equal(data, []byte("[DONE]")) {
 			done = true
-			continue
+			return nil
 		}
 		var event struct {
 			Type   string          `json:"type"`
 			Error  json.RawMessage `json:"error"`
 			Status string          `json:"status"`
 		}
-		if json.Unmarshal([]byte(data), &event) != nil {
-			continue
+		if json.Unmarshal(data, &event) != nil {
+			return errInvalidSSEJSON
 		}
-		if current := tokenUsageFromJSON([]byte(data)); current != nil {
+		if current := tokenUsageFromJSON(data); current != nil {
 			usage = current
 		}
 		switch event.Type {
@@ -104,8 +104,12 @@ func validateEventStream(reader io.Reader, profile protocolProfile) Validation {
 		if event.Status == "failed" || event.Status == "incomplete" || len(event.Error) > 0 && string(event.Error) != "null" {
 			failed = true
 		}
+		return nil
+	})
+	if errors.Is(err, errInvalidSSEJSON) {
+		return Validation{Message: l10n.M("proxy.sse_invalid"), Usage: usage}
 	}
-	if err := scanner.Err(); err != nil {
+	if err != nil {
 		return Validation{Message: l10n.M("proxy.sse_read_failed"), Usage: usage}
 	}
 	if failed {
@@ -121,6 +125,44 @@ func validateEventStream(reader io.Reader, profile protocolProfile) Validation {
 		return Validation{Message: l10n.M("proxy.sse_incomplete"), Usage: usage}
 	}
 	return Validation{Success: true, Usage: usage}
+}
+
+func scanSSEData(reader io.Reader, visit func([]byte) error) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	dataLines := make([]string, 0, 1)
+	dispatch := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := []byte(strings.Join(dataLines, "\n"))
+		dataLines = dataLines[:0]
+		return visit(data)
+	}
+	for scanner.Scan() {
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if line == "" {
+			if err := dispatch(); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		field, value, found := strings.Cut(line, ":")
+		if !found {
+			value = ""
+		}
+		if field != "data" {
+			continue
+		}
+		dataLines = append(dataLines, strings.TrimPrefix(value, " "))
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return dispatch()
 }
 
 func validateJSON(reader io.Reader, profile protocolProfile) Validation {

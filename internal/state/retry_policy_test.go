@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -95,20 +96,43 @@ func TestRegistryPendingPolicyActivatesAfterFailure(t *testing.T) {
 func TestCheckedRetryEnforcesStateAndConfirmation(t *testing.T) {
 	registry := NewRegistry()
 	id, retry := registry.Add("POST", "/v1/responses", func() {})
-	if result := registry.RetryNowChecked(id, false); result.Reason != RequestReasonStateNotRetryable {
+	if result := registry.RetryNowChecked(id); result.Reason != RequestReasonStateNotRetryable {
 		t.Fatalf("排队请求不应立即重试: %+v", result)
 	}
 	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
 	registry.UpdateMessage(id, lifecycle.StateUncertain, 1, l10n.Message{}, time.Time{})
-	if result := registry.RetryNowChecked(id, false); result.Reason != RequestReasonConfirmationRequired {
-		t.Fatalf("不确定交付应要求确认: %+v", result)
-	}
-	if result := registry.RetryNowChecked(id, true); result.Outcome != RequestActionAccepted {
-		t.Fatalf("确认后应接受重试: %+v", result)
+	if result := registry.RetryNowChecked(id); result.Reason != RequestReasonUncertainResolution {
+		t.Fatalf("不确定交付必须先走处置流程: %+v", result)
 	}
 	select {
 	case <-retry:
-	case <-time.After(time.Second):
-		t.Fatal("确认后的重试信号未送达")
+		t.Fatal("未处置的不确定交付不应收到重试信号")
+	default:
+	}
+}
+
+func TestUncertainStateRequiresResolutionForAllSideEffectingActions(t *testing.T) {
+	registry := NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	id, retry := registry.Add("POST", "/v1/responses", cancel)
+	registry.UpdateMessage(id, lifecycle.StateForwarding, 1, l10n.Message{}, time.Time{})
+	registry.UpdateMessage(id, lifecycle.StateUncertain, 1, l10n.Message{}, time.Time{})
+	info, ok := registry.RequestInfo(id)
+	if !ok || info.Actions.CanCancel || info.Actions.CanRepeat || info.Actions.CanRetryNow || info.Actions.CanSetRetryPolicy {
+		t.Fatalf("不确定状态动作未完全收敛: %+v", info.Actions)
+	}
+	if result := registry.CancelChecked(id); result.Reason != RequestReasonUncertainResolution {
+		t.Fatalf("取消绕过了处置流程: %+v", result)
+	}
+	if result := registry.RetryNowChecked(id); result.Reason != RequestReasonUncertainResolution {
+		t.Fatalf("重试绕过了处置流程: %+v", result)
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("不确定请求被普通取消意外唤醒")
+	case <-retry:
+		t.Fatal("不确定请求被普通重试意外唤醒")
+	default:
 	}
 }

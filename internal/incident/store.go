@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -57,19 +58,15 @@ func New(configProvider func() config.IncidentConfig, eventJournal *journal.Stor
 	return store, nil
 }
 
-func (s *Store) RecordFailure(requestID, category string, statusCode int) {
+func (s *Store) RecordFailure(requestID, category string, statusCode int) error {
 	cfg := s.config()
 	if !cfg.Enabled {
-		return
+		return nil
 	}
 	now := s.now().UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	incident := s.currentLocked(now, cfg)
-	if s.timer != nil {
-		s.timer.Stop()
-		s.timer = nil
-	}
+	incident := s.candidateLocked(now, cfg)
 	incident.State = "open"
 	incident.LastFailureAt = now
 	incident.RecoveryStarted = nil
@@ -82,22 +79,39 @@ func (s *Store) RecordFailure(requestID, category string, statusCode int) {
 	if requestID != "" && !contains(incident.AffectedRequests, requestID) && len(incident.AffectedRequests) < 1000 {
 		incident.AffectedRequests = append(incident.AffectedRequests, requestID)
 	}
-	s.persistLocked(incident)
+	if err := s.persistLocked(incident); err != nil {
+		return fmt.Errorf("persist incident failure: %w", err)
+	}
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+	s.items[incident.ID] = incident
+	s.current = incident.ID
 	s.pruneLocked()
+	return nil
 }
 
-func (s *Store) RecordSuccess() {
+func (s *Store) RecordSuccess() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == "" {
-		return
+		return nil
 	}
-	incident := s.items[s.current]
+	current, ok := s.items[s.current]
+	if !ok {
+		return nil
+	}
+	incident := clone(*current)
 	now := s.now().UTC()
 	incident.State = "recovering"
 	incident.RecoveryStarted = &now
-	s.persistLocked(incident)
+	if err := s.persistLocked(incident); err != nil {
+		return fmt.Errorf("persist incident recovery: %w", err)
+	}
+	s.items[incident.ID] = incident
 	s.scheduleRecoveryLocked()
+	return nil
 }
 
 func (s *Store) List() []Incident {
@@ -130,22 +144,22 @@ func (s *Store) Close() {
 	s.mu.Unlock()
 }
 
-func (s *Store) currentLocked(now time.Time, cfg config.IncidentConfig) *Incident {
+func (s *Store) candidateLocked(now time.Time, cfg config.IncidentConfig) *Incident {
 	if s.current != "" {
-		return s.items[s.current]
+		if current, ok := s.items[s.current]; ok {
+			return clone(*current)
+		}
 	}
 	for _, candidate := range s.items {
 		if candidate.State == "resolved" && candidate.ResolvedAt != nil && now.Sub(*candidate.ResolvedAt) <= cfg.CorrelationWindow.Duration {
-			candidate.State = "open"
-			candidate.ResolvedAt = nil
-			s.current = candidate.ID
-			return candidate
+			result := clone(*candidate)
+			result.State = "open"
+			result.ResolvedAt = nil
+			return result
 		}
 	}
 	id := newID()
 	incident := &Incident{ID: id, State: "open", StartedAt: now, LastFailureAt: now, Categories: make(map[string]int), StatusCodes: make(map[int]int)}
-	s.items[id] = incident
-	s.current = id
 	return incident
 }
 
@@ -173,11 +187,15 @@ func (s *Store) resolve(id string, recoveryStarted time.Time) {
 		return
 	}
 	now := s.now().UTC()
-	incident.State = "resolved"
-	incident.ResolvedAt = &now
+	candidate := clone(*incident)
+	candidate.State = "resolved"
+	candidate.ResolvedAt = &now
+	if err := s.persistLocked(candidate); err != nil {
+		return
+	}
+	s.items[id] = candidate
 	s.current = ""
 	s.timer = nil
-	s.persistLocked(incident)
 	s.pruneLocked()
 }
 
@@ -191,10 +209,12 @@ func (s *Store) restoreCurrentLocked() {
 	}
 }
 
-func (s *Store) persistLocked(incident *Incident) {
+func (s *Store) persistLocked(incident *Incident) error {
 	if s.journal != nil {
-		_, _ = s.journal.Append(incident.ID, journalSnapshot, incident)
+		_, err := s.journal.Append(incident.ID, journalSnapshot, incident)
+		return err
 	}
+	return nil
 }
 
 func (s *Store) pruneLocked() {

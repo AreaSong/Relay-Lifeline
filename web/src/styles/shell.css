@@ -257,3 +257,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .login-panel h2 { margin: 0 0 8px; font: 620 28px var(--font-display); letter-spacing: 0; }
 .login-panel > p { margin: 0 0 30px; color: var(--text-soft); font-size: 12px; line-height: 1.55; }
 .login-panel .button { width: 100%; margin-top: 18px; }
+.break-glass-login { display: grid; gap: 12px; margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--border); }
+.break-glass-login > strong { font-size: 12px; color: var(--text-soft); }
+.break-glass-login .button { margin-top: 4px; }
+.oidc-login + .break-glass-login { margin-top: 24px; }

@@ -21,22 +21,28 @@ type sessionInfo struct {
 	Role          Role     `json:"role"`
 	Capabilities  []string `json:"capabilities"`
 	CSRFToken     string   `json:"csrfToken,omitempty"`
+	AuthMethod    string   `json:"authMethod,omitempty"`
 }
 
 type authenticator struct {
+	enabled   bool
 	viewer    string
 	operator  string
 	sensitive string
 }
 
-func newAuthenticatorFromEnvironment() authenticator {
+func newAuthenticatorFromEnvironment(enabled bool) authenticator {
 	return authenticator{
-		viewer: os.Getenv("RELAY_LIFELINE_VIEWER_KEY"), operator: os.Getenv("RELAY_LIFELINE_ADMIN_KEY"),
+		enabled: enabled,
+		viewer:  os.Getenv("RELAY_LIFELINE_VIEWER_KEY"), operator: os.Getenv("RELAY_LIFELINE_ADMIN_KEY"),
 		sensitive: os.Getenv("RELAY_LIFELINE_SENSITIVE_KEY"),
 	}
 }
 
 func (a authenticator) authenticate(request *http.Request) (Role, bool) {
+	if !a.enabled {
+		return "", false
+	}
 	authorization := request.Header.Get("Authorization")
 	if !strings.HasPrefix(authorization, "Bearer ") {
 		return "", false
@@ -46,6 +52,9 @@ func (a authenticator) authenticate(request *http.Request) (Role, bool) {
 }
 
 func (a authenticator) authenticateKey(provided string) (Role, bool) {
+	if !a.enabled {
+		return "", false
+	}
 	role := Role("")
 	if a.viewer != "" && secureEqual(provided, a.viewer) {
 		role = RoleViewer

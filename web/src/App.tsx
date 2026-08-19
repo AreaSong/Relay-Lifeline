@@ -18,10 +18,11 @@ import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import type { SearchTarget } from "./components/GlobalSearch";
 import { normalizeLocale } from "./i18n";
 import { mergeHistoryPage } from "./historyPagination";
+import { mergeMonitoringEvents, readMonitoringEvents } from "./eventFeed";
 import { useTheme } from "./theme";
 import type {
   Alert, Config, DiagnosticReport, HistoryRecord, Incident, MetricsErrors, MetricsSnapshot,
-	MetricsWindow, MonitoringEvent, RealtimeSnapshot, RepeatTask, RuntimeInfo, SessionInfo, Status,
+		ConfigRuntimeState, GovernanceStatus, HealthSummary, ListFilters, LoginOptions, MetricsWindow, MonitoringEvent, PolicyStatus, RealtimeSnapshot, RepeatTask, RuntimeInfo, SessionInfo, Status, TelemetryStatus, UpstreamPoolStatus,
 } from "./types";
 import { CapturesView } from "./views/CapturesView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
@@ -36,7 +37,7 @@ const railStorageKey = "relay-lifeline-rail-collapsed";
 const configSectionLabelKeys: Record<string, string> = {
   server: "service", upstream: "service", retry: "retry", stream: "stream", queue: "traffic", history: "traffic",
   observability: "observability", capture: "capture", risk: "risk", localization: "localization", notifications: "notifications",
-  logging: "logging", persistence: "persistence", incidents: "incidents", lifecycle: "lifecycle",
+  logging: "logging", persistence: "persistence", incidents: "incidents", lifecycle: "lifecycle", governance: "governance", slo: "slo", "traffic-policy": "policy", upstreams: "upstreamPool", egress: "egress",
   "management-security": "managementSecurity", "metrics-export": "metrics",
 };
 
@@ -45,15 +46,32 @@ function storedRailState() {
 }
 
 function currentView(): View {
-  const candidate = window.location.hash.replace(/^#\/?/, "") as View;
+	const candidate = window.location.hash.replace(/^#\/?/, "").split("?", 1)[0] as View;
   return allViews.includes(candidate) ? candidate : "overview";
 }
 
-function Login({ onLogin, themeMode, setThemeMode, sessionExpired }: {
-  onLogin: (token: string) => Promise<void>;
-  themeMode: ReturnType<typeof useTheme>["mode"];
+function filtersFromHash(target: View): ListFilters {
+	if (currentView() !== target) return { q: "", state: "", from: "", to: "" };
+	const query = window.location.hash.split("?", 2)[1] || "";
+	const params = new URLSearchParams(query);
+	return { q: params.get("q") || "", state: params.get("state") || "", from: params.get("from") || "", to: params.get("to") || "" };
+}
+
+function viewHash(view: View, filters?: ListFilters) {
+	const params = new URLSearchParams();
+	if (filters) Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+	const query = params.toString();
+	return `#/${view}${query ? `?${query}` : ""}`;
+}
+
+function Login({ onLogin, onOIDC, options, themeMode, setThemeMode, sessionExpired, oidcFailed }: {
+	onLogin: (token: string) => Promise<void>;
+	onOIDC: () => void;
+	options: LoginOptions | null;
+	themeMode: ReturnType<typeof useTheme>["mode"];
   setThemeMode: ReturnType<typeof useTheme>["setMode"];
-  sessionExpired?: boolean;
+	sessionExpired?: boolean;
+	oidcFailed?: boolean;
 }) {
   const { t, i18n } = useTranslation(["auth", "common", "overview"]);
   const [token, setToken] = useState("");
@@ -77,12 +95,15 @@ function Login({ onLogin, themeMode, setThemeMode, sessionExpired }: {
       <div className="login-statement"><h1>Relay-Lifeline</h1><strong>{t("auth:statement")}</strong><p>{t("auth:statementDetail")}</p></div>
     </section>
     <section className="login-access"><div className="login-language"><LanguageSelector /><ThemeSelector mode={themeMode} onChange={setThemeMode} compact /></div>
-      <form className="login-panel" onSubmit={submit}><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
-        <input className="sr-only" type="text" name="username" value="relay-lifeline-admin" autoComplete="username" tabIndex={-1} aria-hidden="true" readOnly />
-        <label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => { setToken(event.target.value); setError(""); }} autoComplete="current-password" autoFocus required /></label>
-        {(error || sessionExpired) && <div className="error-banner" role="alert">{error || t("auth:sessionExpired")}</div>}
-        <button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
-      </form>
+		  <div className="login-panel"><h2>{t("auth:title")}</h2><p>{t("auth:description")}</p>
+			{options?.oidc.enabled && <button className="button primary oidc-login" type="button" disabled={!options.oidc.available} onClick={onOIDC}><ShieldCheck size={17} />{options.oidc.available ? t("auth:sso") : t("auth:ssoUnavailable")}</button>}
+			{oidcFailed && <div className="error-banner" role="alert">{t("auth:ssoFailed")}</div>}
+			{(options?.localEnabled ?? true) && <form className="break-glass-login" onSubmit={submit}><strong>{options?.oidc.enabled ? t("auth:breakGlass") : t("auth:localAccess")}</strong>
+			<input className="sr-only" type="text" name="username" value="relay-lifeline-admin" autoComplete="username" tabIndex={-1} aria-hidden="true" readOnly />
+			<label className="field"><span>{t("auth:adminKey")}</span><input name="admin-key" type="password" value={token} onChange={(event) => { setToken(event.target.value); setError(""); }} autoComplete="current-password" autoFocus required /></label>
+			{(error || sessionExpired) && <div className="error-banner" role="alert">{error || t("auth:sessionExpired")}</div>}
+			<button className="button primary" disabled={busy || !token}><ShieldCheck size={17} />{busy ? t("auth:verifying") : t("auth:enter")}</button>
+			</form>}</div>
     </section>
   </main>;
 }
@@ -96,14 +117,24 @@ export function App() {
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<View>(currentView);
   const [status, setStatus] = useState<Status | null>(null);
+  const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
   const [config, setConfig] = useState<Config | null>(null);
-  const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+	const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+	const [configState, setConfigState] = useState<ConfigRuntimeState | null>(null);
+	const [loginOptions, setLoginOptions] = useState<LoginOptions | null>(null);
+	const [upstreamStatus, setUpstreamStatus] = useState<UpstreamPoolStatus | null>(null);
+	const [governanceStatus, setGovernanceStatus] = useState<GovernanceStatus | null>(null);
+	const [policyStatus, setPolicyStatus] = useState<PolicyStatus | null>(null);
+	const [telemetryStatus, setTelemetryStatus] = useState<TelemetryStatus | null>(null);
   const [runtimeInfo, setRuntimeInfo] = useState<RuntimeInfo | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
+	const [historyFilters, setHistoryFilters] = useState<ListFilters>(() => filtersFromHash("history"));
 	const [historyCursor, setHistoryCursor] = useState<string | undefined>();
 	const [historyHasMore, setHistoryHasMore] = useState(false);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+	const [incidentResults, setIncidentResults] = useState<Incident[]>([]);
+	const [incidentFilters, setIncidentFilters] = useState<ListFilters>(() => filtersFromHash("incidents"));
 	const [incidentCursor, setIncidentCursor] = useState<string | undefined>();
 	const [incidentsHaveMore, setIncidentsHaveMore] = useState(false);
   const [repeatTasks, setRepeatTasks] = useState<RepeatTask[]>([]);
@@ -114,6 +145,8 @@ export function App() {
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [metricErrors, setMetricErrors] = useState<MetricsErrors | null>(null);
   const [events, setEvents] = useState<MonitoringEvent[]>([]);
+	const eventCursor = useRef(0);
+	const eventLoad = useRef<Promise<void> | null>(null);
   const [mobileTools, setMobileTools] = useState(false);
 	const [pageVisible, setPageVisible] = useState(() => document.visibilityState !== "hidden");
   const [searchTarget, setSearchTarget] = useState<SearchTarget | null>(null);
@@ -121,13 +154,15 @@ export function App() {
   const [railCollapsed, setRailCollapsed] = useState(storedRailState);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
+  const messageTimer = useRef<number | undefined>(undefined);
   const [bootstrapError, setBootstrapError] = useState("");
   const [saving, setSaving] = useState(false);
   const [confirmation, setConfirmation] = useState<{ options: ConfirmDialogState; resolve: (value: boolean) => void } | null>(null);
   const confirmationPending = useRef(false);
   const resetAuthentication = useCallback((reason: "required" | "expired" | null) => {
-    setAuthenticated(false); setAuthReason(reason); setSession(null); setStatus(null); setConfig(null); setSavedConfig(null); setRuntimeInfo(null);
-		setAlerts([]); setHistory([]); setHistoryCursor(undefined); setHistoryHasMore(false); setIncidents([]); setIncidentCursor(undefined); setIncidentsHaveMore(false); setRepeatTasks([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage(""); setBootstrapError(""); setSearchTarget(null); setMobileTools(false);
+		setAuthenticated(false); setAuthReason(reason); setSession(null); setStatus(null); setHealthSummary(null); setConfig(null); setSavedConfig(null); setConfigState(null); setUpstreamStatus(null); setGovernanceStatus(null); setPolicyStatus(null); setTelemetryStatus(null); setRuntimeInfo(null);
+		setAlerts([]); setHistory([]); setHistoryCursor(undefined); setHistoryHasMore(false); setIncidents([]); setIncidentResults([]); setIncidentCursor(undefined); setIncidentsHaveMore(false); setRepeatTasks([]); setTimeline(null); setDiagnostics(null); setMetrics(null); setMetricErrors(null); setEvents([]); setMessage(""); setBootstrapError(""); setSearchTarget(null); setMobileTools(false);
+		eventCursor.current = 0;
     confirmationPending.current = false;
     setConfirmation((current) => { current?.resolve(false); return null; });
   }, []);
@@ -146,32 +181,61 @@ export function App() {
   }, []);
 
   const showMessage = useCallback((value: string, kind: "success" | "error" = "success") => {
-    setMessage(value); setMessageKind(kind); window.setTimeout(() => setMessage(""), 4000);
+    setMessage(value); setMessageKind(kind);
+    if (messageTimer.current) window.clearTimeout(messageTimer.current);
+    messageTimer.current = window.setTimeout(() => setMessage(""), 4000);
   }, []);
 	const loadHistory = useCallback(async (cursor?: string, preserveLoaded = false) => {
-		const page = await api.history({ cursor, limit: 100 });
+		const page = await api.history({ ...historyFilters, cursor, limit: 100 });
 		setHistory((current) => cursor
 			? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))]
 			: preserveLoaded ? mergeHistoryPage(current, page.items) : page.items);
-		if (cursor || !preserveLoaded) {
 			setHistoryCursor(page.nextCursor); setHistoryHasMore(page.hasMore);
-		}
-	}, [api]);
+	}, [api, historyFilters]);
 	const loadIncidents = useCallback(async (cursor?: string) => {
-		const page = await api.incidents({ cursor, limit: 100 });
-		setIncidents((current) => cursor ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))] : page.items);
+		const page = await api.incidents({ ...incidentFilters, cursor, limit: 100 });
+		setIncidentResults((current) => cursor ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))] : page.items);
 		setIncidentCursor(page.nextCursor); setIncidentsHaveMore(page.hasMore);
-	}, [api]);
+	}, [api, incidentFilters]);
+	const applyHistoryFilters = useCallback(async (next: ListFilters) => {
+		setHistoryFilters(next);
+		if (currentView() === "history") window.history.replaceState(null, "", viewHash("history", next));
+		try {
+			const page = await api.history({ ...next, limit: 100 });
+			setHistory(page.items); setHistoryCursor(page.nextCursor); setHistoryHasMore(page.hasMore);
+		} catch (reason) { showMessage(errorMessage(reason), "error"); }
+	}, [api, showMessage]);
+	const applyIncidentFilters = useCallback(async (next: ListFilters) => {
+		setIncidentFilters(next);
+		if (currentView() === "incidents") window.history.replaceState(null, "", viewHash("incidents", next));
+		try {
+			const page = await api.incidents({ ...next, limit: 100 });
+			setIncidentResults(page.items); setIncidentCursor(page.nextCursor); setIncidentsHaveMore(page.hasMore);
+		} catch (reason) { showMessage(errorMessage(reason), "error"); }
+	}, [api, showMessage]);
   const refresh = useCallback(async () => {
-		const [nextStatus, nextAlerts, nextIncidents, nextRepeats] = await Promise.all([api.status(), api.alerts(), api.incidents({ limit: 100 }), api.repeatTasks()]);
+		const [nextStatus, nextHealth, nextAlerts, nextIncidents, nextRepeats, nextUpstreams, nextGovernance, nextTelemetry] = await Promise.all([api.status(), api.healthSummary(), api.alerts(), api.incidents({ limit: 100 }), api.repeatTasks(), api.upstreamStatus(), api.governanceStatus(), api.telemetryStatus()]);
 		setStatus(nextStatus); setAlerts(nextAlerts); setIncidents(nextIncidents.items); setIncidentCursor(nextIncidents.nextCursor); setIncidentsHaveMore(nextIncidents.hasMore); setRepeatTasks(nextRepeats);
+		setHealthSummary(nextHealth);
+		setUpstreamStatus(nextUpstreams); setGovernanceStatus(nextGovernance); setTelemetryStatus(nextTelemetry);
   }, [api]);
+	const refreshEvents = useCallback(async () => {
+		if (eventLoad.current) return eventLoad.current;
+		const task = (async () => {
+			const batch = await readMonitoringEvents((after, limit) => api.events(after, limit), eventCursor.current);
+			eventCursor.current = batch.nextAfter;
+			setEvents((current) => mergeMonitoringEvents(current, batch.events, batch.reset));
+		})();
+		eventLoad.current = task;
+		try { await task; }
+		finally { if (eventLoad.current === task) eventLoad.current = null; }
+	}, [api]);
   const refreshMonitoring = useCallback(async () => {
-    const [nextMetrics, nextErrors, nextEvents, nextRuntimeInfo] = await Promise.all([
-      api.metrics(metricsWindow), api.metricErrors(metricsWindow), api.events(0, 200), api.runtimeInfo(),
-    ]);
-    setMetrics(nextMetrics); setMetricErrors(nextErrors); setEvents(nextEvents.events); setRuntimeInfo(nextRuntimeInfo);
-  }, [api, metricsWindow]);
+		const [nextMetrics, nextErrors, , nextRuntimeInfo, nextPolicyStatus] = await Promise.all([
+		  api.metrics(metricsWindow), api.metricErrors(metricsWindow), refreshEvents(), api.runtimeInfo(), api.policyStatus().catch(() => null),
+		]);
+		setMetrics(nextMetrics); setMetricErrors(nextErrors); setRuntimeInfo(nextRuntimeInfo); setPolicyStatus(nextPolicyStatus);
+	}, [api, metricsWindow, refreshEvents]);
 
   const confirmSettingsLeave = useCallback(async () => {
     if (!dirty) return true;
@@ -193,17 +257,27 @@ export function App() {
       return;
     }
     setView(next); setMobileTools(false); setTimeline(null);
-    if (updateHash) window.history.pushState(null, "", `#/${next}`);
+		if (updateHash) window.history.pushState(null, "", viewHash(next, next === "history" ? historyFilters : next === "incidents" ? incidentFilters : undefined));
 		if (next === "history") await Promise.all([loadHistory(), refreshMonitoring()]).catch((reason) => showMessage(errorMessage(reason), "error"));
-	}, [canOperate, confirmSettingsLeave, loadHistory, refreshMonitoring, showMessage, view]);
+		if (next === "incidents") await loadIncidents().catch((reason) => showMessage(errorMessage(reason), "error"));
+	}, [canOperate, confirmSettingsLeave, historyFilters, incidentFilters, loadHistory, loadIncidents, refreshMonitoring, showMessage, view]);
 
-  useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
+	useEffect(() => { document.title = `${t(`common:title.${view}`)} · Relay-Lifeline`; }, [locale, t, view]);
+	useEffect(() => {
+		if (authenticated) return;
+		void api.loginOptions().then(setLoginOptions).catch(() => setLoginOptions({ localEnabled: true, oidc: { enabled: false, available: false } }));
+	}, [api, authenticated]);
   useEffect(() => {
-    const changed = () => { const next = currentView(); if (next !== view) void selectView(next, false); };
+    const changed = () => {
+		const next = currentView();
+		if (next === "history") { const filters = filtersFromHash("history"); setHistoryFilters(filters); void applyHistoryFilters(filters); }
+		if (next === "incidents") { const filters = filtersFromHash("incidents"); setIncidentFilters(filters); void applyIncidentFilters(filters); }
+		if (next !== view) void selectView(next, false);
+	};
     window.addEventListener("hashchange", changed);
     window.addEventListener("popstate", changed);
     return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
-  }, [selectView, view]);
+  }, [applyHistoryFilters, applyIncidentFilters, selectView, view]);
   useEffect(() => {
     if (!authenticated) return;
     let disposed = false;
@@ -212,14 +286,15 @@ export function App() {
       if (disposed) return;
       setSession(nextSession);
       await Promise.all([
-			refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), loadHistory(), api.runtimeInfo().then(setRuntimeInfo),
+				refresh(), api.config().then((value) => { setConfig(value); setSavedConfig(value); }), api.configState().then(setConfigState), loadHistory(), loadIncidents(), api.runtimeInfo().then(setRuntimeInfo),
       ]);
     }).catch((reason) => { if (!disposed) setBootstrapError(errorMessage(reason)); });
     setTimeline(null); setDiagnostics(null);
     return () => { disposed = true; };
-	}, [api, authenticated, loadHistory, refresh]);
+	}, [api, authenticated, loadHistory, loadIncidents, refresh]);
   useEffect(() => {
-    if (!authenticated || !session) return;
+		if (!authenticated || !session || !pageVisible) return;
+		void refresh().catch(() => undefined);
 		return api.subscribe((event) => {
 			if (event.type === "sync" || event.type === "reset") {
 				const snapshot = event.data as RealtimeSnapshot;
@@ -233,7 +308,7 @@ export function App() {
 			else if (event.type === "metrics") setMetrics(event.data as MetricsSnapshot);
 			else if (event.type === "repeat_tasks") setRepeatTasks(event.data as RepeatTask[]);
     }, () => { void refresh().catch(() => undefined); });
-  }, [api, authenticated, refresh, session]);
+	}, [api, authenticated, pageVisible, refresh, session]);
 	useEffect(() => {
 		const changed = () => setPageVisible(document.visibilityState !== "hidden");
 		document.addEventListener("visibilitychange", changed);
@@ -294,14 +369,31 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
   async function togglePause() {
-    try { status?.paused ? await api.resume() : await api.pause(); await refresh(); await refreshMonitoring(); }
+    try { status?.mode === "draining" || status?.mode === "maintenance" || status?.paused ? await api.resume() : await api.pause(); await refresh(); await refreshMonitoring(); }
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
+  async function setControlMode(mode: "drain" | "maintenance") {
+		const accepted = await requestConfirmation({
+			title: t(`common:control.${mode}.title`), description: t(`common:control.${mode}.description`), confirmLabel: t(`common:control.${mode}.confirm`), tone: "danger",
+		});
+		if (!accepted) return;
+		try { mode === "drain" ? await api.drain() : await api.maintenance(); await refresh(); await refreshMonitoring(); }
+		catch (reason) { showMessage(errorMessage(reason), "error"); }
+	}
   async function save() {
     if (!config || saving) return;
+		const ordinaryDirty = savedConfig && (Object.keys(config) as Array<keyof Config>).some((key) => key !== "trafficPolicy" && JSON.stringify(config[key]) !== JSON.stringify(savedConfig[key]));
+		if (!ordinaryDirty) {
+			showMessage(t("settings:policy.unsavedHint"), "error");
+			return;
+		}
     setSaving(true);
     try {
-      const plan = await api.validateConfig(config);
+      // Traffic policy revisions have their own draft/release journal. Keep
+      // them out of the ordinary settings save payload so a global Save can
+      // never hot-apply an unreviewed route or deny rule.
+      const configForGlobalSave = { ...config, trafficPolicy: savedConfig?.trafficPolicy || config.trafficPolicy };
+      const plan = await api.validateConfig(configForGlobalSave);
       const sectionNames = (sections: string[]) => Array.from(new Set(sections.map((section) => {
         const key = configSectionLabelKeys[section];
         return key ? t(`settings:sections.${key}.title`) : section;
@@ -317,8 +409,10 @@ export function App() {
         confirmLabel: t("common:actions.save"),
       });
       if (!confirmed) return;
-      const result = await api.saveConfig(config);
-      setSavedConfig(config);
+		  const authenticationChanged = plan.fields?.some((field) => field.path === "management-security.authentication") || false;
+		  const result = await api.saveConfig(configForGlobalSave, authenticationChanged);
+		  setSavedConfig(configForGlobalSave);
+		  setConfigState(await api.configState());
       showMessage(result.backupPath ? t("settings:savedBackup", { path: result.backupPath }) : result.restartRequired ? t("settings:savedRestart") : t("settings:saved"));
       await refreshMonitoring();
     }
@@ -326,7 +420,7 @@ export function App() {
     finally { setSaving(false); }
   }
   async function reload() {
-    try { await api.reloadConfig(); const value = await api.config(); setConfig(value); setSavedConfig(value); showMessage(t("settings:reloaded")); await refreshMonitoring(); }
+		try { await api.reloadConfig(); const [value, nextConfigState] = await Promise.all([api.config(), api.configState()]); setConfig(value); setSavedConfig(value); setConfigState(nextConfigState); showMessage(t("settings:reloaded")); await refreshMonitoring(); }
     catch (reason) { showMessage(errorMessage(reason, "reload"), "error"); }
   }
   async function runDiagnostics() {
@@ -340,7 +434,7 @@ export function App() {
     catch (reason) { showMessage(errorMessage(reason), "error"); }
   }
 
-  if (!authenticated) return <Login onLogin={login} themeMode={theme.mode} setThemeMode={theme.setMode} sessionExpired={authReason === "expired"} />;
+	if (!authenticated) return <Login onLogin={login} onOIDC={() => api.oidcLogin()} options={loginOptions} themeMode={theme.mode} setThemeMode={theme.setMode} sessionExpired={authReason === "expired"} oidcFailed={new URLSearchParams(window.location.search).get("auth") === "oidc_failed"} />;
   if (bootstrapError) return <main className="bootstrap-error"><span className="rail-brand"><HeartPulse size={22} /></span><h1>{t("common:connectionError.title")}</h1><p>{bootstrapError}</p><button className="button primary" onClick={() => window.location.reload()}><ShieldCheck size={17} />{t("common:connectionError.retry")}</button></main>;
   if (!status || !config || !savedConfig || !session) return <div className="loading"><span><HeartPulse size={26} />{t("common:loading")}</span></div>;
 
@@ -350,20 +444,22 @@ export function App() {
     <AppNavigation view={view} collapsed={railCollapsed} session={session} config={config} runtimeInfo={runtimeInfo} themeMode={theme.mode} onThemeChange={theme.setMode} onSelect={(next) => { setSearchTarget(null); void selectView(next); }} onCollapse={() => setRailCollapsed((value) => !value)} onLogout={() => void logout()} />
 
     <main className={`workspace workspace-${view}`}><WorkspaceHeader
-      api={api} config={config} view={view} status={status} session={session} requests={status.requests} history={history} incidents={incidents} alerts={alerts}
+      api={api} config={config} view={view} status={status} healthSummary={healthSummary} session={session} requests={status.requests} history={history} incidents={incidents} alerts={alerts}
       metricsWindow={metricsWindow} canOperate={canOperate} mobileToolsOpen={mobileTools} onWindowChange={setMetricsWindow} onOpen={(id) => void openTimeline(id)}
-		onNavigate={(next, target) => { setSearchTarget(target || null); void selectView(next); }} onRefresh={() => { void refresh(); void refreshMonitoring(); void loadHistory(undefined, true); }} onPauseToggle={() => void togglePause()} onMobileTools={() => setMobileTools((open) => !open)}
+			onNavigate={(next, target) => { setSearchTarget(target || null); void selectView(next); }} onRefresh={() => { void refresh(); void refreshMonitoring(); void loadHistory(undefined, true); }} onPauseToggle={() => void togglePause()} onDrain={() => void setControlMode("drain")} onMaintenance={() => void setControlMode("maintenance")} onMobileTools={() => setMobileTools((open) => !open)}
     />
       {message && <div className={messageKind === "success" ? "success-banner page-banner" : "error-banner page-banner"} role="status">{message}</div>}
+		{configState?.pendingRestart.restartRequired && <div className="warning-banner page-banner pending-restart-global" role="status"><strong>{t("settings:pendingRestart.title")}</strong><span>{t("settings:pendingRestart.revisions", { active: configState.activeRevision, desired: configState.desiredRevision })}</span><small>{configState.pendingRestart.fields?.filter((field) => field.applyMode === "restart").map((field) => field.path).join(", ") || configState.pendingRestart.restartSections.join(", ")}</small><button className="link-button" onClick={() => void selectView("settings")}>{t("settings:pendingRestart.openSettings")}</button></div>}
+	  {status.persistenceDegraded && <div className="error-banner page-banner" role="alert">{t("common:persistenceDegraded", { count: status.persistencePending || 0 })}</div>}
       <ViewErrorBoundary key={view} title={t("common:viewError.title")} description={t("common:viewError.description")} reloadLabel={t("common:viewError.reload")}>
-        {view === "overview" && <OverviewView status={status} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={(id) => setSelectedOverviewRequestId(id)} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={selectedOverviewRequestId} />}
+		{view === "overview" && <OverviewView status={status} healthSummary={healthSummary} governanceStatus={governanceStatus} policyStatus={policyStatus} metrics={metrics} errors={metricErrors} alerts={alerts} incidents={incidents} window={metricsWindow} onOpen={(id) => setSelectedOverviewRequestId(id)} locale={locale} dark={theme.resolved === "dark"} incident={incident} selectedRequestId={selectedOverviewRequestId} />}
         {view === "requests" && <RequestsView status={status} metrics={metrics} repeatTasks={repeatTasks} api={api} refresh={refresh} onOpen={openTimeline} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} confirm={requestConfirmation} />}
-		{view === "history" && <HistoryView records={history} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} hasMore={historyHasMore} onLoadMore={() => void loadHistory(historyCursor)} />}
-		{view === "incidents" && <IncidentsView api={api} incidents={incidents} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} onOpen={setTimeline} hasMore={incidentsHaveMore} onLoadMore={() => void loadIncidents(incidentCursor)} />}
-        {view === "logs" && <LogsView api={api} onError={(value) => showMessage(value, "error")} initialRequestId={searchTarget?.kind === "log" ? searchTarget.id : undefined} initialEvent={searchTarget?.kind === "log" ? searchTarget.detail : undefined} />}
-        {view === "captures" && <CapturesView api={api} config={config} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} confirm={requestConfirmation} selectedId={searchTarget?.kind === "capture" ? searchTarget.id : undefined} />}
+		{view === "history" && <HistoryView records={history} filters={historyFilters} onApplyFilters={applyHistoryFilters} onOpen={setTimeline} metrics={metrics} errors={metricErrors} events={events} window={metricsWindow} onWindowChange={setMetricsWindow} locale={locale} dark={theme.resolved === "dark"} hasMore={historyHasMore} onLoadMore={() => void loadHistory(historyCursor)} />}
+		{view === "incidents" && <IncidentsView api={api} incidents={incidentResults} filters={incidentFilters} onApplyFilters={applyIncidentFilters} selectedId={searchTarget?.kind === "incident" ? searchTarget.id : undefined} onOpen={setTimeline} hasMore={incidentsHaveMore} onLoadMore={() => void loadIncidents(incidentCursor)} />}
+		{view === "logs" && <LogsView api={api} pageVisible={pageVisible} onError={(value) => showMessage(value, "error")} initialRequestId={searchTarget?.kind === "log" ? searchTarget.id : undefined} initialEvent={searchTarget?.kind === "log" ? searchTarget.detail : undefined} />}
+		{view === "captures" && <CapturesView api={api} config={config} pageVisible={pageVisible} onError={(value) => showMessage(value, "error")} onSuccess={showMessage} canOperate={canOperate} canSensitive={canSensitive} confirm={requestConfirmation} selectedId={searchTarget?.kind === "capture" ? searchTarget.id : undefined} />}
         {view === "diagnostics" && <DiagnosticsView runtimeInfo={runtimeInfo} report={diagnostics} busy={diagnosticBusy} run={runDiagnostics} download={downloadDiagnostics} canOperate={canOperate} />}
-		{view === "settings" && canOperate && <SettingsView api={api} config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
+		{view === "settings" && canOperate && <SettingsView api={api} config={config} baseline={savedConfig} runtimeInfo={runtimeInfo} configState={configState} canSensitive={canSensitive} upstreamStatus={upstreamStatus} governanceStatus={governanceStatus} telemetryStatus={telemetryStatus} confirm={requestConfirmation} setConfig={setConfig} save={save} reload={reload} dirty={dirty} busy={saving} discard={() => setConfig(savedConfig)} themeMode={theme.mode} setThemeMode={theme.setMode} />}
       </ViewErrorBoundary>
     </main>
 

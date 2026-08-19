@@ -41,6 +41,11 @@ CLIProxyAPI :8317 或其他 OpenAI-compatible 中转站
 - 主动开启的临时诊断捕获：加密保存请求、每次 CPA 响应和最终响应，支持过滤预览、过滤下载与完整原文下载。
 - 独立 Webhook 队列、事件过滤、投递重试、健康统计、有限投递历史和测试投递。
 - 持续任务支持最大执行/失败次数、连续失败熔断和每轮安全审计摘要。
+- 流量策略支持带 Journal 审计的 draft、simulate/replay、shadow、canary、full 和 rollback 发布流程。
+- Shadow 流量具备幂等、采样、并发、每小时请求数和费用预算隔离。
+- 自适应路由具备 SLO/错误预算保护、切换冷却、回退目标和自动停止信号。
+- 多维治理支持预留、已知/未知用量结算，以及 enforce 模式下的故障闭合。
+- 未知交付结果保留证据，并要求 Operator 明确确认成功、放弃或补偿重试。
 - 历史与事故查询支持服务端筛选、稳定游标分页和关联请求钻取。
 - 管理实时流使用版本化增量事件，支持断线游标补偿和保留缺口重置。
 - UI、管理 API、CLI、日志、诊断和 Webhook 全部支持中英文。
@@ -150,6 +155,45 @@ stream:
 
 Signal Continuity 只展示网关实际观测到的状态，不会额外发送模型探针。Three.js 在本地按需加载；系统启用“减少动态效果”或页面进入后台时会暂停动画，WebGL 初始化失败或 Context 丢失时切换到静态拓扑，状态数据和控制功能仍然可用。
 
+## 流量策略、治理与未知交付
+
+流量策略必须通过可审计的控制面流程发布。旧的 `PUT /admin/api/policies`，以及会修改 `traffic-policy` 的普通 `PUT /admin/api/config`，都会返回 `POLICY_RELEASE_REQUIRED`，不会直接热应用未经审核的路由或拒绝规则。Operator 应按以下顺序操作：
+
+```text
+draft -> simulate/replay -> shadow -> canary -> full
+                                      \-> rollback（保留的发布 revision）
+```
+
+需要鉴权的接口包括 `PUT /admin/api/policies/draft`、`GET /admin/api/policies/releases`、`POST /admin/api/policies/simulate`、`POST /admin/api/policies/replay`、`POST /admin/api/policies/publish` 和 `POST /admin/api/policies/rollback`。发布和回滚必须携带当前 `configRevision`；草稿或目标 revision 过期时会冲突失败，不会覆盖其他 Operator 的修改。每个 prepare、publish、abort、rollback 转换都会写入 `policy-releases.jsonl`，并在重启后与活动配置 revision 对账。`GET /admin/api/policies/status` 和 `/decisions` 提供运行计数及有界决策证据。
+
+`mode: observe` 只记录建议，永不改变生产路由。在 `mode: enforce` 下，`draft` 和 `shadow` 仍不会强制客户端流量；`canary` 使用由 Request ID 派生的稳定 SHA-256 分桶，只对配置比例内的请求强制；`full` 对所有命中的请求强制。决策证据区分 `recommendedTargetId` 与实际强制的 `targetId`，因此 dry-run、未命中的 canary 或 observe 决策不能被误认为真实改路由。使用 `POST /policies/simulate?source=draft` 可测试已保存草稿，不会改变自适应状态，也不会调用上游；`/policies/replay` 可使用捕获 ID 或脱敏请求元数据重复生成证据。
+
+Shadow 流量只在主请求成功后异步发送，与生产熔断器和自适应评分隔离，并带有 `X-Relay-Lifeline-Shadow: 1`。如果目标就是主目标，或任一保护条件不满足，Shadow 会跳过。一次 Shadow 必须同时通过 Request ID 稳定采样、`require-idempotency`、SLO 健康、正文大小、最大并发、每小时请求数和每小时费用预留检查。`/policies/status` 分开统计 planned、sent、skipped、failed、预留费用和实际费用；Shadow 失败不会改变主请求结果。
+
+自适应路由只给已关闭、观测数足够且延迟合格的目标评分。SLO/错误预算下限、burn rate 保护和失败率保护都可以自动停止自适应；切换冷却时间防止目标抖动，配置的 fallback 目标会在保护停止或没有合格目标时使用。发布新的策略 revision 会确认并解除自动停止；解除前必须先核对新的信号与 SLO。
+
+治理会在选择目标前预留有界的 Token 和费用容量，然后绑定实际选中的上游，并为每次尝试结算。预算可以按全局或 `principal`、`tenant`、`model`、`upstream` 作用域配置；存在 tenant 预算时必须提供租户 Header。`reservation-min/max-*` 限制预估范围，`soft-threshold-percent` 和 `forecast-window` 只产生告警信号，在 observe 模式下不会拒绝请求。`GET /admin/api/governance/status`、`/health/summary`、`/slo` 和 Prometheus 治理指标会显示预留、已知/未知结算、拒绝原因和 ledger 健康状态。
+
+只有在持久化 usage ledger 和恢复路径经过演练后，才应设置 `governance.mode: enforce`。Ledger 写入失败时，admission、重试尝试预留和结算都会故障闭合；enforce 开启时 `/readyz` 也会检查 usage ledger。observe 模式会标记 `persistenceDegraded` 后继续处理，因此仍必须处理告警。`unknown-usage-policy: observe` 会把缺少权威 usage 的响应记为未知；`unknown-usage-policy: deny` 会在同一预算窗口内拒绝后续共享该预算的 admission，直到未知用量滚出窗口，原响应不会被事后改写。
+
+某次尝试已经写入上游但没有收到响应 Header 时，请求会进入 `uncertain`，而不是静默重试（默认 `lifecycle.allow-uncertain-retry` 为 false）。时间线只保存有界证据：尝试阶段、目标、状态/分类、是否写入、幂等键哈希、请求大小/延迟和上游 Request ID，不保存原始正文。Operator 必须先预览动作，再使用同一身份提交不超过 500 字符的原因：
+
+```bash
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success"}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/preview"
+
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success","confirmationToken":"TOKEN_FROM_PREVIEW","reason":"已在上游审计中核对 Provider Request ID。"}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/resolve"
+```
+
+预览 Token 两分钟后过期，并绑定请求、动作和身份。支持的动作是 `confirm_success`（业务成功，不再重试）、`abandon`（终止并记为失败）和 `request_compensation`（恢复正常重试路径）。当上游可能已经扣费时，不要盲目重试。`/admin/api/health/summary`、`/admin/api/slo`、Webhook 和 `relay_lifeline_uncertain_*` Prometheus 指标会报告未决数量、最老年龄、处理目标、SLO 超时和处理结果。
+
+请求、事故、持续任务、usage ledger 和策略发布 Journal 都是经过校验的哈希链。配置 `RELAY_LIFELINE_JOURNAL_HMAC_KEY` 后，还会校验外部 HMAC 锚点；启动时发现链损坏或截断会拒绝启动，`-journal-verify` 只读。每小时压实会原子重建保留链，并保留活动实体。重启时未完成请求会成为 `orphaned`，绝不自动重放；治理预留会对账，策略 prepare 只有在活动 revision 匹配时才 finalize，否则明确 abort。持久化目录必须位于可靠卷上；强制修复前先检查 `readyz`、`/admin/api/persistence/status` 和 Journal 指标。
+
 ## 监控 API
 
 需要管理端 Bearer 鉴权的接口包括：
@@ -171,7 +215,7 @@ Prometheus 端点提供 `relay_lifeline_journal_*` 指标，包括条目数、�
 
 这些接口与其他管理 API 使用相同的管理密钥和本地化规则。
 
-每个管理响应都包含兼容 Header `X-Relay-Lifeline-API-Version`。`GET /admin/api/meta` 返回当前构建身份。配置文件使用 `schema-version: 3`；schema 1 和 2 配置会在内存中迁移且不会覆盖源文件，未知的未来版本会被拒绝。`POST /admin/api/config/validate` 返回准确的变更计划，不修改内存或磁盘配置。
+每个管理响应都包含兼容 Header `X-Relay-Lifeline-API-Version`。`GET /admin/api/meta` 返回当前构建身份。配置文件使用 `schema-version: 5`；schema 1 至 4 配置会在内存中迁移且不会覆盖源文件，未知的未来版本会被拒绝。`POST /admin/api/config/validate` 返回准确的变更计划，不修改内存或磁盘配置。
 
 ## 双语配置
 

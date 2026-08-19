@@ -45,7 +45,44 @@ type incidentPage struct {
 type incidentDetail struct {
 	Incident                  incident.Incident `json:"incident"`
 	Requests                  []timeline.Record `json:"requests"`
+	Timeline                  []incidentEvent   `json:"timeline"`
 	AffectedRequestsTruncated bool              `json:"affectedRequestsTruncated"`
+}
+
+type incidentEvent struct {
+	Time             time.Time `json:"time"`
+	Type             string    `json:"type"`
+	RequestID        string    `json:"requestId,omitempty"`
+	Attempt          int       `json:"attempt,omitempty"`
+	StatusCode       int       `json:"statusCode,omitempty"`
+	Category         string    `json:"category,omitempty"`
+	Message          string    `json:"message"`
+	WaitMilliseconds int64     `json:"waitMilliseconds,omitempty"`
+	AttemptPhase     string    `json:"attemptPhase,omitempty"`
+}
+
+func buildIncidentTimeline(item incident.Incident, records []timeline.Record, lifecycleMessage func(string) string) []incidentEvent {
+	events := []incidentEvent{{Time: item.StartedAt, Type: "incident_opened", Message: lifecycleMessage("incident_opened")}}
+	for _, record := range records {
+		for _, event := range record.Events {
+			if event.Time.Before(item.StartedAt) || item.ResolvedAt != nil && event.Time.After(*item.ResolvedAt) {
+				continue
+			}
+			events = append(events, incidentEvent{
+				Time: event.Time, Type: event.Type, RequestID: record.ID, Attempt: event.Attempt,
+				StatusCode: event.StatusCode, Category: event.Category, Message: event.Message,
+				WaitMilliseconds: event.WaitMilliseconds, AttemptPhase: event.AttemptPhase,
+			})
+		}
+	}
+	if item.RecoveryStarted != nil {
+		events = append(events, incidentEvent{Time: *item.RecoveryStarted, Type: "incident_recovering", Message: lifecycleMessage("incident_recovering")})
+	}
+	if item.ResolvedAt != nil {
+		events = append(events, incidentEvent{Time: *item.ResolvedAt, Type: "incident_resolved", Message: lifecycleMessage("incident_resolved")})
+	}
+	sort.SliceStable(events, func(left, right int) bool { return events[left].Time.Before(events[right].Time) })
+	return events
 }
 
 func parseListQuery(values url.Values, maximum int) (listQuery, error) {

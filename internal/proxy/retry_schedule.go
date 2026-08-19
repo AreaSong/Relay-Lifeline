@@ -5,9 +5,16 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/l10n"
+	"github.com/areasong/relay-lifeline/internal/monitoring"
+	"github.com/areasong/relay-lifeline/internal/notify"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/telemetry"
 	"github.com/areasong/relay-lifeline/internal/timeline"
 )
 
@@ -31,10 +38,42 @@ func (g *Gateway) awaitRetry(
 	statusCode int,
 ) (string, retryStopReason, error) {
 	rescheduled := false
+	manualUncertainRetry := false
+	uncertainSLOBreached := false
 	for {
 		cfg := g.store.Get()
+		if cfg.Retry.MaxElapsed.Duration > 0 {
+			remaining := cfg.Retry.MaxElapsed.Duration - time.Since(started)
+			if remaining <= 0 {
+				return "", retryStopExpired, nil
+			}
+		}
 		policy, hasPolicy := g.registry.ActivateRetryPolicy(requestID, attempt)
-		if stop := retryPolicyStop(cfg, result, attempt, policy, hasPolicy); stop != retryStopNone {
+		uncertain := result.response == nil && result.wroteRequest && cfg.Lifecycle.TrackUncertainDelivery
+		if uncertain && !cfg.Lifecycle.AllowUncertainRetry && !manualUncertainRetry {
+			g.registry.UpdateMessage(requestID, "uncertain", attempt, reason, time.Time{})
+			g.registry.RecordEvent(requestID, timeline.Event{Type: "uncertain_retry_blocked", Attempt: attempt, MessageCode: "timeline.uncertain_retry_blocked"})
+			g.addRunLog("warn", "retry.uncertain_blocked", "未知交付结果，等待人工确认后重试", requestID, attempt, statusCode, nil)
+			resumeReason, err := waitForManualRetry(ctx, retryNow, policyChanged, cfg.Lifecycle.EffectiveUncertainResolutionTarget(), func() {
+				if uncertainSLOBreached {
+					return
+				}
+				uncertainSLOBreached = true
+				if g.monitor != nil {
+					g.monitor.RecordEvent(monitoring.Event{Code: "request.uncertain_slo_breach", RequestID: requestID, Attempt: attempt, Outcome: "degraded"})
+				}
+				g.notifier.Send(notify.Event{Type: "uncertain_slo_breach", RequestID: requestID, Attempts: attempt, Elapsed: time.Since(started), MessageCode: "notify.uncertain_slo_breach"})
+			})
+			if err != nil {
+				return "", retryStopNone, err
+			}
+			if resumeReason == "policy_updated" {
+				rescheduled = true
+				continue
+			}
+			manualUncertainRetry = true
+		}
+		if stop := retryPolicyStop(cfg, result, attempt, policy, hasPolicy); stop != retryStopNone && !(manualUncertainRetry && uncertain && !result.validation.Permanent && stop == retryStopDenied) {
 			return "", stop, nil
 		}
 		delay := g.retryDelay(cfg, result.response)
@@ -43,6 +82,13 @@ func (g *Gateway) awaitRetry(
 			mode = policy.Schedule.Mode
 			delay = g.policyDelay(policy, cfg, result.response, attempt)
 			remaining := time.Until(policy.Deadline)
+			if remaining <= 0 {
+				return "", retryStopExpired, nil
+			}
+			delay = min(delay, remaining)
+		}
+		if cfg.Retry.MaxElapsed.Duration > 0 {
+			remaining := cfg.Retry.MaxElapsed.Duration - time.Since(started)
 			if remaining <= 0 {
 				return "", retryStopExpired, nil
 			}
@@ -65,14 +111,23 @@ func (g *Gateway) awaitRetry(
 			WaitMilliseconds: delay.Milliseconds(), MessageDetails: map[string]any{"Mode": string(mode)},
 		})
 
+		waitContext, waitSpan := telemetry.Tracer("relay-lifeline/proxy").Start(ctx, "relay.proxy.retry_wait", trace.WithAttributes(
+			attribute.Int("relay.attempt", attempt), attribute.Int64("relay.retry.delay_ms", delay.Milliseconds()), attribute.String("relay.retry.schedule", string(mode)),
+		))
 		resumeReason, err := waitForRetry(
-			ctx, retryNow, policyChanged, delay,
+			waitContext, retryNow, policyChanged, delay,
 			cfg.Risk.WarningAfter.Duration-time.Since(started),
 			func() { g.publishAlerts(g.risk.EvaluateLongRunning(requestID, attempt, started, g.store.Get().Risk)) },
 		)
 		if err != nil {
+			waitSpan.RecordError(err)
+			waitSpan.SetStatus(codes.Error, "retry wait interrupted")
+			waitSpan.End()
 			return "", retryStopNone, err
 		}
+		waitSpan.SetAttributes(attribute.String("relay.retry.resume_reason", resumeReason))
+		waitSpan.SetStatus(codes.Ok, "")
+		waitSpan.End()
 		if resumeReason == "policy_updated" {
 			rescheduled = true
 			continue
@@ -81,6 +136,29 @@ func (g *Gateway) awaitRetry(
 			return "", retryStopExpired, nil
 		}
 		return resumeReason, retryStopNone, nil
+	}
+}
+
+func waitForManualRetry(ctx context.Context, retryNow, policyChanged <-chan struct{}, riskAfter time.Duration, onRisk func()) (string, error) {
+	var timer *time.Timer
+	var risk <-chan time.Time
+	if riskAfter > 0 {
+		timer = time.NewTimer(riskAfter)
+		risk = timer.C
+		defer timer.Stop()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-retryNow:
+			return "timeline.retry_manual", nil
+		case <-policyChanged:
+			return "policy_updated", nil
+		case <-risk:
+			onRisk()
+			risk = nil
+		}
 	}
 }
 
@@ -119,7 +197,7 @@ func (g *Gateway) policyDelay(policy state.RetryPolicy, cfg config.Config, respo
 		delay = g.randomDelay(cfg.Retry.MinInterval.Duration, cfg.Retry.MaxInterval.Duration)
 	}
 	if policy.HonorRetryAfter {
-		delay = max(delay, retryAfter(response))
+		delay = max(delay, retryAfter(response, cfg.Retry.RetryAfterCap.Duration))
 	}
 	return delay
 }
@@ -138,7 +216,7 @@ func exponentialDelay(base, maximum time.Duration, index int) time.Duration {
 func (g *Gateway) retryDelay(cfg config.Config, response *http.Response) time.Duration {
 	delay := g.randomDelay(cfg.Retry.MinInterval.Duration, cfg.Retry.MaxInterval.Duration)
 	if cfg.Retry.HonorRetryAfter {
-		delay = max(delay, retryAfter(response))
+		delay = max(delay, retryAfter(response, cfg.Retry.RetryAfterCap.Duration))
 	}
 	return delay
 }

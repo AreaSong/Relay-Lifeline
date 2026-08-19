@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
@@ -22,11 +23,15 @@ func (h *Handler) runtimeLogs(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	query := request.URL.Query()
+	filter := runlog.Filter{Level: query.Get("level"), Event: query.Get("event"), RequestID: query.Get("requestId"), Search: query.Get("q")}
+	if query.Get("since") != "" {
+		filter.Since, _ = time.Parse(time.RFC3339, query.Get("since"))
+	}
 	if query.Get("tail") == "true" {
-		writeJSON(writer, http.StatusOK, h.runLogs.Tail(limit, query.Get("level"), query.Get("event"), query.Get("requestId")))
+		writeJSON(writer, http.StatusOK, h.runLogs.QueryTail(limit, filter))
 		return
 	}
-	writeJSON(writer, http.StatusOK, h.runLogs.Page(after, limit, query.Get("level"), query.Get("event"), query.Get("requestId")))
+	writeJSON(writer, http.StatusOK, h.runLogs.QueryPage(after, limit, filter))
 }
 
 func (h *Handler) logPageParameters(writer http.ResponseWriter, request *http.Request, locale, fallback string) (uint64, int, bool) {
@@ -54,9 +59,15 @@ func (h *Handler) logPageParameters(writer http.ResponseWriter, request *http.Re
 		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_LEVEL", l10n.M("api.logs.level_invalid"), locale, fallback)
 		return 0, 0, false
 	}
-	if len(query.Get("event")) > 128 || len(query.Get("requestId")) > 128 {
+	if len(query.Get("event")) > 128 || len(query.Get("requestId")) > 128 || len(query.Get("q")) > 128 {
 		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_FILTER", l10n.M("api.logs.filter_invalid"), locale, fallback)
 		return 0, 0, false
+	}
+	if raw := query.Get("since"); raw != "" {
+		if _, err := time.Parse(time.RFC3339, raw); err != nil {
+			h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_FILTER", l10n.M("api.logs.filter_invalid"), locale, fallback)
+			return 0, 0, false
+		}
 	}
 	if tail := query.Get("tail"); tail != "" && tail != "true" && tail != "false" {
 		h.writeError(writer, http.StatusBadRequest, "INVALID_LOG_TAIL", l10n.M("api.logs.tail_invalid"), locale, fallback)

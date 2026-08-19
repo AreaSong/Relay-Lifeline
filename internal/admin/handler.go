@@ -1,10 +1,12 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,47 +16,86 @@ import (
 	"github.com/areasong/relay-lifeline/internal/capture"
 	"github.com/areasong/relay-lifeline/internal/config"
 	"github.com/areasong/relay-lifeline/internal/diagnostics"
+	"github.com/areasong/relay-lifeline/internal/governance"
 	"github.com/areasong/relay-lifeline/internal/incident"
 	"github.com/areasong/relay-lifeline/internal/journal"
 	"github.com/areasong/relay-lifeline/internal/l10n"
 	"github.com/areasong/relay-lifeline/internal/monitoring"
 	"github.com/areasong/relay-lifeline/internal/notify"
+	trafficpolicy "github.com/areasong/relay-lifeline/internal/policy"
 	"github.com/areasong/relay-lifeline/internal/repeat"
 	"github.com/areasong/relay-lifeline/internal/risk"
 	"github.com/areasong/relay-lifeline/internal/runlog"
+	"github.com/areasong/relay-lifeline/internal/sanitize"
 	"github.com/areasong/relay-lifeline/internal/state"
+	"github.com/areasong/relay-lifeline/internal/telemetry"
 	"github.com/areasong/relay-lifeline/internal/timeline"
+	"github.com/areasong/relay-lifeline/internal/upstream"
 )
 
 type Handler struct {
-	store       *config.Store
-	registry    *state.Registry
-	controller  *state.Controller
-	auth        authenticator
-	risk        *risk.Manager
-	diagnostics *diagnostics.Service
-	notifier    *notify.Notifier
-	captures    *capture.Manager
-	runLogs     *runlog.Store
-	monitor     *monitoring.Store
-	runtimeInfo func() buildinfo.Info
-	sessions    *sessionManager
-	incidents   *incident.Store
-	journals    map[string]*journal.Store
-	repeater    *repeat.Manager
-	streamMu    sync.Mutex
-	streamFeeds map[string]*realtimeFeed
+	store            *config.Store
+	registry         *state.Registry
+	controller       *state.Controller
+	auth             authenticator
+	risk             *risk.Manager
+	diagnostics      *diagnostics.Service
+	notifier         *notify.Notifier
+	captures         *capture.Manager
+	runLogs          *runlog.Store
+	monitor          *monitoring.Store
+	runtimeInfo      func() buildinfo.Info
+	sessions         *sessionManager
+	incidents        *incident.Store
+	journals         map[string]*journal.Store
+	repeater         *repeat.Manager
+	oidc             *oidcService
+	oidcEnabled      bool
+	upstreamStatus   func() upstream.PoolStatus
+	governanceStatus func() governance.Snapshot
+	telemetryStatus  func() telemetry.Status
+	policyStatus     func(int) trafficpolicy.Status
+	policySimulate   func(trafficpolicy.Input) trafficpolicy.Decision
+	policyReleases   *trafficpolicy.ReleaseManager
+	policyMu         sync.Mutex
+	uncertainConfirm *uncertainConfirmationStore
+	streamMu         sync.Mutex
+	streamFeeds      map[string]*realtimeFeed
 }
 
 func (h *Handler) SetMonitoring(store *monitoring.Store)         { h.monitor = store }
 func (h *Handler) SetRuntimeInfo(provider func() buildinfo.Info) { h.runtimeInfo = provider }
 func (h *Handler) SetIncidents(store *incident.Store)            { h.incidents = store }
 func (h *Handler) SetRepeatManager(manager *repeat.Manager)      { h.repeater = manager }
-func (h *Handler) SetJournals(requests, incidents *journal.Store, repeats ...*journal.Store) {
-	h.journals = map[string]*journal.Store{"requests": requests, "incidents": incidents}
-	if len(repeats) > 0 {
-		h.journals["repeat-tasks"] = repeats[0]
+func (h *Handler) SetRuntimeStatus(upstreamProvider func() upstream.PoolStatus, governanceProvider func() governance.Snapshot) {
+	h.upstreamStatus, h.governanceStatus = upstreamProvider, governanceProvider
+}
+func (h *Handler) SetTelemetryStatus(provider func() telemetry.Status) { h.telemetryStatus = provider }
+func (h *Handler) SetPolicyRuntime(status func(int) trafficpolicy.Status, simulate func(trafficpolicy.Input) trafficpolicy.Decision) {
+	h.policyStatus, h.policySimulate = status, simulate
+}
+func (h *Handler) SetPolicyReleaseManager(manager *trafficpolicy.ReleaseManager) {
+	if manager != nil {
+		h.policyReleases = manager
 	}
+}
+func (h *Handler) SetJournals(requests, incidents *journal.Store, additional ...*journal.Store) {
+	h.journals = map[string]*journal.Store{"requests": requests, "incidents": incidents}
+	if len(additional) > 0 {
+		h.journals["repeat-tasks"] = additional[0]
+	}
+	if len(additional) > 1 {
+		h.journals["usage-ledger"] = additional[1]
+	}
+	if len(additional) > 2 {
+		h.journals["policy-releases"] = additional[2]
+	}
+}
+
+func (h *Handler) statusSnapshot(locale, fallback string) state.Snapshot {
+	snapshot := h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback)
+	snapshot.Mode = h.controller.Mode()
+	return snapshot
 }
 
 func New(store *config.Store, registry *state.Registry, controller *state.Controller) *Handler {
@@ -67,10 +108,26 @@ func NewWithServices(store *config.Store, registry *state.Registry, controller *
 
 func NewWithExtendedServices(store *config.Store, registry *state.Registry, controller *state.Controller, riskManager *risk.Manager, diagnosticService *diagnostics.Service, notifier *notify.Notifier, captures *capture.Manager, runLogs *runlog.Store) *Handler {
 	return &Handler{
-		store: store, registry: registry, controller: controller, auth: newAuthenticatorFromEnvironment(),
+		store: store, registry: registry, controller: controller, auth: newAuthenticatorFromEnvironment(store.Get().ManagementSecurity.LocalAccessEnabled),
 		risk: riskManager, diagnostics: diagnosticService, notifier: notifier, captures: captures, runLogs: runLogs,
-		sessions: newSessionManager(store), streamFeeds: make(map[string]*realtimeFeed),
+		sessions: newSessionManager(store), streamFeeds: make(map[string]*realtimeFeed), policyReleases: trafficpolicy.NewReleaseManager(), uncertainConfirm: newUncertainConfirmationStore(),
 	}
+}
+
+func (h *Handler) ConfigureOIDC(ctx context.Context) error {
+	cfg := h.store.Get().ManagementSecurity.OIDC
+	h.oidcEnabled = cfg.Enabled
+	if !cfg.Enabled {
+		h.oidc = nil
+		return nil
+	}
+	service, err := newOIDCService(ctx, cfg, os.Getenv("RELAY_LIFELINE_OIDC_CLIENT_SECRET"))
+	if err != nil {
+		h.oidc = nil
+		return err
+	}
+	h.oidc = service
+	return nil
 }
 
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -78,19 +135,36 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	locale, fallback := h.requestLocales(request)
 	writer.Header().Set("Content-Language", locale)
 	path := strings.TrimPrefix(request.URL.Path, "/admin/api")
+	if request.Method == http.MethodGet && path == "/session/login-options" {
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"localEnabled": h.auth.enabled,
+			"oidc":         map[string]bool{"enabled": h.oidcEnabled, "available": h.oidc != nil},
+		})
+		return
+	}
+	if request.Method == http.MethodGet && path == "/session/oidc/start" {
+		h.beginOIDC(writer, request, locale, fallback)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/session/oidc/callback" {
+		h.completeOIDC(writer, request)
+		return
+	}
 	if request.Method == http.MethodPost && path == "/session/login" {
 		h.login(writer, request, locale, fallback)
 		return
 	}
 	role, authenticated := h.auth.authenticate(request)
+	authMethod := "bearer"
 	cookieSession, sessionToken, cookieAuthenticated, cookieState := h.sessions.authenticate(request)
 	if cookieAuthenticated {
 		role, authenticated = cookieSession.Role, true
+		authMethod = cookieSession.AuthMethod
 	}
 	if !authenticated {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.authentication_failed", Outcome: "denied"})
 		switch {
-		case cookieState == "invalidated" || cookieState == "idle_timeout":
+		case cookieState == "invalidated" || cookieState == "idle_timeout" || cookieState == "expired":
 			h.writeError(writer, http.StatusUnauthorized, "SESSION_EXPIRED", l10n.M("api.admin.session_expired"), locale, fallback)
 		case request.Header.Get("Authorization") == "":
 			h.writeError(writer, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", l10n.M("api.admin.authentication_required"), locale, fallback)
@@ -113,6 +187,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch {
 	case request.Method == http.MethodGet && path == "/session":
 		info := sessionFor(role)
+		info.AuthMethod = authMethod
 		if cookieAuthenticated {
 			info.CSRFToken = cookieSession.CSRF
 		}
@@ -122,6 +197,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			h.sessions.revoke(sessionToken)
 			setSessionCookie(writer, request, "", -1)
 		}
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.session_revoked", Outcome: "succeeded", Details: map[string]any{"authMethod": authMethod, "role": role}})
 		writeJSON(writer, http.StatusOK, map[string]bool{"loggedOut": true})
 	case request.Method == http.MethodGet && path == "/meta":
 		if h.runtimeInfo == nil {
@@ -130,21 +206,83 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeJSON(writer, http.StatusOK, h.runtimeInfo())
 	case request.Method == http.MethodGet && path == "/status":
-		writeJSON(writer, http.StatusOK, h.registry.LocalizedSnapshot(h.controller.IsPaused(), locale, fallback))
+		writeJSON(writer, http.StatusOK, h.statusSnapshot(locale, fallback))
+	case request.Method == http.MethodGet && path == "/health/summary":
+		h.health(writer)
+	case request.Method == http.MethodGet && path == "/slo":
+		cfg := h.store.Get()
+		if !cfg.SLO.Enabled {
+			writeJSON(writer, http.StatusOK, monitoring.SLO{Window: "disabled", Healthy: true})
+			return
+		}
+		if h.monitor == nil {
+			writeJSON(writer, http.StatusOK, monitoring.SLO{Window: "disabled", Healthy: true})
+			return
+		}
+		writeJSON(writer, http.StatusOK, h.monitor.SLO(cfg.SLO.Window.Duration, cfg.SLO.AvailabilityTarget, cfg.SLO.RecoveryLatencyTarget.Duration))
 	case request.Method == http.MethodGet && path == "/stream":
 		h.stream(writer, request, locale, fallback)
 	case request.Method == http.MethodGet && path == "/metrics":
 		h.metrics(writer, request)
 	case request.Method == http.MethodGet && path == "/metrics/errors":
 		h.metricErrors(writer, request)
+	case request.Method == http.MethodGet && path == "/persistence/status":
+		h.persistenceStatus(writer)
+	case request.Method == http.MethodGet && path == "/upstreams/status":
+		h.writeUpstreamStatus(writer)
+	case request.Method == http.MethodGet && path == "/governance/status":
+		if h.governanceStatus == nil {
+			writeJSON(writer, http.StatusOK, governance.Snapshot{})
+		} else {
+			writeJSON(writer, http.StatusOK, h.governanceStatus())
+		}
+	case request.Method == http.MethodGet && path == "/telemetry/status":
+		if h.telemetryStatus == nil {
+			writeJSON(writer, http.StatusOK, telemetry.Status{Healthy: true, TraceHealthy: true, MetricHealthy: true})
+		} else {
+			writeJSON(writer, http.StatusOK, h.telemetryStatus())
+		}
+	case request.Method == http.MethodGet && path == "/policies":
+		h.policyList(writer)
+	case request.Method == http.MethodPut && path == "/policies":
+		h.policySave(writer, request, locale, fallback)
+	case request.Method == http.MethodPut && path == "/policies/draft":
+		h.policyDraft(writer, request, locale, fallback)
+	case request.Method == http.MethodGet && path == "/policies/releases":
+		h.policyReleaseStatus(writer)
+	case request.Method == http.MethodPost && path == "/policies/publish":
+		h.policyPublish(writer, request, locale, fallback, role)
+	case request.Method == http.MethodPost && path == "/policies/rollback":
+		h.policyRollback(writer, request, locale, fallback, role)
+	case request.Method == http.MethodGet && path == "/policies/status":
+		h.policyRuntimeStatus(writer, request)
+	case request.Method == http.MethodGet && path == "/policies/decisions":
+		h.policyDecisions(writer, request)
+	case request.Method == http.MethodPost && path == "/policies/simulate":
+		h.policySimulation(writer, request, locale, fallback)
+	case request.Method == http.MethodPost && path == "/policies/replay":
+		h.policyReplay(writer, request, locale, fallback)
+	case request.Method == http.MethodGet && strings.HasPrefix(path, "/policies/"):
+		h.policyGet(writer, strings.TrimPrefix(path, "/policies/"), locale, fallback)
 	case request.Method == http.MethodGet && path == "/events":
 		h.securityEvents(writer, request)
 	case request.Method == http.MethodGet && path == "/config":
 		if role == RoleViewer {
-			writeJSON(writer, http.StatusOK, diagnostics.RedactedConfig(h.store.Get()))
+			writeJSON(writer, http.StatusOK, diagnostics.RedactedConfig(h.store.Desired()))
 		} else {
-			writeJSON(writer, http.StatusOK, h.store.Get())
+			writeJSON(writer, http.StatusOK, h.store.Desired())
 		}
+	case request.Method == http.MethodGet && path == "/config/state":
+		state := h.store.State()
+		if role == RoleViewer {
+			state.Active = diagnostics.RedactedConfig(state.Active)
+			state.Desired = diagnostics.RedactedConfig(state.Desired)
+		}
+		writeJSON(writer, http.StatusOK, state)
+	case request.Method == http.MethodGet && path == "/config/backups":
+		h.configBackups(writer, locale, fallback)
+	case strings.HasPrefix(path, "/config/backups/"):
+		h.configBackup(writer, request, path, locale, fallback, role)
 	case request.Method == http.MethodPost && path == "/config/validate":
 		h.validateConfig(writer, request)
 	case request.Method == http.MethodGet && path == "/alerts":
@@ -194,7 +332,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodGet && path == "/diagnostics/export":
 		h.exportDiagnostics(writer, request)
 	case request.Method == http.MethodPut && path == "/config":
-		h.updateConfig(writer, request)
+		h.updateConfig(writer, request, role)
 	case request.Method == http.MethodPost && path == "/config/reload":
 		if err := h.store.Reload(); err != nil {
 			h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.reload", Outcome: "failed"})
@@ -202,7 +340,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.reload", Outcome: "succeeded"})
-		writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
+		state := h.store.State()
+		writeJSON(writer, http.StatusOK, map[string]any{"reloaded": true, "activeRevision": state.ActiveRevision, "desiredRevision": state.DesiredRevision, "pendingRestart": state.PendingRestart})
 	case request.Method == http.MethodPost && path == "/control/pause":
 		changed := h.controller.Pause()
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.pause", Outcome: "succeeded", Changed: monitoring.Bool(changed)})
@@ -210,11 +349,25 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodPost && path == "/control/resume":
 		changed := h.controller.Resume()
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.resume", Outcome: "succeeded", Changed: monitoring.Bool(changed)})
-		writeJSON(writer, http.StatusOK, map[string]bool{"changed": changed, "paused": false})
+		writeJSON(writer, http.StatusOK, map[string]any{"changed": changed, "paused": false, "mode": h.controller.Mode()})
+	case request.Method == http.MethodPost && path == "/control/drain":
+		changed := h.controller.Drain()
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.drain", Outcome: "succeeded", Changed: monitoring.Bool(changed), Details: map[string]any{"active": h.registry.Snapshot(false).Active}})
+		writeJSON(writer, http.StatusOK, map[string]any{"changed": changed, "mode": h.controller.Mode(), "active": h.registry.Snapshot(false).Active})
+	case request.Method == http.MethodPost && path == "/control/maintenance":
+		changed := h.controller.Maintenance()
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.maintenance", Outcome: "succeeded", Changed: monitoring.Bool(changed), Details: map[string]any{"active": h.registry.Snapshot(false).Active}})
+		writeJSON(writer, http.StatusOK, map[string]any{"changed": changed, "mode": h.controller.Mode(), "active": h.registry.Snapshot(false).Active})
 	case request.Method == http.MethodPost && path == "/requests/batch/retry":
 		h.batchRetry(writer, request, locale, fallback)
 	case request.Method == http.MethodPost && path == "/requests/batch/retry-policy":
 		h.batchRetryPolicy(writer, request, locale, fallback)
+	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/uncertain/preview"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/uncertain/preview")
+		h.previewUncertainResolution(writer, request, id, uncertainActor(authMethod, sessionToken, request.Header.Get("Authorization")), locale, fallback)
+	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/uncertain/resolve"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/uncertain/resolve")
+		h.resolveUncertain(writer, request, id, uncertainActor(authMethod, sessionToken, request.Header.Get("Authorization")), locale, fallback)
 	case request.Method == http.MethodPost && strings.HasPrefix(path, "/requests/") && strings.HasSuffix(path, "/retry"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/requests/"), "/retry")
 		h.retryRequest(writer, request, id, locale, fallback)
@@ -228,13 +381,56 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.repeatTaskAction(writer, request, strings.TrimPrefix(path, "/repeat-tasks/"), locale, fallback)
 	case request.Method == http.MethodDelete && strings.HasPrefix(path, "/requests/"):
 		id := strings.TrimPrefix(path, "/requests/")
-		h.requestAction(writer, h.registry.Cancel(id), locale, fallback)
+		result := h.registry.CancelChecked(id)
+		if result.Outcome != state.RequestActionAccepted {
+			h.writeRequestActionError(writer, result, locale, fallback)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"accepted": true, "result": result})
 	default:
 		h.writeError(writer, http.StatusNotFound, "ENDPOINT_NOT_FOUND", l10n.M("api.route.not_found"), locale, fallback)
 	}
 }
 
+func (h *Handler) writeUpstreamStatus(writer http.ResponseWriter) {
+	if h.upstreamStatus == nil {
+		writeJSON(writer, http.StatusOK, upstream.PoolStatus{})
+		return
+	}
+	status := h.upstreamStatus()
+	for index := range status.Targets {
+		status.Targets[index].Target.BaseURL = sanitize.URL(status.Targets[index].Target.BaseURL)
+	}
+	writeJSON(writer, http.StatusOK, status)
+}
+
+func (h *Handler) persistenceStatus(writer http.ResponseWriter) {
+	result := make(map[string]any, len(h.journals))
+	for name, store := range h.journals {
+		if store == nil {
+			continue
+		}
+		status := store.Status()
+		stats := store.Stats()
+		result[name] = map[string]any{
+			"state":             status.State,
+			"failedAt":          status.FailedAt,
+			"failedStage":       status.FailedStage,
+			"failureCount":      status.FailureCount,
+			"lastError":         status.LastError,
+			"entries":           stats.Entries,
+			"sizeBytes":         stats.SizeBytes,
+			"compactionHealthy": stats.CompactionHealthy,
+		}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"journals": result})
+}
+
 func (h *Handler) login(writer http.ResponseWriter, request *http.Request, locale, fallback string) {
+	if !h.auth.enabled {
+		h.writeError(writer, http.StatusNotFound, "LOCAL_LOGIN_DISABLED", l10n.M("api.admin.local_login_disabled"), locale, fallback)
+		return
+	}
 	var input struct {
 		Key string `json:"key"`
 	}
@@ -256,7 +452,8 @@ func (h *Handler) login(writer http.ResponseWriter, request *http.Request, local
 	setSessionCookie(writer, request, token, int(h.store.Get().ManagementSecurity.SessionIdleTimeout.Duration.Seconds()))
 	info := sessionFor(session.Role)
 	info.CSRFToken = session.CSRF
-	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.session_created", Outcome: "succeeded"})
+	info.AuthMethod = session.AuthMethod
+	h.recordSecurityEvent(monitoring.SecurityEvent{Code: "admin.break_glass_session_created", Outcome: "succeeded", Details: map[string]any{"authMethod": session.AuthMethod, "role": session.Role}})
 	writeJSON(writer, http.StatusOK, info)
 }
 
@@ -280,7 +477,13 @@ func (h *Handler) incident(writer http.ResponseWriter, id, locale, fallback stri
 			requests = append(requests, timeline.LocalizeRecord(record, locale, fallback))
 		}
 	}
-	writeJSON(writer, http.StatusOK, incidentDetail{Incident: item, Requests: requests, AffectedRequestsTruncated: len(item.AffectedRequests) > requestLimit})
+	lifecycleMessage := func(eventType string) string {
+		return l10n.Default.Text(locale, fallback, l10n.M("incident.timeline."+eventType))
+	}
+	writeJSON(writer, http.StatusOK, incidentDetail{
+		Incident: item, Requests: requests, Timeline: buildIncidentTimeline(item, requests, lifecycleMessage),
+		AffectedRequestsTruncated: len(item.AffectedRequests) > requestLimit,
+	})
 }
 
 func (h *Handler) historyList(writer http.ResponseWriter, request *http.Request, locale, fallback string) {
@@ -349,13 +552,27 @@ func (h *Handler) testNotification(writer http.ResponseWriter, locale, fallback 
 	writeJSON(writer, http.StatusAccepted, map[string]bool{"queued": true})
 }
 
-func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request) {
+func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request, role Role) {
 	locale, fallback := h.requestLocales(request)
 	cfg, ok := h.decodeConfig(writer, request, locale, fallback)
 	if !ok {
 		return
 	}
 	plan := config.PlanChanges(h.store.Get(), cfg)
+	if planChangesTrafficPolicy(plan) {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "traffic_policy.bypass_denied", Outcome: "denied"})
+		h.writeError(writer, http.StatusPreconditionRequired, "POLICY_RELEASE_REQUIRED", l10n.M("api.policy.release_required"), locale, fallback)
+		return
+	}
+	if planChangesAuthentication(plan) && !role.allows(RoleSensitive) {
+		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.authentication_change", Outcome: "denied"})
+		h.writeError(writer, http.StatusForbidden, "SENSITIVE_PERMISSION_REQUIRED", l10n.M("api.admin.permission_denied"), locale, fallback)
+		return
+	}
+	if planChangesAuthentication(plan) && request.Header.Get("X-Relay-Lifeline-Confirm") != "change-management-auth" {
+		h.writeError(writer, http.StatusPreconditionRequired, "AUTHENTICATION_CHANGE_CONFIRMATION_REQUIRED", l10n.M("api.config.authentication_confirmation_required"), locale, fallback)
+		return
+	}
 	result, err := h.store.UpdateWithResult(cfg, true)
 	if err != nil {
 		h.recordSecurityEvent(monitoring.SecurityEvent{Code: "config.save", Outcome: "failed"})
@@ -367,7 +584,27 @@ func (h *Handler) updateConfig(writer http.ResponseWriter, request *http.Request
 		Saved      bool   `json:"saved"`
 		BackupPath string `json:"backupPath,omitempty"`
 		config.ChangePlan
-	}{Saved: true, BackupPath: result.BackupPath, ChangePlan: plan})
+		ActiveRevision  string `json:"activeRevision"`
+		DesiredRevision string `json:"desiredRevision"`
+	}{Saved: true, BackupPath: result.BackupPath, ChangePlan: result.PendingRestart, ActiveRevision: result.ActiveRevision, DesiredRevision: result.DesiredRevision})
+}
+
+func planChangesAuthentication(plan config.ChangePlan) bool {
+	for _, field := range plan.Fields {
+		if field.Path == "management-security.authentication" {
+			return true
+		}
+	}
+	return false
+}
+
+func planChangesTrafficPolicy(plan config.ChangePlan) bool {
+	for _, field := range plan.Fields {
+		if field.Path == "traffic-policy" {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) validateConfig(writer http.ResponseWriter, request *http.Request) {

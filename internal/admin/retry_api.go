@@ -64,7 +64,7 @@ func (h *Handler) retryRequest(writer http.ResponseWriter, request *http.Request
 		h.writeError(writer, http.StatusBadRequest, "INVALID_RETRY_REQUEST", l10n.M("api.request.batch_invalid"), locale, fallback)
 		return
 	}
-	result := h.registry.RetryNowChecked(id, input.AllowUncertain)
+	result := h.registry.RetryNowChecked(id)
 	if result.Outcome != state.RequestActionAccepted {
 		if result.Reason == state.RequestReasonAlreadyRequested {
 			writeJSON(writer, http.StatusOK, map[string]any{"accepted": false, "result": result})
@@ -139,7 +139,7 @@ func (h *Handler) batchRetry(writer http.ResponseWriter, request *http.Request, 
 	operation := newOperationID("retry")
 	response := batchActionResponse{OperationID: operation, Requested: len(ids), Results: make([]state.RequestActionResult, 0, len(ids))}
 	for _, id := range ids {
-		result := h.registry.RetryNowChecked(id, payload.AllowUncertain)
+		result := h.registry.RetryNowChecked(id)
 		response.Results = append(response.Results, result)
 		if result.Outcome == state.RequestActionAccepted {
 			response.Accepted++
@@ -188,7 +188,7 @@ func (h *Handler) batchRetryPolicy(writer http.ResponseWriter, request *http.Req
 		if result.Outcome == state.RequestActionAccepted {
 			response.Accepted++
 			if payload.RetryWaitingNow && result.State == "waiting" {
-				if h.registry.RetryNowChecked(id, false).Outcome == state.RequestActionAccepted {
+				if h.registry.RetryNowChecked(id).Outcome == state.RequestActionAccepted {
 					response.Triggered++
 				}
 			}
@@ -314,6 +314,10 @@ func (h *Handler) writeRequestActionError(writer http.ResponseWriter, result sta
 		status, code = http.StatusConflict, "RETRY_POLICY_EXISTS"
 	case state.RequestReasonNoPolicy:
 		status, code = http.StatusNotFound, "RETRY_POLICY_NOT_FOUND"
+	case state.RequestReasonPersistenceUnavailable:
+		status, code, message = http.StatusServiceUnavailable, "PERSISTENCE_UNAVAILABLE", l10n.M("api.persistence.unavailable")
+	case state.RequestReasonUncertainResolution:
+		status, code, message = http.StatusPreconditionRequired, "UNCERTAIN_RESOLUTION_REQUIRED", l10n.M("api.request.uncertain_resolution_required")
 	}
 	h.writeError(writer, status, code, message, locale, fallback)
 }

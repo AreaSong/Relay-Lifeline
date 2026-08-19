@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -229,6 +230,99 @@ func TestCaptureExpiresAndDeletesEncryptedObjects(t *testing.T) {
 	}
 }
 
+func TestCaptureDeleteCommitsMemoryAfterDirectorySync(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("delete-sync", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetHooks(Hooks{SyncDir: func(path string) error {
+		if path == cfg.StorageDir {
+			return syscall.EIO
+		}
+		return manager.syncDirectoryOS(path)
+	}})
+	if err := manager.Delete(id); err == nil {
+		t.Fatal("根目录 Sync 失败应阻止内存删除提交")
+	}
+	if _, ok := manager.Get(id); !ok {
+		t.Fatal("根目录 Sync 失败后内存记录不应消失")
+	}
+	manager.SetHooks(Hooks{})
+	if err := manager.Delete(id); err != nil {
+		t.Fatalf("重试删除失败: %v", err)
+	}
+	if _, ok := manager.Get(id); ok {
+		t.Fatal("持久删除成功后内存记录仍存在")
+	}
+}
+
+func TestCaptureStorageBytesTracksWritesDeletesAndReconciliation(t *testing.T) {
+	manager, _, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("storage-accounting", http.MethodPost, "/v1/responses", nil, []byte(`{"input":"captured"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := manager.Status().StorageBytes
+	if initial <= 0 {
+		t.Fatalf("request and metadata were not accounted: %d", initial)
+	}
+	if err := manager.RecordAttempt("storage-accounting", 1, http.StatusServiceUnavailable, nil, strings.NewReader(`{"error":"temporary"}`), errors.New("temporary"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	afterAttempt := manager.Status().StorageBytes
+	if afterAttempt <= initial {
+		t.Fatalf("attempt body did not increase storage usage: before=%d after=%d", initial, afterAttempt)
+	}
+	if reconciled := manager.ReconcileStorageUsage(); reconciled != afterAttempt {
+		t.Fatalf("incremental and scanned storage diverged: incremental=%d scanned=%d", afterAttempt, reconciled)
+	}
+	if err := manager.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+	if remaining := manager.Status().StorageBytes; remaining != 0 {
+		t.Fatalf("deleted capture remains in storage accounting: %d", remaining)
+	}
+}
+
+func TestCaptureDeleteExpiredCommitsMemoryAfterDirectorySync(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	base := time.Now()
+	manager.now = func() time.Time { return base }
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("expired-sync", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base = base.Add(cfg.Retention.Duration + time.Second)
+	manager.SetHooks(Hooks{SyncDir: func(path string) error {
+		if path == cfg.StorageDir {
+			return syscall.EIO
+		}
+		return manager.syncDirectoryOS(path)
+	}})
+	deleted, err := manager.DeleteExpired()
+	if err == nil || deleted != 0 {
+		t.Fatalf("根目录 Sync 失败不应报告已提交删除: deleted=%d err=%v", deleted, err)
+	}
+	if _, ok := manager.Get(id); !ok {
+		t.Fatal("根目录 Sync 失败后到期记录不应从内存消失")
+	}
+	manager.SetHooks(Hooks{})
+	deleted, err = manager.DeleteExpired()
+	if err != nil || deleted != 1 {
+		t.Fatalf("重试到期删除异常: deleted=%d err=%v", deleted, err)
+	}
+}
+
 func TestCaptureTruncatesBodyAtConfiguredLimit(t *testing.T) {
 	cfg := config.Default().Capture
 	cfg.StorageDir = t.TempDir()
@@ -323,6 +417,153 @@ func TestParseKeyringRejectsMissingActiveKey(t *testing.T) {
 	encoded := base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{0x41}, 32))
 	if _, err := ParseKeyring("new", "", `{"old":"`+encoded+`"}`); err == nil {
 		t.Fatal("缺少活动密钥的 key ring 应被拒绝")
+	}
+}
+
+func TestCaptureMetadataFailureDoesNotAdvanceMemoryOrDisk(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("metadata-failure", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetHooks(Hooks{Write: func(file *os.File, data []byte) (int, error) {
+		if strings.HasPrefix(filepath.Base(file.Name()), ".metadata-") {
+			return 0, syscall.ENOSPC
+		}
+		return file.Write(data)
+	}})
+	if err := manager.RecordAttempt("metadata-failure", 1, 503, nil, nil, errors.New("failed"), time.Now()); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("预期 metadata ENOSPC，实际 %v", err)
+	}
+	assertCaptureState(t, manager, cfg.StorageDir, id, "active", 0)
+	status := manager.Status()
+	if status.PersistenceHealthy || status.FailedStage != "metadata_write" || status.FailureCount != 1 {
+		t.Fatalf("捕获持久化状态异常: %+v", status)
+	}
+
+	manager.SetHooks(Hooks{})
+	if err := manager.RecordAttempt("metadata-failure", 1, 503, nil, nil, errors.New("failed"), time.Now()); err != nil {
+		t.Fatalf("故障解除后无法重试: %v", err)
+	}
+	assertCaptureState(t, manager, cfg.StorageDir, id, "active", 1)
+}
+
+func TestCaptureFinishSyncAndRenameFailuresAreRetryable(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		hooks Hooks
+		stage string
+	}{
+		{name: "sync", stage: "metadata_sync", hooks: Hooks{Sync: func(file *os.File) error {
+			if strings.HasPrefix(filepath.Base(file.Name()), ".metadata-") {
+				return syscall.ENOSPC
+			}
+			return file.Sync()
+		}}},
+		{name: "rename", stage: "metadata_rename", hooks: Hooks{Rename: func(oldPath, newPath string) error {
+			if filepath.Base(newPath) == "metadata.json" {
+				return syscall.EIO
+			}
+			return os.Rename(oldPath, newPath)
+		}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, cfg, _ := testManager(t)
+			if err := manager.Activate(1, time.Minute); err != nil {
+				t.Fatal(err)
+			}
+			id, err := manager.BeginRequest("finish-"+test.name, http.MethodPost, "/v1/responses", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager.SetHooks(test.hooks)
+			if err := manager.Finish("finish-"+test.name, "successful", 0); err == nil {
+				t.Fatal("注入故障后 Finish 应失败")
+			}
+			assertCaptureState(t, manager, cfg.StorageDir, id, "active", 0)
+			if status := manager.Status(); status.FailedStage != test.stage {
+				t.Fatalf("失败阶段错误: %+v", status)
+			}
+			manager.SetHooks(Hooks{})
+			if err := manager.Finish("finish-"+test.name, "successful", 0); err != nil {
+				t.Fatalf("Finish 无法重试: %v", err)
+			}
+			assertCaptureState(t, manager, cfg.StorageDir, id, "successful", 0)
+		})
+	}
+}
+
+func TestCaptureBodyShortWritePersistsWarningWithoutDanglingReference(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("short-write", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetHooks(Hooks{Write: func(file *os.File, data []byte) (int, error) {
+		if strings.HasPrefix(filepath.Base(file.Name()), ".capture-") {
+			return max(0, len(data)-1), nil
+		}
+		return file.Write(data)
+	}})
+	if err := manager.RecordAttempt("short-write", 1, 503, nil, strings.NewReader("response"), nil, time.Now()); err != nil {
+		t.Fatalf("正文失败应通过持久化 warning 降级: %v", err)
+	}
+	assertCaptureState(t, manager, cfg.StorageDir, id, "active", 1)
+	record, _ := manager.Get(id)
+	if record.Attempts[0].Response != nil || len(record.Warnings) != 1 {
+		t.Fatalf("短写后元数据引用了不完整正文: %+v", record)
+	}
+	if status := manager.Status(); status.PersistenceHealthy || status.FailedStage != "body_write" {
+		t.Fatalf("短写未进入降级状态: %+v", status)
+	}
+}
+
+func TestCaptureDirectorySyncFailureCommitsVisibleMetadataState(t *testing.T) {
+	manager, cfg, _ := testManager(t)
+	if err := manager.Activate(1, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	id, err := manager.BeginRequest("directory-sync", http.MethodPost, "/v1/responses", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetHooks(Hooks{SyncDir: func(path string) error {
+		if path == filepath.Join(cfg.StorageDir, id) {
+			return syscall.EIO
+		}
+		return manager.syncDirectoryOS(path)
+	}})
+	if err := manager.Finish("directory-sync", "successful", 0); err == nil {
+		t.Fatal("目录 Sync 故障应向调用方报告")
+	}
+	assertCaptureState(t, manager, cfg.StorageDir, id, "successful", 0)
+	if status := manager.Status(); status.PersistenceHealthy || status.FailedStage != "directory_sync" {
+		t.Fatalf("目录 Sync 降级状态异常: %+v", status)
+	}
+}
+
+func assertCaptureState(t *testing.T, manager *Manager, root, id, state string, attempts int) {
+	t.Helper()
+	memory, ok := manager.Get(id)
+	if !ok || memory.State != state || len(memory.Attempts) != attempts {
+		t.Fatalf("内存捕获状态异常: %+v", memory)
+	}
+	data, err := os.ReadFile(filepath.Join(root, id, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk Record
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if disk.State != state || len(disk.Attempts) != attempts {
+		t.Fatalf("磁盘捕获状态异常: %+v", disk)
 	}
 }
 

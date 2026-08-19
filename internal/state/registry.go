@@ -15,23 +15,28 @@ import (
 )
 
 type RequestInfo struct {
-	ID               string           `json:"id"`
-	ClientID         string           `json:"clientId,omitempty"`
-	TaskID           string           `json:"taskId,omitempty"`
-	Method           string           `json:"method"`
-	Path             string           `json:"path"`
-	State            lifecycle.State  `json:"state"`
-	Attempt          int              `json:"attempt"`
-	StartedAt        time.Time        `json:"startedAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
-	NextRetryAt      time.Time        `json:"nextRetryAt,omitempty"`
-	LastError        string           `json:"lastError,omitempty"`
-	LastErrorCode    string           `json:"lastErrorCode,omitempty"`
-	LastErrorDetails map[string]any   `json:"lastErrorDetails,omitempty"`
-	RetryDeadline    time.Time        `json:"retryDeadline,omitempty"`
-	RetryIntervalMs  int64            `json:"retryIntervalMilliseconds,omitempty"`
-	RetryPolicy      *RetryPolicyInfo `json:"retryPolicy,omitempty"`
-	Actions          RequestActions   `json:"actions"`
+	ID                  string           `json:"id"`
+	ClientID            string           `json:"clientId,omitempty"`
+	TaskID              string           `json:"taskId,omitempty"`
+	Method              string           `json:"method"`
+	Path                string           `json:"path"`
+	State               lifecycle.State  `json:"state"`
+	Attempt             int              `json:"attempt"`
+	StartedAt           time.Time        `json:"startedAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
+	NextRetryAt         time.Time        `json:"nextRetryAt,omitempty"`
+	LastError           string           `json:"lastError,omitempty"`
+	LastErrorCode       string           `json:"lastErrorCode,omitempty"`
+	LastErrorDetails    map[string]any   `json:"lastErrorDetails,omitempty"`
+	RetryDeadline       time.Time        `json:"retryDeadline,omitempty"`
+	RetryIntervalMs     int64            `json:"retryIntervalMilliseconds,omitempty"`
+	RetryPolicy         *RetryPolicyInfo `json:"retryPolicy,omitempty"`
+	Actions             RequestActions   `json:"actions"`
+	PersistenceDegraded bool             `json:"persistenceDegraded,omitempty"`
+	PersistencePending  bool             `json:"persistencePending,omitempty"`
+	UncertainSince      time.Time        `json:"uncertainSince,omitempty"`
+	UncertainResolution string           `json:"uncertainResolution,omitempty"`
+	UncertainResolvedAt time.Time        `json:"uncertainResolvedAt,omitempty"`
 }
 
 type RequestIdentity struct {
@@ -40,22 +45,24 @@ type RequestIdentity struct {
 }
 
 type trackedRequest struct {
-	info          RequestInfo
-	cancel        context.CancelFunc
-	retryNow      chan struct{}
-	policyChanged chan struct{}
-	policy        *RetryPolicy
-	notified      bool
+	info           RequestInfo
+	cancel         context.CancelFunc
+	retryNow       chan struct{}
+	policyChanged  chan struct{}
+	policy         *RetryPolicy
+	notified       bool
+	successCounted bool
 }
 
 type Registry struct {
-	mu       sync.RWMutex
-	requests map[string]*trackedRequest
-	total    atomic.Uint64
-	success  atomic.Uint64
-	failures atomic.Uint64
-	upstream UpstreamInfo
-	timeline *timeline.Store
+	mu         sync.RWMutex
+	requests   map[string]*trackedRequest
+	total      atomic.Uint64
+	success    atomic.Uint64
+	failures   atomic.Uint64
+	upstream   UpstreamInfo
+	timeline   *timeline.Store
+	persistErr error
 }
 
 type UpstreamInfo struct {
@@ -67,16 +74,21 @@ type UpstreamInfo struct {
 }
 
 type Snapshot struct {
-	Paused         bool          `json:"paused"`
-	Active         int           `json:"active"`
-	Queued         int           `json:"queued"`
-	Waiting        int           `json:"waiting"`
-	Requesting     int           `json:"requesting"`
-	TotalRequests  uint64        `json:"totalRequests"`
-	Successful     uint64        `json:"successful"`
-	FailedAttempts uint64        `json:"failedAttempts"`
-	Upstream       UpstreamInfo  `json:"upstream"`
-	Requests       []RequestInfo `json:"requests"`
+	Paused                 bool          `json:"paused"`
+	Mode                   string        `json:"mode"`
+	Active                 int           `json:"active"`
+	Queued                 int           `json:"queued"`
+	Waiting                int           `json:"waiting"`
+	Requesting             int           `json:"requesting"`
+	Uncertain              int           `json:"uncertain"`
+	OldestUncertainSeconds float64       `json:"oldestUncertainSeconds,omitempty"`
+	TotalRequests          uint64        `json:"totalRequests"`
+	Successful             uint64        `json:"successful"`
+	FailedAttempts         uint64        `json:"failedAttempts"`
+	Upstream               UpstreamInfo  `json:"upstream"`
+	Requests               []RequestInfo `json:"requests"`
+	PersistenceDegraded    bool          `json:"persistenceDegraded"`
+	PersistencePending     int           `json:"persistencePending"`
 }
 
 func NewRegistry(stores ...*timeline.Store) *Registry {
@@ -92,9 +104,21 @@ func (r *Registry) Add(method, path string, cancel context.CancelFunc) (string, 
 }
 
 func (r *Registry) AddWithIdentity(method, path string, cancel context.CancelFunc, identity RequestIdentity) (string, <-chan struct{}) {
+	id, retry, _ := r.AddWithIdentityChecked(method, path, cancel, identity)
+	return id, retry
+}
+
+// AddWithIdentityChecked persists the timeline anchor before exposing the
+// request to the data plane. A failed anchor means no upstream attempt may be
+// started for the request.
+func (r *Registry) AddWithIdentityChecked(method, path string, cancel context.CancelFunc, identity RequestIdentity) (string, <-chan struct{}, error) {
 	now := time.Now()
 	id := newID()
 	retryNow := make(chan struct{}, 1)
+	if err := r.timeline.StartWithIdentity(id, method, path, identity.ClientID, identity.TaskID); err != nil {
+		r.recordPersistenceError(err)
+		return "", nil, err
+	}
 	policyChanged := make(chan struct{}, 1)
 	r.mu.Lock()
 	r.requests[id] = &trackedRequest{
@@ -106,8 +130,7 @@ func (r *Registry) AddWithIdentity(method, path string, cancel context.CancelFun
 	}
 	r.mu.Unlock()
 	r.total.Add(1)
-	r.timeline.StartWithIdentity(id, method, path, identity.ClientID, identity.TaskID)
-	return id, retryNow
+	return id, retryNow, nil
 }
 
 func (r *Registry) Identity(id string) (RequestIdentity, bool) {
@@ -118,6 +141,21 @@ func (r *Registry) Identity(id string) (RequestIdentity, bool) {
 		return RequestIdentity{}, false
 	}
 	return RequestIdentity{ClientID: request.info.ClientID, TaskID: request.info.TaskID}, true
+}
+
+func (r *Registry) RequestInfo(id string) (RequestInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	request, ok := r.requests[id]
+	if !ok {
+		return RequestInfo{}, false
+	}
+	info := request.info
+	info.Actions = actionsForState(info.State)
+	if request.policy != nil {
+		info.RetryPolicy = request.policy.Info(info.Attempt)
+	}
+	return info, true
 }
 
 func (r *Registry) Update(id string, status lifecycle.State, attempt int, lastError string, nextRetry time.Time) {
@@ -142,27 +180,110 @@ func (r *Registry) UpdateMessage(id string, status lifecycle.State, attempt int,
 		return
 	}
 	request.info.State = status
+	if status == lifecycle.StateForwarding && request.info.UncertainResolution == UncertainRequestCompensation {
+		request.info.UncertainResolution = ""
+		request.info.UncertainSince = time.Time{}
+		request.info.UncertainResolvedAt = time.Time{}
+	}
 	request.info.Attempt = attempt
 	request.info.LastError = ""
 	request.info.LastErrorCode = message.ID
 	request.info.LastErrorDetails = cloneDetails(message.Data)
 	request.info.NextRetryAt = nextRetry
 	request.info.UpdatedAt = time.Now()
+	if status == lifecycle.StateUncertain && request.info.UncertainSince.IsZero() {
+		request.info.UncertainSince = request.info.UpdatedAt
+	}
 }
 
-func (r *Registry) Remove(id string, outcome lifecycle.State) {
+const (
+	UncertainAbandon             = "abandon"
+	UncertainConfirmSuccess      = "confirm_success"
+	UncertainRequestCompensation = "request_compensation"
+)
+
+func (r *Registry) ResolveUncertain(id, resolution, reason string) RequestActionResult {
+	r.mu.Lock()
+	request, ok := r.requests[id]
+	if !ok {
+		r.mu.Unlock()
+		return skippedAction(id, "", RequestReasonNotFound)
+	}
+	if request.info.State != lifecycle.StateUncertain {
+		state := request.info.State
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonStateNotRetryable)
+	}
+	if request.info.UncertainResolution != "" {
+		state := request.info.State
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonAlreadyRequested)
+	}
+	if resolution != UncertainAbandon && resolution != UncertainConfirmSuccess && resolution != UncertainRequestCompensation {
+		state := request.info.State
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonStateNotRetryable)
+	}
+	event := timeline.Event{Type: "uncertain_" + resolution, Attempt: request.info.Attempt, Category: "operator_decision", MessageCode: "timeline.uncertain_" + resolution}
+	if reason != "" {
+		event.MessageDetails = map[string]any{"Reason": reason}
+	}
+	if err := r.timeline.Add(id, event); err != nil {
+		r.recordPersistenceErrorLocked(id, err)
+		state := request.info.State
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonPersistenceUnavailable)
+	}
+	now := time.Now()
+	request.info.UncertainResolution = resolution
+	request.info.UncertainResolvedAt = now
+	request.info.UpdatedAt = now
+	cancel, retry := request.cancel, request.retryNow
+	state := request.info.State
+	r.mu.Unlock()
+	if resolution == UncertainRequestCompensation {
+		select {
+		case retry <- struct{}{}:
+		default:
+		}
+	} else if cancel != nil {
+		cancel()
+	}
+	return acceptedAction(id, state)
+}
+
+func (r *Registry) UncertainResolution(id string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if request := r.requests[id]; request != nil {
+		return request.info.UncertainResolution
+	}
+	return ""
+}
+
+func (r *Registry) Remove(id string, outcome lifecycle.State) error {
 	r.mu.Lock()
 	request, ok := r.requests[id]
 	if ok && lifecycle.ValidateTransition(request.info.State, outcome) != nil {
 		r.mu.Unlock()
-		return
+		return nil
+	}
+	if outcome == lifecycle.StateSuccessful && ok && !request.successCounted {
+		request.successCounted = true
+		r.success.Add(1)
+	}
+	err := r.timeline.Finish(id, string(outcome))
+	if err != nil {
+		r.recordPersistenceErrorLocked(id, err)
+		if request != nil {
+			request.info.PersistencePending = true
+		}
+		r.mu.Unlock()
+		return err
 	}
 	delete(r.requests, id)
 	r.mu.Unlock()
-	r.timeline.Finish(id, string(outcome))
-	if outcome == lifecycle.StateSuccessful {
-		r.success.Add(1)
-	}
+	return nil
 }
 
 func (r *Registry) RecordFailure() { r.failures.Add(1) }
@@ -187,14 +308,36 @@ func (r *Registry) SetUpstreamMessage(healthy bool, message l10n.Message) {
 }
 
 func (r *Registry) Cancel(id string) bool {
-	r.mu.RLock()
+	return r.CancelChecked(id).Outcome == RequestActionAccepted
+}
+
+func (r *Registry) CancelChecked(id string) RequestActionResult {
+	r.mu.Lock()
 	request, ok := r.requests[id]
-	r.mu.RUnlock()
-	if ok {
-		r.timeline.Add(id, timeline.Event{Type: "cancel_requested", MessageCode: "timeline.cancel_requested"})
-		request.cancel()
+	if !ok {
+		r.mu.Unlock()
+		return skippedAction(id, "", RequestReasonNotFound)
 	}
-	return ok
+	state := request.info.State
+	if state == lifecycle.StateUncertain {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonUncertainResolution)
+	}
+	if !actionsForState(state).CanCancel {
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonStateNotRetryable)
+	}
+	if err := r.timeline.Add(id, timeline.Event{Type: "cancel_requested", MessageCode: "timeline.cancel_requested"}); err != nil {
+		r.recordPersistenceErrorLocked(id, err)
+		r.mu.Unlock()
+		return skippedAction(id, state, RequestReasonPersistenceUnavailable)
+	}
+	cancel := request.cancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return acceptedAction(id, state)
 }
 
 func (r *Registry) RetryNow(id string) bool {
@@ -212,7 +355,7 @@ func (r *Registry) RetryNow(id string) bool {
 	return true
 }
 
-func (r *Registry) RetryNowChecked(id string, allowUncertain bool) RequestActionResult {
+func (r *Registry) RetryNowChecked(id string) RequestActionResult {
 	r.mu.RLock()
 	request, ok := r.requests[id]
 	if !ok {
@@ -221,15 +364,18 @@ func (r *Registry) RetryNowChecked(id string, allowUncertain bool) RequestAction
 	}
 	state, retry := request.info.State, request.retryNow
 	r.mu.RUnlock()
-	if state == lifecycle.StateUncertain && !allowUncertain {
-		return skippedAction(id, state, RequestReasonConfirmationRequired)
+	if state == lifecycle.StateUncertain {
+		return skippedAction(id, state, RequestReasonUncertainResolution)
 	}
 	if state != lifecycle.StateWaiting && state != lifecycle.StateUncertain {
 		return skippedAction(id, state, RequestReasonStateNotRetryable)
 	}
 	select {
 	case retry <- struct{}{}:
-		r.timeline.Add(id, timeline.Event{Type: "retry_requested", MessageCode: "timeline.retry_requested"})
+		if err := r.timeline.Add(id, timeline.Event{Type: "retry_requested", MessageCode: "timeline.retry_requested"}); err != nil {
+			r.recordPersistenceError(err)
+			return skippedAction(id, state, RequestReasonPersistenceUnavailable)
+		}
 		return acceptedAction(id, state)
 	default:
 		return skippedAction(id, state, RequestReasonAlreadyRequested)
@@ -296,11 +442,14 @@ func (r *Registry) applyRetryPolicy(id string, spec RetryPolicySpec, overwrite, 
 	request.info.UpdatedAt = now
 	policyChanged := request.policyChanged
 	r.mu.Unlock()
-	r.timeline.Add(id, timeline.Event{
+	if err := r.timeline.Add(id, timeline.Event{
 		Type: "retry_policy_updated", MessageCode: "timeline.retry_policy_updated",
 		WaitMilliseconds: policyPrimaryInterval(policy).Milliseconds(),
 		MessageDetails:   map[string]any{"Mode": string(policy.Schedule.Mode)},
-	})
+	}); err != nil {
+		r.recordPersistenceError(err)
+		return skippedAction(id, state, RequestReasonPersistenceUnavailable)
+	}
 	if state == lifecycle.StateWaiting {
 		signal(policyChanged)
 	}
@@ -328,7 +477,10 @@ func (r *Registry) ClearRetryPolicy(id string) RequestActionResult {
 	request.info.UpdatedAt = time.Now()
 	policyChanged := request.policyChanged
 	r.mu.Unlock()
-	r.timeline.Add(id, timeline.Event{Type: "retry_policy_reset", MessageCode: "timeline.retry_policy_reset"})
+	if err := r.timeline.Add(id, timeline.Event{Type: "retry_policy_reset", MessageCode: "timeline.retry_policy_reset"}); err != nil {
+		r.recordPersistenceError(err)
+		return skippedAction(id, state, RequestReasonPersistenceUnavailable)
+	}
 	if state == lifecycle.StateWaiting {
 		signal(policyChanged)
 	}
@@ -347,7 +499,11 @@ func (r *Registry) ActivateRetryPolicy(id string, attempt int) (RetryPolicy, boo
 		activatePolicy(request.policy, attempt, now)
 		updatePolicyInfo(request)
 		request.info.UpdatedAt = now
-		r.timeline.Add(id, timeline.Event{Type: "retry_policy_activated", Attempt: attempt, MessageCode: "timeline.retry_policy_activated"})
+		if err := r.timeline.Add(id, timeline.Event{Type: "retry_policy_activated", Attempt: attempt, MessageCode: "timeline.retry_policy_activated"}); err != nil {
+			if r.persistErr == nil {
+				r.persistErr = err
+			}
+		}
 	}
 	return *request.policy, true
 }
@@ -401,14 +557,49 @@ func (r *Registry) RetryWaiting() int {
 	r.mu.RUnlock()
 	retried := 0
 	for _, id := range ids {
-		if r.RetryNowChecked(id, false).Outcome == RequestActionAccepted {
+		if r.RetryNowChecked(id).Outcome == RequestActionAccepted {
 			retried++
 		}
 	}
 	return retried
 }
 
-func (r *Registry) RecordEvent(id string, event timeline.Event) { r.timeline.Add(id, event) }
+func (r *Registry) RecordEvent(id string, event timeline.Event) error {
+	err := r.timeline.Add(id, event)
+	if err != nil {
+		r.recordPersistenceErrorFor(id, err)
+	}
+	return err
+}
+
+func (r *Registry) PersistenceError() error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.persistErr
+}
+
+func (r *Registry) recordPersistenceError(err error) {
+	r.recordPersistenceErrorFor("", err)
+}
+
+func (r *Registry) recordPersistenceErrorFor(id string, err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.recordPersistenceErrorLocked(id, err)
+	r.mu.Unlock()
+}
+
+func (r *Registry) recordPersistenceErrorLocked(id string, err error) {
+	if r.persistErr == nil {
+		r.persistErr = err
+	}
+	if request, ok := r.requests[id]; ok {
+		request.info.PersistenceDegraded = true
+		request.info.UpdatedAt = time.Now()
+	}
+}
 
 func (r *Registry) Timeline(id string) (timeline.Record, bool) { return r.timeline.Request(id) }
 
@@ -435,7 +626,9 @@ func (r *Registry) WasNotified(id string) bool {
 func (r *Registry) Snapshot(paused bool) Snapshot {
 	r.mu.RLock()
 	requests := make([]RequestInfo, 0, len(r.requests))
-	queued, waiting, requesting := 0, 0, 0
+	queued, waiting, requesting, uncertain, persistencePending := 0, 0, 0, 0, 0
+	oldestUncertainSeconds := 0.0
+	now := time.Now()
 	for _, request := range r.requests {
 		info := request.info
 		info.Actions = actionsForState(info.State)
@@ -445,6 +638,9 @@ func (r *Registry) Snapshot(paused bool) Snapshot {
 			info.RetryPolicy = nil
 		}
 		requests = append(requests, info)
+		if info.PersistencePending {
+			persistencePending++
+		}
 		switch request.info.State {
 		case lifecycle.StateQueued:
 			queued++
@@ -452,18 +648,34 @@ func (r *Registry) Snapshot(paused bool) Snapshot {
 			waiting++
 		case lifecycle.StateForwarding:
 			requesting++
+		case lifecycle.StateUncertain:
+			uncertain++
+			since := info.UncertainSince
+			if since.IsZero() {
+				since = info.UpdatedAt
+			}
+			age := now.Sub(since).Seconds()
+			if age > oldestUncertainSeconds {
+				oldestUncertainSeconds = age
+			}
 		}
 	}
 	upstream := r.upstream
+	persistenceDegraded := r.persistErr != nil
 	r.mu.RUnlock()
 	if upstream.State == "" {
 		upstream.State = "unknown"
 	}
 	sort.Slice(requests, func(i, j int) bool { return requests[i].StartedAt.Before(requests[j].StartedAt) })
+	mode := ControlRunning
+	if paused {
+		mode = ControlPaused
+	}
 	return Snapshot{
-		Paused: paused, Active: len(requests), Queued: queued, Waiting: waiting, Requesting: requesting,
+		Paused: paused, Mode: mode, Active: len(requests) - persistencePending, Queued: queued, Waiting: waiting, Requesting: requesting, Uncertain: uncertain, OldestUncertainSeconds: oldestUncertainSeconds,
 		TotalRequests: r.total.Load(),
 		Successful:    r.success.Load(), FailedAttempts: r.failures.Load(), Upstream: upstream, Requests: requests,
+		PersistenceDegraded: persistenceDegraded, PersistencePending: persistencePending,
 	}
 }
 
@@ -502,19 +714,28 @@ func newID() string {
 
 type Controller struct {
 	mu       sync.RWMutex
-	paused   bool
+	mode     string
 	resumeCh chan struct{}
 }
 
-func NewController() *Controller { return &Controller{resumeCh: make(chan struct{})} }
+const (
+	ControlRunning     = "running"
+	ControlPaused      = "paused"
+	ControlDraining    = "draining"
+	ControlMaintenance = "maintenance"
+)
+
+func NewController() *Controller {
+	return &Controller{mode: ControlRunning, resumeCh: make(chan struct{})}
+}
 
 func (c *Controller) Pause() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.paused {
+	if c.mode != ControlRunning {
 		return false
 	}
-	c.paused = true
+	c.mode = ControlPaused
 	c.resumeCh = make(chan struct{})
 	return true
 }
@@ -522,24 +743,53 @@ func (c *Controller) Pause() bool {
 func (c *Controller) Resume() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.paused {
+	if c.mode == ControlRunning {
 		return false
 	}
-	c.paused = false
-	close(c.resumeCh)
+	wasPaused := c.mode == ControlPaused
+	c.mode = ControlRunning
+	if wasPaused {
+		close(c.resumeCh)
+	}
 	return true
 }
 
 func (c *Controller) IsPaused() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.paused
+	return c.mode == ControlPaused
+}
+
+func (c *Controller) Mode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mode
+}
+
+func (c *Controller) Accepting() bool { return c.Mode() == ControlRunning || c.Mode() == ControlPaused }
+
+func (c *Controller) Drain() bool { return c.setNonAccepting(ControlDraining) }
+
+func (c *Controller) Maintenance() bool { return c.setNonAccepting(ControlMaintenance) }
+
+func (c *Controller) setNonAccepting(mode string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mode == mode {
+		return false
+	}
+	wasPaused := c.mode == ControlPaused
+	c.mode = mode
+	if wasPaused {
+		close(c.resumeCh)
+	}
+	return true
 }
 
 func (c *Controller) Wait(ctx context.Context) error {
 	for {
 		c.mu.RLock()
-		paused, resumeCh := c.paused, c.resumeCh
+		paused, resumeCh := c.mode == ControlPaused, c.resumeCh
 		c.mu.RUnlock()
 		if !paused {
 			return nil

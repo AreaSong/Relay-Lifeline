@@ -41,6 +41,11 @@ The public project name is **Relay-Lifeline**, and the official image is `ghcr.i
 - Explicit temporary diagnostic capture for requests, every CPA response, and the final response, with filtered preview plus filtered and full-raw downloads.
 - Asynchronous Webhook delivery with filters, retries, health counters, bounded delivery history, and test delivery.
 - Continuous-task execution/failure limits, consecutive-failure circuit breaking, and bounded per-run audits.
+- Journaled traffic-policy drafts with simulate/replay, shadow, canary, full, and rollback releases.
+- Shadow traffic isolation with idempotency, sampling, concurrency, hourly request, and cost budgets.
+- Adaptive routing with SLO/error-budget guards, cooldown, fallback, and automatic stop signals.
+- Multi-dimensional governance reservations and known/unknown usage settlement with fail-closed enforcement.
+- Uncertain-delivery evidence with explicit operator confirmation, abandonment, or compensation retry.
 - Server-filtered cursor pagination for history and incidents, including related-request drill-down.
 - Versioned incremental management events with cursor replay and explicit retention-gap resets.
 - Chinese and English UI, API messages, CLI text, logs, diagnostics, and Webhooks.
@@ -150,6 +155,45 @@ Request and incident timelines persist in verified journals and are restored aft
 
 Signal Continuity visualizes observed gateway state; it does not send an extra model probe. Three.js is loaded locally and on demand. Reduced-motion preferences and background tabs pause animation, while WebGL initialization failure or context loss switches to a static topology without disabling status data or controls.
 
+## Traffic policy, governance, and uncertain delivery
+
+Traffic-policy changes are released through an auditable control-plane workflow. The legacy `PUT /admin/api/policies` and an ordinary `PUT /admin/api/config` that changes `traffic-policy` return `POLICY_RELEASE_REQUIRED`; they cannot hot-apply an unreviewed route or deny rule. Operators use the following sequence:
+
+```text
+draft -> simulate/replay -> shadow -> canary -> full
+                                      \-> rollback (a retained release revision)
+```
+
+The authenticated endpoints are `PUT /admin/api/policies/draft`, `GET /admin/api/policies/releases`, `POST /admin/api/policies/simulate`, `POST /admin/api/policies/replay`, `POST /admin/api/policies/publish`, and `POST /admin/api/policies/rollback`. Publish and rollback require the current `configRevision`; a stale draft or desired revision is rejected instead of overwriting another operator's change. Every prepared, published, aborted, and rolled-back transition is written to `policy-releases.jsonl` before or after the matching config write, then reconciled on restart. `GET /admin/api/policies/status` and `/decisions` expose runtime counters and bounded decision evidence.
+
+`mode: observe` records recommendations but never changes production routing. In `mode: enforce`, `draft` and `shadow` still do not enforce client traffic; `canary` uses a stable SHA-256 bucket derived from the request ID and enforces only the configured percentage; `full` enforces every selected rule. Decision evidence distinguishes `recommendedTargetId` from the actually enforced `targetId`, so a dry run, an unselected canary request, or an observe decision cannot be mistaken for a route change. Use `POST /policies/simulate?source=draft` to test the persisted draft without changing adaptive state or making an upstream call, and use `/policies/replay` with a capture ID or sanitized request metadata for repeatable evidence.
+
+Shadow traffic is asynchronous and is sent only after a successful primary response. It is isolated from the production circuit breaker and adaptive score, carries `X-Relay-Lifeline-Shadow: 1`, and is skipped when the target is the primary target or any guard fails. A shadow lease must pass the stable request-ID sample, `require-idempotency`, SLO-health, body-size, maximum-concurrency, per-hour request, and per-hour cost-reservation checks. `/policies/status` separates planned, sent, skipped, failed, reserved-cost, and actual-cost counters; shadow failures do not change the primary result.
+
+Adaptive routing scores only closed targets with enough observations and acceptable latency. The SLO/error-budget floor, burn-rate guard, and failure-rate guard can stop adaptive selection automatically; a switch cooldown prevents rapid target churn, and a configured fallback target is used when the guard is stopped or no target is eligible. Publishing a new policy revision acknowledges an automatic stop and resets the adaptive circuit; validate the new signals and SLO before doing so.
+
+Governance admits a request by reserving bounded token and cost capacity before target selection, then binds the concrete upstream and settles each attempt. Budgets can be global or scoped to `principal`, `tenant`, `model`, or `upstream`; a tenant budget requires the tenant header. `reservation-min/max-*` bounds the estimate, while `soft-threshold-percent` and `forecast-window` provide warning signals without rejecting in observe mode. `GET /admin/api/governance/status`, `/health/summary`, `/slo`, and the Prometheus governance series show reservations, settled known/unknown usage, rejection reasons, and ledger health.
+
+Set `governance.mode: enforce` only with a persistent usage ledger and a tested recovery path. A failed ledger write is fail-closed for admission, retry-attempt reservation, and settlement; readiness also checks the usage ledger while enforce is active. In `observe`, the gateway records `persistenceDegraded` and continues, so alerts must still be acted on. With `unknown-usage-policy: observe`, a response without authoritative usage is recorded as unknown. With `unknown-usage-policy: deny`, later admissions that share that budget window are rejected until the unknown usage rolls out of the window; the original response is not retroactively changed.
+
+When an attempt wrote to an upstream but received no response headers, the request enters `uncertain` rather than silently retrying (the default `lifecycle.allow-uncertain-retry` is false). The timeline stores bounded evidence: attempt phase, target, status/category, whether bytes were written, an idempotency-key hash, request size/latency, and any upstream request ID; it never stores the raw body. An operator first previews a decision, then submits a short reason with the same authenticated actor:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success"}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/preview"
+
+curl -H "Authorization: Bearer $RELAY_LIFELINE_ADMIN_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"action":"confirm_success","confirmationToken":"TOKEN_FROM_PREVIEW","reason":"Verified the provider request ID in the upstream audit."}' \
+  "http://127.0.0.1:8318/admin/api/requests/$REQUEST_ID/uncertain/resolve"
+```
+
+The preview token expires after two minutes and is bound to the request, action, and actor. The supported actions are `confirm_success` (business success, no retry), `abandon` (terminal failure), and `request_compensation` (resume through the normal retry path). Do not use a blind retry when the provider may have charged the request. `/admin/api/health/summary`, `/admin/api/slo`, Webhooks, and `relay_lifeline_uncertain_*` Prometheus metrics expose open count, oldest age, resolution target, SLO breach, and resolution outcomes.
+
+Request, incident, repeat-task, usage-ledger, and policy-release journals are verified hash chains. If `RELAY_LIFELINE_JOURNAL_HMAC_KEY` is configured, an external HMAC anchor is checked as well. Startup refuses a corrupt or truncated chain; `-journal-verify` is read-only. Hourly compaction atomically rebuilds the retained chain and keeps active entities alive. On restart, unfinished requests become `orphaned` and are never replayed; governance reservations are reconciled, and prepared policy releases are finalized only when the active revision matches, otherwise explicitly aborted. Keep the persistence directory on durable storage and investigate `readyz`, `/admin/api/persistence/status`, and journal metrics before forcing a repair.
+
 ## Monitoring API
 
 The authenticated management API exposes:
@@ -170,7 +214,7 @@ Diagnostic ZIP exports include separate redacted configuration, diagnostics, tim
 
 The browser exchanges a management key once for a short-lived HttpOnly SameSite session cookie. Mutating calls require the per-session CSRF token. Bearer authentication remains available for CLI compatibility.
 
-Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 3`; schema 1 and 2 files migrate in memory without overwriting the source file, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
+Every management response includes the compatibility header `X-Relay-Lifeline-API-Version`. `GET /admin/api/meta` returns the running build identity. Configuration documents use `schema-version: 5`; schemas 1 through 4 migrate in memory without overwriting the source file, while unknown future schemas are rejected. `POST /admin/api/config/validate` returns the exact change plan without modifying runtime or disk state.
 
 ## Localization
 

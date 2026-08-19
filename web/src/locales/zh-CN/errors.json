@@ -22,6 +22,12 @@
     "INVALID_REPEAT_TASK": "持续任务参数无效",
     "REPEAT_TASK_NOT_FOUND": "活动请求或持续任务不存在",
     "REPEAT_TASK_EXISTS": "该请求已经存在运行中的持续任务",
-    "REPEAT_UNAVAILABLE": "持续任务服务当前不可用"
+    "REPEAT_UNAVAILABLE": "持续任务服务当前不可用",
+    "INVALID_UNCERTAIN_ACTION": "请选择支持的不确定交付动作并填写原因",
+    "UNCERTAIN_STATE_CONFLICT": "该请求已不再等待不确定交付处置",
+    "UNCERTAIN_CONFIRMATION_INVALID": "不确定交付确认无效或已经使用",
+    "UNCERTAIN_CONFIRMATION_EXPIRED": "不确定交付确认已过期，请检查最新证据后重试",
+    "CONFIRMATION_UNAVAILABLE": "无法签发确认令牌",
+    "UNCERTAIN_RESOLUTION_REQUIRED": "请先处置不确定交付，再执行其他请求操作"
   }
 }

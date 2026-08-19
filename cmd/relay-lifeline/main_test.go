@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/areasong/relay-lifeline/internal/config"
+	"github.com/areasong/relay-lifeline/internal/state"
 )
 
 func TestValidateManagementKeys(t *testing.T) {
@@ -55,6 +56,18 @@ func TestReadinessHandlerDistinguishesReadyAndDraining(t *testing.T) {
 	handler.ServeHTTP(draining, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if draining.Code != http.StatusServiceUnavailable || !strings.Contains(draining.Body.String(), "draining") {
 		t.Fatalf("排空响应异常: %d %s", draining.Code, draining.Body.String())
+	}
+}
+
+func TestReadinessHandlerReportsAdministrativeMaintenance(t *testing.T) {
+	var ready atomic.Bool
+	ready.Store(true)
+	mode := state.ControlMaintenance
+	handler := readinessHandlerWithMode(&ready, func() string { return mode })
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "maintenance") {
+		t.Fatalf("维护 Readiness 异常: %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

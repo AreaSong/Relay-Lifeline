@@ -55,6 +55,20 @@ func TestAdminRequiresKeyAndControlsGateway(t *testing.T) {
 	if recorder.Code != http.StatusOK || !controller.IsPaused() {
 		t.Fatal("暂停失败")
 	}
+	drain := httptest.NewRequest(http.MethodPost, "/admin/api/control/drain", nil)
+	drain.Header.Set("Authorization", "Bearer admin-test-key")
+	drainRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(drainRecorder, drain)
+	if drainRecorder.Code != http.StatusOK || controller.Mode() != state.ControlDraining || controller.Accepting() {
+		t.Fatalf("主动排空失败: %d %s mode=%s", drainRecorder.Code, drainRecorder.Body.String(), controller.Mode())
+	}
+	resume := httptest.NewRequest(http.MethodPost, "/admin/api/control/resume", nil)
+	resume.Header.Set("Authorization", "Bearer admin-test-key")
+	resumeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(resumeRecorder, resume)
+	if resumeRecorder.Code != http.StatusOK || controller.Mode() != state.ControlRunning {
+		t.Fatalf("排空恢复失败: %d %s", resumeRecorder.Code, resumeRecorder.Body.String())
+	}
 }
 
 func TestAdminHistoryTimelineAndRedactedDiagnosticBundle(t *testing.T) {
